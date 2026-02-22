@@ -13,7 +13,7 @@
       <small id="storageStatus" class="status-warn">Проверка за PostgreSQL бекенд...</small>
       <div class="api-config">
         <label for="apiUrlInput">API URL:</label>
-        <input id="apiUrlInput" type="text" placeholder="http://46.183.117.128:3000" />
+        <input id="apiUrlInput" type="text" placeholder="http://46.183.117.128:4000" />
         <button id="saveApiUrlBtn" type="button">Свържи</button>
       </div>
     </header>
@@ -77,14 +77,16 @@
         <section id="rulesTab" class="panel tab-panel">
           <h2>Сумирано работно време и положен труд</h2>
           <p>
-            Нормата за месеца = (работни дни без официални празници) × 8 ч. Отчетът показва отклонение от нормата,
-            труд в почивни дни и труд в официални празници.
+            Нормата за месеца = (работни дни без официални празници) × 8 ч. При СИРВ може да изберете период 1–6 месеца;
+            нощните часове (22:00–06:00) се приравняват с коефициент 1.14286. Отчетът показва извънредния труд за периода.
           </p>
           <form id="ratesForm" class="row">
             <label for="weekendRateInput">Коефициент почивен ден:</label>
             <input id="weekendRateInput" type="number" min="1" step="0.05" value="1.75" />
             <label for="holidayRateInput">Коефициент официален празник:</label>
             <input id="holidayRateInput" type="number" min="1" step="0.05" value="2" />
+            <label for="sirvPeriodInput">Период СИРВ (месеци):</label>
+            <input id="sirvPeriodInput" type="number" min="1" max="6" step="1" value="1" />
             <button type="submit">Запази коефициенти</button>
           </form>
 
