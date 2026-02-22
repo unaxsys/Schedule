@@ -5,12 +5,18 @@ const SHIFT_CODES = {
   B: { label: 'Б', hours: 0, type: 'sick' }
 };
 
+const DEFAULT_RATES = {
+  weekend: 1.75,
+  holiday: 2
+};
+
 const state = {
   month: todayMonth(),
   employees: [],
   schedule: {},
   backendAvailable: false,
-  apiBaseUrl: ''
+  apiBaseUrl: '',
+  rates: loadRates()
 };
 
 const monthPicker = document.getElementById('monthPicker');
@@ -25,6 +31,17 @@ const scheduleTable = document.getElementById('scheduleTable');
 const storageStatus = document.getElementById('storageStatus');
 const apiUrlInput = document.getElementById('apiUrlInput');
 const saveApiUrlBtn = document.getElementById('saveApiUrlBtn');
+const tabButtons = document.querySelectorAll('.tab-btn');
+const tabPanels = document.querySelectorAll('.tab-panel');
+const monthInfo = document.getElementById('monthInfo');
+const vacationForm = document.getElementById('vacationForm');
+const vacationEmployeeSelect = document.getElementById('vacationEmployeeSelect');
+const vacationStartInput = document.getElementById('vacationStartInput');
+const vacationEndInput = document.getElementById('vacationEndInput');
+const vacationLedger = document.getElementById('vacationLedger');
+const ratesForm = document.getElementById('ratesForm');
+const weekendRateInput = document.getElementById('weekendRateInput');
+const holidayRateInput = document.getElementById('holidayRateInput');
 
 init();
 
@@ -37,8 +54,14 @@ async function init() {
   state.employees = loadEmployees();
   state.apiBaseUrl = detectApiBaseUrl();
 
+  weekendRateInput.value = String(state.rates.weekend);
+  holidayRateInput.value = String(state.rates.holiday);
   apiUrlInput.value = state.apiBaseUrl;
+
   attachApiControls();
+  attachTabs();
+  attachRatesForm();
+  attachVacationForm();
 
   const synced = await loadFromBackend();
   if (!synced) {
@@ -47,6 +70,16 @@ async function init() {
 
   monthPicker.value = state.month;
   renderAll();
+}
+
+function attachTabs() {
+  tabButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = btn.dataset.tab;
+      tabButtons.forEach((other) => other.classList.toggle('active', other === btn));
+      tabPanels.forEach((panel) => panel.classList.toggle('active', panel.id === target));
+    });
+  });
 }
 
 function attachApiControls() {
@@ -61,6 +94,49 @@ function attachApiControls() {
       setStatus(`Няма връзка с API (${nextUrl}). Работи в локален режим.`, false);
       renderAll();
     }
+  });
+}
+
+function attachRatesForm() {
+  ratesForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    state.rates.weekend = Number(weekendRateInput.value) || DEFAULT_RATES.weekend;
+    state.rates.holiday = Number(holidayRateInput.value) || DEFAULT_RATES.holiday;
+    localStorage.setItem('laborRates', JSON.stringify(state.rates));
+    renderSchedule();
+  });
+}
+
+function attachVacationForm() {
+  vacationForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+
+    const employeeId = vacationEmployeeSelect.value;
+    const start = new Date(vacationStartInput.value);
+    const end = new Date(vacationEndInput.value);
+
+    if (!employeeId || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+      return;
+    }
+
+    const startMonth = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`;
+    const endMonth = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}`;
+    if (startMonth !== state.month || endMonth !== state.month) {
+      setStatus('Диапазонът за отпуск трябва да е в избрания месец.', false);
+      return;
+    }
+
+    const promises = [];
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const day = d.getDate();
+      const key = scheduleKey(employeeId, state.month, day);
+      state.schedule[key] = 'O';
+      promises.push(saveScheduleEntryBackend(employeeId, state.month, day, 'O'));
+    }
+
+    saveScheduleLocal();
+    await Promise.all(promises);
+    renderAll();
   });
 }
 
@@ -104,6 +180,8 @@ function createEmployeeId() {
 function renderAll() {
   renderEmployees();
   renderSchedule();
+  renderVacationLedger();
+  renderVacationEmployeeOptions();
 }
 
 function renderEmployees() {
@@ -135,10 +213,58 @@ function renderEmployees() {
   });
 }
 
+function renderVacationEmployeeOptions() {
+  vacationEmployeeSelect.innerHTML = '';
+  if (!state.employees.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'Няма служители';
+    vacationEmployeeSelect.appendChild(option);
+    return;
+  }
+
+  state.employees.forEach((employee) => {
+    const option = document.createElement('option');
+    option.value = employee.id;
+    option.textContent = `${employee.name} (${employee.department})`;
+    vacationEmployeeSelect.appendChild(option);
+  });
+}
+
+function renderVacationLedger() {
+  if (!state.employees.length) {
+    vacationLedger.textContent = 'Добавете служители, за да следите отпуските.';
+    return;
+  }
+
+  const year = Number((state.month || todayMonth()).split('-')[0]);
+  const table = document.createElement('table');
+  table.innerHTML =
+    '<tr><th>Служител</th><th>Полагаем</th><th>Използван за годината</th><th>Остатък</th></tr>';
+
+  state.employees.forEach((employee) => {
+    const used = getVacationUsedForYear(employee.id, year);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${employee.name}</td><td>${employee.vacationAllowance}</td><td>${used}</td><td>${employee.vacationAllowance - used}</td>`;
+    table.appendChild(tr);
+  });
+
+  vacationLedger.innerHTML = '';
+  vacationLedger.appendChild(table);
+}
+
 function renderSchedule() {
   const month = state.month || todayMonth();
   const [year, monthIndex] = month.split('-').map(Number);
   const totalDays = new Date(year, monthIndex, 0).getDate();
+  const monthStats = getMonthStats(year, monthIndex, totalDays);
+
+  monthInfo.innerHTML = `
+    <b>Работни дни по календар:</b> ${monthStats.workingDays} ·
+    <b>Почивни дни:</b> ${monthStats.weekendDays} ·
+    <b>Официални празници:</b> ${monthStats.holidayDays} ·
+    <b>Норма:</b> ${monthStats.normHours} ч.
+  `;
 
   const header = document.createElement('tr');
   header.innerHTML = '<th class="sticky">Служител / Отдел / Длъжност</th>';
@@ -150,16 +276,15 @@ function renderSchedule() {
     const th = document.createElement('th');
     th.textContent = String(day);
     if (holiday) {
-      th.classList.add('day-holiday');
-      th.title = 'Официален празник';
+      th.className = 'day-holiday';
     } else if (weekend) {
-      th.classList.add('day-weekend');
-      th.title = 'Уикенд';
+      th.className = 'day-weekend';
     }
     header.appendChild(th);
   }
 
-  header.innerHTML += '<th class="summary-col">Раб. дни</th><th class="summary-col">Часове</th><th class="summary-col">Празн. дни</th><th class="summary-col">Отпуск</th><th class="summary-col">Остатък отпуск</th><th class="summary-col">Болничен</th>';
+  header.innerHTML +=
+    '<th class="summary-col">Отр. дни</th><th class="summary-col">Часове</th><th class="summary-col">Норма</th><th class="summary-col">Отклонение</th><th class="summary-col">Труд празник (ч)</th><th class="summary-col">Труд почивен (ч)</th><th class="summary-col">Платими часове</th><th class="summary-col">Отпуск</th><th class="summary-col">Ост. отпуск</th><th class="summary-col">Болничен</th>';
 
   scheduleTable.innerHTML = '';
   scheduleTable.appendChild(header);
@@ -171,11 +296,14 @@ function renderSchedule() {
     nameCell.innerHTML = `<b>${employee.name}</b><br><small>${employee.department} • ${employee.position}</small>`;
     row.appendChild(nameCell);
 
-    let workedDays = 0;
-    let workedHours = 0;
-    let holidayWorkedDays = 0;
-    let vacationDays = 0;
-    let sickDays = 0;
+    const summary = {
+      workedDays: 0,
+      workedHours: 0,
+      holidayWorkedHours: 0,
+      weekendWorkedHours: 0,
+      vacationDays: 0,
+      sickDays: 0
+    };
 
     for (let day = 1; day <= totalDays; day += 1) {
       const key = scheduleKey(employee.id, month, day);
@@ -210,32 +338,75 @@ function renderSchedule() {
         saveScheduleLocal();
         await saveScheduleEntryBackend(employee.id, month, day, select.value);
         renderSchedule();
+        renderVacationLedger();
       });
 
       cell.appendChild(select);
       row.appendChild(cell);
 
-      const shift = SHIFT_CODES[currentShift] || SHIFT_CODES.P;
-      if (shift.type === 'work') {
-        workedDays += 1;
-        workedHours += shift.hours;
-        if (holiday || weekend) {
-          holidayWorkedDays += 1;
-        }
-      }
-      if (shift.type === 'vacation') {
-        vacationDays += 1;
-      }
-      if (shift.type === 'sick') {
-        sickDays += 1;
-      }
+      collectSummary(summary, currentShift, holiday, weekend);
     }
 
     const remainingVacation = employee.vacationAllowance - getVacationUsedForYear(employee.id, year);
+    const normalizedHolidayHours = summary.holidayWorkedHours * state.rates.holiday;
+    const normalizedWeekendHours = summary.weekendWorkedHours * state.rates.weekend;
+    const payableHours =
+      summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours;
+    const deviation = summary.workedHours - monthStats.normHours;
 
-    row.innerHTML += `<td class="summary-col">${workedDays}</td><td class="summary-col">${workedHours}</td><td class="summary-col">${holidayWorkedDays}</td><td class="summary-col">${vacationDays}</td><td class="summary-col">${remainingVacation}</td><td class="summary-col">${sickDays}</td>`;
+    row.innerHTML += `<td class="summary-col">${summary.workedDays}</td><td class="summary-col">${summary.workedHours}</td><td class="summary-col">${monthStats.normHours}</td><td class="summary-col ${deviation < 0 ? 'negative' : 'positive'}">${deviation}</td><td class="summary-col">${summary.holidayWorkedHours}</td><td class="summary-col">${summary.weekendWorkedHours}</td><td class="summary-col">${payableHours.toFixed(2)}</td><td class="summary-col">${summary.vacationDays}</td><td class="summary-col">${remainingVacation}</td><td class="summary-col">${summary.sickDays}</td>`;
     scheduleTable.appendChild(row);
   });
+}
+
+function collectSummary(summary, shiftCode, holiday, weekend) {
+  const shift = SHIFT_CODES[shiftCode] || SHIFT_CODES.P;
+
+  if (shift.type === 'work') {
+    summary.workedDays += 1;
+    summary.workedHours += shift.hours;
+    if (holiday) {
+      summary.holidayWorkedHours += shift.hours;
+    } else if (weekend) {
+      summary.weekendWorkedHours += shift.hours;
+    }
+  }
+
+  if (shift.type === 'vacation') {
+    summary.vacationDays += 1;
+  }
+  if (shift.type === 'sick') {
+    summary.sickDays += 1;
+  }
+}
+
+function getMonthStats(year, monthIndex, totalDays) {
+  let weekendDays = 0;
+  let holidayDays = 0;
+  let workingDays = 0;
+
+  for (let day = 1; day <= totalDays; day += 1) {
+    const date = new Date(year, monthIndex - 1, day);
+    const holiday = isOfficialHoliday(date);
+    const weekend = isWeekend(date);
+
+    if (holiday) {
+      holidayDays += 1;
+    }
+    if (weekend) {
+      weekendDays += 1;
+    }
+    if (!holiday && !weekend) {
+      workingDays += 1;
+    }
+  }
+
+  return {
+    weekendDays,
+    holidayDays,
+    workingDays,
+    normHours: workingDays * 8
+  };
 }
 
 function detectApiBaseUrl() {
@@ -391,6 +562,18 @@ function loadScheduleState() {
     return JSON.parse(localStorage.getItem('scheduleState') || '{}');
   } catch {
     return { month: todayMonth(), schedule: {} };
+  }
+}
+
+function loadRates() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('laborRates') || '{}');
+    return {
+      weekend: Number(parsed.weekend) || DEFAULT_RATES.weekend,
+      holiday: Number(parsed.holiday) || DEFAULT_RATES.holiday
+    };
+  } catch {
+    return { ...DEFAULT_RATES };
   }
 }
 
