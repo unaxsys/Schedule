@@ -6,17 +6,27 @@ const cors = require('cors');
 const { Pool } = require('pg');
 
 const app = express();
-const port = Number(process.env.PORT || 3000);
+const port = Number(process.env.PORT || 4000);
 
-const pool = new Pool({
-  host: process.env.PGHOST || 'localhost',
-  port: Number(process.env.PGPORT || 5432),
-  database: process.env.PGDATABASE || 'schedule_db',
-  user: process.env.PGUSER || 'postgres',
-  password: process.env.PGPASSWORD || ''
-});
+// ✅ Prefer DATABASE_URL, fallback to PG* vars
+const pool =
+  process.env.DATABASE_URL && process.env.DATABASE_URL.trim().length > 0
+    ? new Pool({ connectionString: process.env.DATABASE_URL })
+    : new Pool({
+        host: process.env.PGHOST || '127.0.0.1',
+        port: Number(process.env.PGPORT || 5432),
+        database: process.env.PGDATABASE || 'schedule_db',
+        user: process.env.PGUSER || 'postgres',
+        password: process.env.PGPASSWORD || '',
+      });
 
-app.use(cors());
+app.use(
+  cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
@@ -25,14 +35,20 @@ app.get('/api/health', async (_req, res) => {
     await pool.query('SELECT 1');
     res.json({ ok: true, database: 'connected' });
   } catch (error) {
+    console.error('DB health error:', error);
     res.status(500).json({ ok: false, message: error.message });
   }
 });
 
 app.get('/api/state', async (_req, res) => {
   try {
-    const employeesResult = await pool.query('SELECT id, name, department, position, vacation_allowance AS "vacationAllowance" FROM employees ORDER BY created_at, name');
-    const scheduleResult = await pool.query('SELECT employee_id, month_key, day, shift_code FROM schedule_entries');
+    const employeesResult = await pool.query(
+      'SELECT id, name, department, position, vacation_allowance AS "vacationAllowance" FROM employees ORDER BY created_at, name'
+    );
+
+    const scheduleResult = await pool.query(
+      'SELECT employee_id, month_key, day, shift_code FROM schedule_entries'
+    );
 
     const schedule = {};
     for (const row of scheduleResult.rows) {
@@ -41,12 +57,14 @@ app.get('/api/state', async (_req, res) => {
 
     res.json({ employees: employeesResult.rows, schedule });
   } catch (error) {
+    console.error('STATE error:', error);
     res.status(500).json({ message: error.message });
   }
 });
 
 app.post('/api/employees', async (req, res) => {
   const { id, name, department, position, vacationAllowance } = req.body;
+
   if (!id || !name || !department || !position) {
     res.status(400).json({ message: 'Невалидни данни за служител.' });
     return;
@@ -66,6 +84,7 @@ app.post('/api/employees', async (req, res) => {
 
     res.status(201).json({ ok: true });
   } catch (error) {
+    console.error('EMPLOYEES POST error:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -75,6 +94,7 @@ app.delete('/api/employees/:id', async (req, res) => {
     await pool.query('DELETE FROM employees WHERE id = $1', [req.params.id]);
     res.json({ ok: true });
   } catch (error) {
+    console.error('EMPLOYEES DELETE error:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -98,6 +118,7 @@ app.post('/api/schedule-entry', async (req, res) => {
 
     res.json({ ok: true });
   } catch (error) {
+    console.error('SCHEDULE ENTRY error:', error);
     res.status(500).json({ message: error.message });
   }
 });
