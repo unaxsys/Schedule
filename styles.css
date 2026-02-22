@@ -27,6 +27,17 @@ header p { margin: 0; opacity: .9; }
   padding: .2rem .5rem;
   border-radius: 8px;
 }
+
+.api-config {
+  margin-top: .6rem;
+  display: flex;
+  gap: .45rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.api-config input {
+  min-width: 280px;
+}
 main { padding: 1rem; display: grid; gap: 1rem; }
 .panel {
   background: white;

@@ -9,7 +9,8 @@ const state = {
   month: todayMonth(),
   employees: [],
   schedule: {},
-  backendAvailable: false
+  backendAvailable: false,
+  apiBaseUrl: ''
 };
 
 const monthPicker = document.getElementById('monthPicker');
@@ -22,23 +23,45 @@ const vacationAllowanceInput = document.getElementById('vacationAllowanceInput')
 const employeeList = document.getElementById('employeeList');
 const scheduleTable = document.getElementById('scheduleTable');
 const storageStatus = document.getElementById('storageStatus');
+const apiUrlInput = document.getElementById('apiUrlInput');
+const saveApiUrlBtn = document.getElementById('saveApiUrlBtn');
 
 init();
 
 async function init() {
   monthPicker.value = state.month;
+
   const loadedSchedule = loadScheduleState();
   state.month = loadedSchedule.month || todayMonth();
   state.schedule = loadedSchedule.schedule || {};
   state.employees = loadEmployees();
+  state.apiBaseUrl = detectApiBaseUrl();
+
+  apiUrlInput.value = state.apiBaseUrl;
+  attachApiControls();
 
   const synced = await loadFromBackend();
   if (!synced) {
-    setStatus('Локален режим (localStorage).', false);
+    setStatus(`Локален режим (localStorage). API: ${state.apiBaseUrl}`, false);
   }
 
   monthPicker.value = state.month;
   renderAll();
+}
+
+function attachApiControls() {
+  saveApiUrlBtn.addEventListener('click', async () => {
+    const nextUrl = normalizeApiBaseUrl(apiUrlInput.value.trim());
+    state.apiBaseUrl = nextUrl;
+    localStorage.setItem('apiBaseUrl', nextUrl);
+    setStatus(`Проверка на API: ${nextUrl}`, false);
+
+    const synced = await loadFromBackend();
+    if (!synced) {
+      setStatus(`Няма връзка с API (${nextUrl}). Работи в локален режим.`, false);
+      renderAll();
+    }
+  });
 }
 
 generateBtn.addEventListener('click', () => {
@@ -207,9 +230,42 @@ function renderSchedule() {
   });
 }
 
+function detectApiBaseUrl() {
+  const saved = localStorage.getItem('apiBaseUrl');
+  if (saved) {
+    return normalizeApiBaseUrl(saved);
+  }
+
+  if (window.__API_BASE_URL__) {
+    return normalizeApiBaseUrl(window.__API_BASE_URL__);
+  }
+
+  const sameOrigin = window.location.origin;
+  const sameHost3000 = `${window.location.protocol}//${window.location.hostname}:3000`;
+
+  return normalizeApiBaseUrl(window.location.port === '3000' ? sameOrigin : sameHost3000);
+}
+
+function normalizeApiBaseUrl(url) {
+  if (!url) {
+    return window.location.origin;
+  }
+  return url.replace(/\/$/, '');
+}
+
+async function apiFetch(path, options = {}) {
+  const response = await fetch(`${state.apiBaseUrl}${path}`, options);
+  return response;
+}
+
 async function loadFromBackend() {
   try {
-    const response = await fetch('/api/state');
+    const healthResponse = await apiFetch('/api/health');
+    if (!healthResponse.ok) {
+      throw new Error('Health check failed');
+    }
+
+    const response = await apiFetch('/api/state');
     if (!response.ok) {
       throw new Error('Backend state unavailable');
     }
@@ -218,7 +274,7 @@ async function loadFromBackend() {
     state.employees = payload.employees || [];
     state.schedule = payload.schedule || {};
     state.backendAvailable = true;
-    setStatus('Свързан с PostgreSQL бекенд.', true);
+    setStatus(`Свързан с PostgreSQL бекенд (${state.apiBaseUrl}).`, true);
     persistEmployeesLocal();
     saveScheduleLocal();
     return true;
@@ -234,13 +290,17 @@ async function saveEmployeeBackend(employee) {
   }
 
   try {
-    await fetch('/api/employees', {
+    const response = await apiFetch('/api/employees', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(employee)
     });
+
+    if (!response.ok) {
+      throw new Error('Save employee failed');
+    }
   } catch {
-    setStatus('Грешка към бекенд. Данните са запазени локално.', false);
+    setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
     state.backendAvailable = false;
   }
 }
@@ -251,9 +311,12 @@ async function deleteEmployeeBackend(employeeId) {
   }
 
   try {
-    await fetch(`/api/employees/${employeeId}`, { method: 'DELETE' });
+    const response = await apiFetch(`/api/employees/${employeeId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      throw new Error('Delete employee failed');
+    }
   } catch {
-    setStatus('Грешка към бекенд. Данните са запазени локално.', false);
+    setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
     state.backendAvailable = false;
   }
 }
@@ -264,13 +327,17 @@ async function saveScheduleEntryBackend(employeeId, month, day, shiftCode) {
   }
 
   try {
-    await fetch('/api/schedule-entry', {
+    const response = await apiFetch('/api/schedule-entry', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ employeeId, month, day, shiftCode })
     });
+
+    if (!response.ok) {
+      throw new Error('Save schedule entry failed');
+    }
   } catch {
-    setStatus('Грешка към бекенд. Данните са запазени локално.', false);
+    setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
     state.backendAvailable = false;
   }
 }
