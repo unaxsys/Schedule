@@ -5,11 +5,11 @@ const SHIFT_CODES = {
   B: { label: 'Б', hours: 0, type: 'sick' }
 };
 
-const loadedSchedule = loadScheduleState();
 const state = {
-  month: loadedSchedule.month || todayMonth(),
-  employees: loadEmployees(),
-  schedule: loadedSchedule.schedule || {}
+  month: todayMonth(),
+  employees: [],
+  schedule: {},
+  backendAvailable: false
 };
 
 const monthPicker = document.getElementById('monthPicker');
@@ -21,17 +21,33 @@ const positionInput = document.getElementById('positionInput');
 const vacationAllowanceInput = document.getElementById('vacationAllowanceInput');
 const employeeList = document.getElementById('employeeList');
 const scheduleTable = document.getElementById('scheduleTable');
+const storageStatus = document.getElementById('storageStatus');
 
-monthPicker.value = state.month;
-renderAll();
+init();
+
+async function init() {
+  monthPicker.value = state.month;
+  const loadedSchedule = loadScheduleState();
+  state.month = loadedSchedule.month || todayMonth();
+  state.schedule = loadedSchedule.schedule || {};
+  state.employees = loadEmployees();
+
+  const synced = await loadFromBackend();
+  if (!synced) {
+    setStatus('Локален режим (localStorage).', false);
+  }
+
+  monthPicker.value = state.month;
+  renderAll();
+}
 
 generateBtn.addEventListener('click', () => {
   state.month = monthPicker.value || todayMonth();
-  saveSchedule();
+  saveScheduleLocal();
   renderAll();
 });
 
-employeeForm.addEventListener('submit', (event) => {
+employeeForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const employee = {
     id: crypto.randomUUID(),
@@ -46,7 +62,9 @@ employeeForm.addEventListener('submit', (event) => {
   }
 
   state.employees.push(employee);
-  persistEmployees();
+  persistEmployeesLocal();
+  await saveEmployeeBackend(employee);
+
   employeeForm.reset();
   vacationAllowanceInput.value = 20;
   renderAll();
@@ -74,9 +92,10 @@ function renderEmployees() {
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.textContent = 'Изтрий';
-    removeBtn.addEventListener('click', () => {
+    removeBtn.addEventListener('click', async () => {
       state.employees = state.employees.filter((e) => e.id !== employee.id);
-      persistEmployees();
+      persistEmployeesLocal();
+      await deleteEmployeeBackend(employee.id);
       renderAll();
     });
 
@@ -149,13 +168,16 @@ function renderSchedule() {
         const option = document.createElement('option');
         option.value = code;
         option.textContent = SHIFT_CODES[code].label;
-        if (code === currentShift) option.selected = true;
+        if (code === currentShift) {
+          option.selected = true;
+        }
         select.appendChild(option);
       });
 
-      select.addEventListener('change', () => {
+      select.addEventListener('change', async () => {
         state.schedule[key] = select.value;
-        saveSchedule();
+        saveScheduleLocal();
+        await saveScheduleEntryBackend(employee.id, month, day, select.value);
         renderSchedule();
       });
 
@@ -170,8 +192,12 @@ function renderSchedule() {
           holidayWorkedDays += 1;
         }
       }
-      if (shift.type === 'vacation') vacationDays += 1;
-      if (shift.type === 'sick') sickDays += 1;
+      if (shift.type === 'vacation') {
+        vacationDays += 1;
+      }
+      if (shift.type === 'sick') {
+        sickDays += 1;
+      }
     }
 
     const remainingVacation = employee.vacationAllowance - getVacationUsedForYear(employee.id, year);
@@ -179,6 +205,79 @@ function renderSchedule() {
     row.innerHTML += `<td class="summary-col">${workedDays}</td><td class="summary-col">${workedHours}</td><td class="summary-col">${holidayWorkedDays}</td><td class="summary-col">${vacationDays}</td><td class="summary-col">${remainingVacation}</td><td class="summary-col">${sickDays}</td>`;
     scheduleTable.appendChild(row);
   });
+}
+
+async function loadFromBackend() {
+  try {
+    const response = await fetch('/api/state');
+    if (!response.ok) {
+      throw new Error('Backend state unavailable');
+    }
+
+    const payload = await response.json();
+    state.employees = payload.employees || [];
+    state.schedule = payload.schedule || {};
+    state.backendAvailable = true;
+    setStatus('Свързан с PostgreSQL бекенд.', true);
+    persistEmployeesLocal();
+    saveScheduleLocal();
+    return true;
+  } catch {
+    state.backendAvailable = false;
+    return false;
+  }
+}
+
+async function saveEmployeeBackend(employee) {
+  if (!state.backendAvailable) {
+    return;
+  }
+
+  try {
+    await fetch('/api/employees', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(employee)
+    });
+  } catch {
+    setStatus('Грешка към бекенд. Данните са запазени локално.', false);
+    state.backendAvailable = false;
+  }
+}
+
+async function deleteEmployeeBackend(employeeId) {
+  if (!state.backendAvailable) {
+    return;
+  }
+
+  try {
+    await fetch(`/api/employees/${employeeId}`, { method: 'DELETE' });
+  } catch {
+    setStatus('Грешка към бекенд. Данните са запазени локално.', false);
+    state.backendAvailable = false;
+  }
+}
+
+async function saveScheduleEntryBackend(employeeId, month, day, shiftCode) {
+  if (!state.backendAvailable) {
+    return;
+  }
+
+  try {
+    await fetch('/api/schedule-entry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ employeeId, month, day, shiftCode })
+    });
+  } catch {
+    setStatus('Грешка към бекенд. Данните са запазени локално.', false);
+    state.backendAvailable = false;
+  }
+}
+
+function setStatus(message, good) {
+  storageStatus.textContent = message;
+  storageStatus.className = good ? 'status-ok' : 'status-warn';
 }
 
 function getVacationUsedForYear(employeeId, year) {
@@ -196,11 +295,11 @@ function scheduleKey(employeeId, month, day) {
   return `${employeeId}|${month}|${day}`;
 }
 
-function persistEmployees() {
+function persistEmployeesLocal() {
   localStorage.setItem('employees', JSON.stringify(state.employees));
 }
 
-function saveSchedule() {
+function saveScheduleLocal() {
   localStorage.setItem('scheduleState', JSON.stringify({ month: state.month, schedule: state.schedule }));
 }
 
@@ -236,20 +335,10 @@ function isOfficialHoliday(date) {
   const day = date.getDate();
   const key = `${month}-${day}`;
 
-  const fixed = new Set([
-    '1-1',
-    '3-3',
-    '5-1',
-    '5-6',
-    '5-24',
-    '9-6',
-    '9-22',
-    '12-24',
-    '12-25',
-    '12-26'
-  ]);
-
-  if (fixed.has(key)) return true;
+  const fixed = new Set(['1-1', '3-3', '5-1', '5-6', '5-24', '9-6', '9-22', '12-24', '12-25', '12-26']);
+  if (fixed.has(key)) {
+    return true;
+  }
 
   const easter = orthodoxEaster(year);
   const easterDates = [-2, -1, 0, 1].map((offset) => {
