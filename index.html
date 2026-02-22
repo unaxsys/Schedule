@@ -18,41 +18,88 @@
       </div>
     </header>
 
-    <main>
-      <section class="panel">
-        <h2>Настройки на месец</h2>
-        <div class="row">
-          <label for="monthPicker">Месец:</label>
-          <input id="monthPicker" type="month" />
-          <button id="generateBtn" type="button">Генерирай календар</button>
+    <main class="app-layout">
+      <aside class="sidebar panel">
+        <h2>Навигация</h2>
+        <div class="side-tabs">
+          <button type="button" class="tab-btn active" data-tab="scheduleTab">График</button>
+          <button type="button" class="tab-btn" data-tab="employeesTab">Служители</button>
+          <button type="button" class="tab-btn" data-tab="vacationTab">Отпуски</button>
+          <button type="button" class="tab-btn" data-tab="rulesTab">Изчисления</button>
         </div>
-        <small>Официалните празници се маркират автоматично.</small>
-      </section>
+      </aside>
 
-      <section class="panel">
-        <h2>Служители</h2>
-        <form id="employeeForm" class="employee-form">
-          <input id="nameInput" required placeholder="Име и фамилия" />
-          <input id="departmentInput" required placeholder="Отдел" />
-          <input id="positionInput" required placeholder="Длъжност" />
-          <input id="vacationAllowanceInput" type="number" min="0" value="20" required placeholder="Годишен отпуск" />
-          <button type="submit">Добави служител</button>
-        </form>
-        <div id="employeeList" class="employee-list"></div>
-      </section>
+      <div class="content-grid">
+        <section id="scheduleTab" class="panel tab-panel active">
+          <h2>Месечен график</h2>
+          <div class="row">
+            <label for="monthPicker">Месец:</label>
+            <input id="monthPicker" type="month" />
+            <button id="generateBtn" type="button">Генерирай календар</button>
+          </div>
+          <div class="row actions-row">
+            <button id="lockScheduleBtn" type="button">Заключи графика</button>
+            <button id="unlockScheduleBtn" type="button">Отключи графика</button>
+            <button id="exportExcelBtn" type="button">Експорт Excel</button>
+            <button id="exportPdfBtn" type="button">Експорт PDF</button>
+            <span id="lockStatus" class="lock-status">Статус: Отключен</span>
+          </div>
+          <div id="monthInfo" class="month-info"></div>
+          <div class="legend" id="shiftLegend"></div>
+          <div class="table-wrap">
+            <table id="scheduleTable"></table>
+          </div>
+        </section>
 
-      <section class="panel">
-        <h2>Месечен график</h2>
-        <div class="legend">
-          <span><b>Р</b> - Работа (8ч)</span>
-          <span><b>П</b> - Почивка</span>
-          <span><b>О</b> - Отпуск</span>
-          <span><b>Б</b> - Болничен</span>
-        </div>
-        <div class="table-wrap">
-          <table id="scheduleTable"></table>
-        </div>
-      </section>
+        <section id="employeesTab" class="panel tab-panel">
+          <h2>Служители</h2>
+          <form id="employeeForm" class="employee-form">
+            <input id="nameInput" required placeholder="Име и фамилия" />
+            <input id="departmentInput" required placeholder="Отдел" />
+            <input id="positionInput" required placeholder="Длъжност" />
+            <input id="vacationAllowanceInput" type="number" min="0" value="20" required placeholder="Годишен отпуск" />
+            <button type="submit">Добави служител</button>
+          </form>
+          <div id="employeeList" class="employee-list"></div>
+        </section>
+
+        <section id="vacationTab" class="panel tab-panel">
+          <h2>Отпуски</h2>
+          <form id="vacationForm" class="row">
+            <select id="vacationEmployeeSelect" required></select>
+            <input id="vacationStartInput" type="date" required />
+            <input id="vacationEndInput" type="date" required />
+            <button type="submit">Маркирай отпуск</button>
+          </form>
+          <div id="vacationLedger"></div>
+        </section>
+
+        <section id="rulesTab" class="panel tab-panel">
+          <h2>Сумирано работно време и положен труд</h2>
+          <p>
+            Нормата за месеца = (работни дни без официални празници) × 8 ч. Отчетът показва отклонение от нормата,
+            труд в почивни дни и труд в официални празници.
+          </p>
+          <form id="ratesForm" class="row">
+            <label for="weekendRateInput">Коефициент почивен ден:</label>
+            <input id="weekendRateInput" type="number" min="1" step="0.05" value="1.75" />
+            <label for="holidayRateInput">Коефициент официален празник:</label>
+            <input id="holidayRateInput" type="number" min="1" step="0.05" value="2" />
+            <button type="submit">Запази коефициенти</button>
+          </form>
+
+          <h3>Смени (начало/край)</h3>
+          <form id="shiftForm" class="row">
+            <input id="shiftCodeInput" maxlength="4" required placeholder="Код (напр. D1)" />
+            <input id="shiftNameInput" required placeholder="Име на смяна" />
+            <input id="shiftStartInput" type="time" required />
+            <input id="shiftEndInput" type="time" required />
+            <button type="submit">Добави смяна</button>
+          </form>
+          <div id="shiftList" class="shift-list"></div>
+          <small>Смените „Почивка“, „Отпуск“ и „Болничен“ са системни и не се трият.</small>
+        </section>
+      </div>
     </main>
 
     <script src="app.js"></script>
