@@ -3,6 +3,9 @@ const DEFAULT_RATES = {
   holiday: 2
 };
 
+const NIGHT_HOURS_COEFFICIENT = 1.143;
+const MAX_NIGHT_SHIFT_HOURS = 12;
+
 const SYSTEM_SHIFTS = [
   { code: 'P', label: 'П', name: 'Почивка', type: 'rest', start: '', end: '', hours: 0, locked: true },
   { code: 'O', label: 'О', name: 'Отпуск', type: 'vacation', start: '', end: '', hours: 0, locked: true },
@@ -148,6 +151,12 @@ function attachShiftForm() {
       return;
     }
 
+    const nightHours = calcNightHours(start, end);
+    if (nightHours > 0 && hours > MAX_NIGHT_SHIFT_HOURS) {
+      setStatus('Нощна смяна при СИРВ може да е максимум 12 часа.', false);
+      return;
+    }
+
     state.shiftTemplates.push({
       code,
       label: code,
@@ -160,6 +169,7 @@ function attachShiftForm() {
     });
 
     saveShiftTemplates();
+    void saveShiftTemplateBackend({ code, name, start, end, hours });
     shiftForm.reset();
     renderAll();
   });
@@ -262,9 +272,10 @@ function renderShiftList() {
       const removeBtn = document.createElement('button');
       removeBtn.type = 'button';
       removeBtn.textContent = 'Изтрий';
-      removeBtn.addEventListener('click', () => {
+      removeBtn.addEventListener('click', async () => {
         state.shiftTemplates = state.shiftTemplates.filter((entry) => entry.code !== shift.code);
         saveShiftTemplates();
+        await deleteShiftTemplateBackend(shift.code);
         replaceDeletedShiftCodes(shift.code);
         renderAll();
       });
@@ -427,7 +438,7 @@ function renderSchedule() {
   }
 
   header.innerHTML +=
-    '<th class="summary-col">Отр. дни</th><th class="summary-col">Часове</th><th class="summary-col">Норма</th><th class="summary-col">Отклонение</th><th class="summary-col">Труд празник (ч)</th><th class="summary-col">Труд почивен (ч)</th><th class="summary-col">Платими часове</th><th class="summary-col">Отпуск</th><th class="summary-col">Ост. отпуск</th><th class="summary-col">Болничен</th>';
+    '<th class="summary-col">Отр. дни</th><th class="summary-col">Часове</th><th class="summary-col">Норма</th><th class="summary-col">Отклонение</th><th class="summary-col">Труд празник (ч)</th><th class="summary-col">Труд почивен (ч)</th><th class="summary-col">Нощен труд (ч)</th><th class="summary-col">Нощен коеф. (ч)</th><th class="summary-col">Платими часове</th><th class="summary-col">Отпуск</th><th class="summary-col">Ост. отпуск</th><th class="summary-col">Болничен</th>';
 
   scheduleTable.innerHTML = '';
   scheduleTable.appendChild(header);
@@ -444,6 +455,8 @@ function renderSchedule() {
       workedHours: 0,
       holidayWorkedHours: 0,
       weekendWorkedHours: 0,
+      nightWorkedHours: 0,
+      nightConvertedHours: 0,
       vacationDays: 0,
       sickDays: 0
     };
@@ -498,10 +511,10 @@ function renderSchedule() {
     const normalizedHolidayHours = summary.holidayWorkedHours * state.rates.holiday;
     const normalizedWeekendHours = summary.weekendWorkedHours * state.rates.weekend;
     const payableHours =
-      summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours;
-    const deviation = summary.workedHours - monthStats.normHours;
+      summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + summary.nightConvertedHours;
+    const deviation = summary.workedHours + summary.nightConvertedHours - monthStats.normHours;
 
-    row.innerHTML += `<td class="summary-col">${summary.workedDays}</td><td class="summary-col">${summary.workedHours.toFixed(2)}</td><td class="summary-col">${monthStats.normHours}</td><td class="summary-col ${deviation < 0 ? 'negative' : 'positive'}">${deviation.toFixed(2)}</td><td class="summary-col">${summary.holidayWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.weekendWorkedHours.toFixed(2)}</td><td class="summary-col">${payableHours.toFixed(2)}</td><td class="summary-col">${summary.vacationDays}</td><td class="summary-col">${remainingVacation}</td><td class="summary-col">${summary.sickDays}</td>`;
+    row.innerHTML += `<td class="summary-col">${summary.workedDays}</td><td class="summary-col">${summary.workedHours.toFixed(2)}</td><td class="summary-col">${monthStats.normHours}</td><td class="summary-col ${deviation < 0 ? 'negative' : 'positive'}">${deviation.toFixed(2)}</td><td class="summary-col">${summary.holidayWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.weekendWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.nightWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.nightConvertedHours.toFixed(2)}</td><td class="summary-col">${payableHours.toFixed(2)}</td><td class="summary-col">${summary.vacationDays}</td><td class="summary-col">${remainingVacation}</td><td class="summary-col">${summary.sickDays}</td>`;
     scheduleTable.appendChild(row);
   });
 }
@@ -510,12 +523,18 @@ function collectSummary(summary, shiftCode, holiday, weekend) {
   const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
 
   if (shift.type === 'work') {
+    const shiftHours = Number(shift.hours) || 0;
+    const nightHours = calcNightHours(shift.start, shift.end);
+
     summary.workedDays += 1;
-    summary.workedHours += shift.hours;
+    summary.workedHours += shiftHours;
+    summary.nightWorkedHours += nightHours;
+    summary.nightConvertedHours += nightHours * (NIGHT_HOURS_COEFFICIENT - 1);
+
     if (holiday) {
-      summary.holidayWorkedHours += shift.hours;
+      summary.holidayWorkedHours += shiftHours;
     } else if (weekend) {
-      summary.weekendWorkedHours += shift.hours;
+      summary.weekendWorkedHours += shiftHours;
     }
   }
 
@@ -571,9 +590,9 @@ function detectApiBaseUrl() {
   }
 
   const sameOrigin = window.location.origin;
-  const sameHost3000 = `${window.location.protocol}//${window.location.hostname}:3000`;
+  const sameHost4000 = `${window.location.protocol}//${window.location.hostname}:4000`;
 
-  return normalizeApiBaseUrl(window.location.port === '3000' ? sameOrigin : sameHost3000);
+  return normalizeApiBaseUrl(window.location.port === '4000' ? sameOrigin : sameHost4000);
 }
 
 function normalizeApiBaseUrl(url) {
@@ -603,6 +622,11 @@ async function loadFromBackend() {
     const payload = await response.json();
     state.employees = payload.employees || [];
     state.schedule = payload.schedule || {};
+    const backendShiftTemplates = Array.isArray(payload.shiftTemplates) ? payload.shiftTemplates : [];
+    if (backendShiftTemplates.length) {
+      state.shiftTemplates = mergeShiftTemplates(backendShiftTemplates);
+      saveShiftTemplates();
+    }
     state.backendAvailable = true;
     setStatus(`Свързан с PostgreSQL бекенд (${state.apiBaseUrl}).`, true);
     persistEmployeesLocal();
@@ -665,6 +689,44 @@ async function saveScheduleEntryBackend(employeeId, month, day, shiftCode) {
 
     if (!response.ok) {
       throw new Error('Save schedule entry failed');
+    }
+  } catch {
+    setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
+    state.backendAvailable = false;
+  }
+}
+
+
+async function saveShiftTemplateBackend(shift) {
+  if (!state.backendAvailable) {
+    return;
+  }
+
+  try {
+    const response = await apiFetch('/api/shift-template', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(shift)
+    });
+
+    if (!response.ok) {
+      throw new Error('Save shift template failed');
+    }
+  } catch {
+    setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
+    state.backendAvailable = false;
+  }
+}
+
+async function deleteShiftTemplateBackend(code) {
+  if (!state.backendAvailable) {
+    return;
+  }
+
+  try {
+    const response = await apiFetch(`/api/shift-template/${encodeURIComponent(code)}`, { method: 'DELETE' });
+    if (!response.ok) {
+      throw new Error('Delete shift template failed');
     }
   } catch {
     setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
@@ -782,20 +844,34 @@ function saveShiftTemplates() {
   localStorage.setItem('shiftTemplates', JSON.stringify(state.shiftTemplates));
 }
 
+function mergeShiftTemplates(backendShiftTemplates) {
+  const merged = [...SYSTEM_SHIFTS, DEFAULT_WORK_SHIFT];
+
+  backendShiftTemplates.forEach((shift) => {
+    const code = String(shift.code || '').trim().toUpperCase();
+    if (!code || merged.some((existing) => existing.code === code)) {
+      return;
+    }
+
+    merged.push({
+      code,
+      label: code,
+      name: String(shift.name || code),
+      type: 'work',
+      start: String(shift.start || ''),
+      end: String(shift.end || ''),
+      hours: Number(shift.hours) || calcShiftHours(String(shift.start || ''), String(shift.end || '')),
+      locked: false
+    });
+  });
+
+  return merged;
+}
+
 function loadShiftTemplates() {
   try {
     const parsed = JSON.parse(localStorage.getItem('shiftTemplates') || '[]');
-    const merged = [...SYSTEM_SHIFTS, DEFAULT_WORK_SHIFT];
-    parsed.forEach((shift) => {
-      if (!merged.some((existing) => existing.code === shift.code)) {
-        merged.push({
-          ...shift,
-          hours: Number(shift.hours) || calcShiftHours(shift.start, shift.end),
-          locked: Boolean(shift.locked)
-        });
-      }
-    });
-    return merged;
+    return mergeShiftTemplates(parsed);
   } catch {
     return [...SYSTEM_SHIFTS, DEFAULT_WORK_SHIFT];
   }
@@ -815,6 +891,41 @@ function loadLockedMonths() {
 
 function isMonthLocked(month) {
   return Boolean(state.lockedMonths[month]);
+}
+
+function calcNightHours(start, end) {
+  if (!start || !end) {
+    return 0;
+  }
+
+  const [startHour, startMinute] = start.split(':').map(Number);
+  const [endHour, endMinute] = end.split(':').map(Number);
+
+  if ([startHour, startMinute, endHour, endMinute].some((value) => Number.isNaN(value))) {
+    return 0;
+  }
+
+  const startMinutes = startHour * 60 + startMinute;
+  let endMinutes = endHour * 60 + endMinute;
+  if (endMinutes <= startMinutes) {
+    endMinutes += 24 * 60;
+  }
+
+  const windows = [
+    [22 * 60, 24 * 60],
+    [24 * 60, 30 * 60]
+  ];
+
+  let nightMinutes = 0;
+  windows.forEach(([windowStart, windowEnd]) => {
+    const overlapStart = Math.max(startMinutes, windowStart);
+    const overlapEnd = Math.min(endMinutes, windowEnd);
+    if (overlapEnd > overlapStart) {
+      nightMinutes += overlapEnd - overlapStart;
+    }
+  });
+
+  return Number((nightMinutes / 60).toFixed(2));
 }
 
 function calcShiftHours(start, end) {
