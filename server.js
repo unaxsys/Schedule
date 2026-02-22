@@ -30,6 +30,42 @@ app.use(
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
+async function initDatabase() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS employees (
+      id UUID PRIMARY KEY,
+      name TEXT NOT NULL,
+      department TEXT NOT NULL,
+      position TEXT NOT NULL,
+      vacation_allowance INTEGER NOT NULL DEFAULT 20,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS schedule_entries (
+      employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+      month_key CHAR(7) NOT NULL,
+      day INTEGER NOT NULL CHECK (day >= 1 AND day <= 31),
+      shift_code VARCHAR(16) NOT NULL,
+      PRIMARY KEY (employee_id, month_key, day)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shift_templates (
+      code VARCHAR(16) PRIMARY KEY,
+      name TEXT NOT NULL,
+      start_time CHAR(5) NOT NULL,
+      end_time CHAR(5) NOT NULL,
+      hours NUMERIC(6,2) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query('ALTER TABLE schedule_entries ALTER COLUMN shift_code TYPE VARCHAR(16)');
+}
+
 app.get('/api/health', async (_req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -50,12 +86,16 @@ app.get('/api/state', async (_req, res) => {
       'SELECT employee_id, month_key, day, shift_code FROM schedule_entries'
     );
 
+    const shiftsResult = await pool.query(
+      'SELECT code, name, start_time AS start, end_time AS "end", hours FROM shift_templates ORDER BY created_at, code'
+    );
+
     const schedule = {};
     for (const row of scheduleResult.rows) {
       schedule[`${row.employee_id}|${row.month_key}|${row.day}`] = row.shift_code;
     }
 
-    res.json({ employees: employeesResult.rows, schedule });
+    res.json({ employees: employeesResult.rows, schedule, shiftTemplates: shiftsResult.rows });
   } catch (error) {
     console.error('STATE error:', error);
     res.status(500).json({ message: error.message });
@@ -123,6 +163,49 @@ app.post('/api/schedule-entry', async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`Schedule backend ready on http://localhost:${port}`);
+app.post('/api/shift-template', async (req, res) => {
+  const { code, name, start, end, hours } = req.body;
+  if (!code || !name || !start || !end || Number(hours) <= 0) {
+    res.status(400).json({ message: 'Невалидни данни за смяна.' });
+    return;
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO shift_templates (code, name, start_time, end_time, hours)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (code)
+       DO UPDATE SET name = EXCLUDED.name,
+                     start_time = EXCLUDED.start_time,
+                     end_time = EXCLUDED.end_time,
+                     hours = EXCLUDED.hours`,
+      [code, name, start, end, Number(hours)]
+    );
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('SHIFT TEMPLATE error:', error);
+    res.status(500).json({ message: error.message });
+  }
 });
+
+app.delete('/api/shift-template/:code', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM shift_templates WHERE code = $1', [req.params.code]);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('SHIFT TEMPLATE DELETE error:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+initDatabase()
+  .then(() => {
+    app.listen(port, () => {
+      console.log(`Schedule backend ready on http://localhost:${port}`);
+    });
+  })
+  .catch((error) => {
+    console.error('Database init error:', error);
+    process.exit(1);
+  });
