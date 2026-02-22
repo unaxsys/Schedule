@@ -105,14 +105,78 @@ app.get('/api/state', async (_req, res) => {
 });
 
 app.post('/api/employees', async (req, res) => {
-  const rawId = req.body?.id;
-  const name = String(req.body?.name ?? '').trim();
-  const department = String(req.body?.department ?? '').trim();
-  const position = String(req.body?.position ?? '').trim();
-  const vacationAllowance = Number(req.body?.vacationAllowance ?? 20);
+  const { id: rawId, name: rawName, department: rawDepartment, position: rawPosition, vacationAllowance: rawVacationAllowance } =
+    req.body ?? {};
 
-  if (!name || !department || !position) {
-    return res.status(400).json({ message: 'Невалидни данни за служител.' });
+  const safeTrim = (value) => (typeof value === 'string' ? value.trim() : String(value ?? '').trim());
+
+  const name = safeTrim(rawName);
+  const department = safeTrim(rawDepartment);
+  const position = safeTrim(rawPosition);
+
+  if (!name) {
+    return res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: "Полето 'name' е задължително"
+    });
+  }
+
+  if (name.length < 2) {
+    return res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: "Полето 'name' трябва да е поне 2 символа"
+    });
+  }
+
+  if (!department) {
+    return res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: "Полето 'department' е задължително"
+    });
+  }
+
+  if (department.length < 2) {
+    return res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: "Полето 'department' трябва да е поне 2 символа"
+    });
+  }
+
+  if (!position) {
+    return res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: "Полето 'position' е задължително"
+    });
+  }
+
+  if (position.length < 2) {
+    return res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: "Полето 'position' трябва да е поне 2 символа"
+    });
+  }
+
+  if (rawVacationAllowance === undefined || rawVacationAllowance === null || String(rawVacationAllowance).trim() === '') {
+    return res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: "Полето 'vacationAllowance' е задължително"
+    });
+  }
+
+  const vacationAllowance = Number(rawVacationAllowance);
+
+  if (!Number.isFinite(vacationAllowance)) {
+    return res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: "Полето 'vacationAllowance' трябва да е число"
+    });
+  }
+
+  if (vacationAllowance < 0) {
+    return res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: "Полето 'vacationAllowance' трябва да е >= 0"
+    });
   }
 
   const isValidUuid =
@@ -130,8 +194,8 @@ app.post('/api/employees', async (req, res) => {
                      department = EXCLUDED.department,
                      position = EXCLUDED.position,
                      vacation_allowance = EXCLUDED.vacation_allowance
-       RETURNING id, name, department, position, vacation_allowance AS "vacationAllowance"`,
-      [id, name, department, position, Number.isFinite(vacationAllowance) ? vacationAllowance : 20]
+      RETURNING id, name, department, position, vacation_allowance AS "vacationAllowance"`,
+      [id, name, department, position, vacationAllowance]
     );
 
     return res.status(201).json({ ok: true, employee: result.rows[0] });
