@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="bg">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Платформа за графици</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Планиране на смени</h1>
+      <p>Управление на отдели, длъжности, графици, отпуски и болнични.</p>
+    </header>
+
+    <main>
+      <section class="panel">
+        <h2>Настройки на месец</h2>
+        <div class="row">
+          <label for="monthPicker">Месец:</label>
+          <input id="monthPicker" type="month" />
+          <button id="generateBtn" type="button">Генерирай календар</button>
+        </div>
+        <small>Официалните празници се маркират автоматично.</small>
+      </section>
+
+      <section class="panel">
+        <h2>Служители</h2>
+        <form id="employeeForm" class="employee-form">
+          <input id="nameInput" required placeholder="Име и фамилия" />
+          <input id="departmentInput" required placeholder="Отдел" />
+          <input id="positionInput" required placeholder="Длъжност" />
+          <input id="vacationAllowanceInput" type="number" min="0" value="20" required placeholder="Годишен отпуск" />
+          <button type="submit">Добави служител</button>
+        </form>
+        <div id="employeeList" class="employee-list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Месечен график</h2>
+        <div class="legend">
+          <span><b>Р</b> - Работа (8ч)</span>
+          <span><b>П</b> - Почивка</span>
+          <span><b>О</b> - Отпуск</span>
+          <span><b>Б</b> - Болничен</span>
+        </div>
+        <div class="table-wrap">
+          <table id="scheduleTable"></table>
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
