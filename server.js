@@ -4,7 +4,6 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
-const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -87,8 +86,82 @@ function validateEmployeeInput(body) {
 /*         INIT DATABASE         */
 /* ============================= */
 
+function validateEmployeeInput(data = {}) {
+  const normalizeString = (value) => (typeof value === 'string' ? value.trim() : String(value ?? '').trim());
+
+  const name = normalizeString(data.name);
+  if (name.length < 2) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'name',
+        message: 'Името е задължително и трябва да съдържа поне 2 символа.'
+      }
+    };
+  }
+
+  const department = normalizeString(data.department);
+  if (department.length < 2) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'department',
+        message: 'Отделът е задължителен и трябва да съдържа поне 2 символа.'
+      }
+    };
+  }
+
+  const position = normalizeString(data.position);
+  if (position.length < 2) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'position',
+        message: 'Позицията е задължителна и трябва да съдържа поне 2 символа.'
+      }
+    };
+  }
+
+  const rawVacationAllowance = data.vacationAllowance;
+  if (rawVacationAllowance === undefined || rawVacationAllowance === null || String(rawVacationAllowance).trim() === '') {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'vacationAllowance',
+        message: 'Полагаемият отпуск е задължителен и трябва да е число >= 0.'
+      }
+    };
+  }
+
+  const vacationAllowance = Number(rawVacationAllowance);
+  if (!Number.isFinite(vacationAllowance) || vacationAllowance < 0) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'vacationAllowance',
+        message: 'Полагаемият отпуск е задължителен и трябва да е число >= 0.'
+      }
+    };
+  }
+
+  return {
+    valid: true,
+    value: {
+      name,
+      department,
+      position,
+      vacationAllowance
+    }
+  };
+}
+
 async function initDatabase() {
-  await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
+  await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
@@ -100,6 +173,8 @@ async function initDatabase() {
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query('ALTER TABLE employees ALTER COLUMN id SET DEFAULT gen_random_uuid()');
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schedule_entries (
@@ -171,26 +246,20 @@ app.get('/api/state', async (_req, res) => {
   }
 });
 
-/* ============================= */
-/*         EMPLOYEES CRUD        */
-/* ============================= */
-
 app.post('/api/employees', async (req, res) => {
   const validation = validateEmployeeInput(req.body);
-
-  if (validation.error) {
-    return res.status(400).json({ message: validation.error });
+  if (!validation.valid) {
+    return res.status(400).json(validation.error);
   }
 
   const { name, department, position, vacationAllowance } = validation.value;
 
   try {
     const result = await pool.query(
-      `INSERT INTO employees (id, name, department, position, vacation_allowance)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, name, department, position,
-                 vacation_allowance AS "vacationAllowance"`,
-      [uuidv4(), name, department, position, vacationAllowance]
+      `INSERT INTO employees (name, department, position, vacation_allowance)
+       VALUES ($1, $2, $3, $4)
+      RETURNING id, name, department, position, vacation_allowance AS "vacationAllowance"`,
+      [name, department, position, vacationAllowance]
     );
 
     res.status(201).json({
