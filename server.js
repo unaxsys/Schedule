@@ -4,7 +4,6 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
-const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -32,7 +31,83 @@ app.use(
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
+function validateEmployeeInput(data) {
+  const normalizeString = (value) => (typeof value === 'string' ? value.trim() : String(value ?? '').trim());
+
+  const name = normalizeString(data?.name);
+  if (name.length < 2) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'name',
+        message: 'Името е задължително и трябва да съдържа поне 2 символа.'
+      }
+    };
+  }
+
+  const department = normalizeString(data?.department);
+  if (department.length < 2) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'department',
+        message: 'Отделът е задължителен и трябва да съдържа поне 2 символа.'
+      }
+    };
+  }
+
+  const position = normalizeString(data?.position);
+  if (position.length < 2) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'position',
+        message: 'Позицията е задължителна и трябва да съдържа поне 2 символа.'
+      }
+    };
+  }
+
+  const rawVacationAllowance = data?.vacationAllowance;
+  if (rawVacationAllowance === undefined || rawVacationAllowance === null || String(rawVacationAllowance).trim() === '') {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'vacationAllowance',
+        message: 'Полагаемият отпуск е задължителен и трябва да е число >= 0.'
+      }
+    };
+  }
+
+  const vacationAllowance = Number(rawVacationAllowance);
+  if (!Number.isFinite(vacationAllowance) || vacationAllowance < 0) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'vacationAllowance',
+        message: 'Полагаемият отпуск е задължителен и трябва да е число >= 0.'
+      }
+    };
+  }
+
+  return {
+    valid: true,
+    value: {
+      name,
+      department,
+      position,
+      vacationAllowance
+    }
+  };
+}
+
 async function initDatabase() {
+  await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
       id UUID PRIMARY KEY,
@@ -43,6 +118,8 @@ async function initDatabase() {
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query('ALTER TABLE employees ALTER COLUMN id SET DEFAULT gen_random_uuid()');
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schedule_entries (
@@ -105,97 +182,19 @@ app.get('/api/state', async (_req, res) => {
 });
 
 app.post('/api/employees', async (req, res) => {
-  const { id: rawId, name: rawName, department: rawDepartment, position: rawPosition, vacationAllowance: rawVacationAllowance } =
-    req.body ?? {};
-
-  const safeTrim = (value) => (typeof value === 'string' ? value.trim() : String(value ?? '').trim());
-
-  const name = safeTrim(rawName);
-  const department = safeTrim(rawDepartment);
-  const position = safeTrim(rawPosition);
-
-  if (!name) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'name' е задължително"
-    });
+  const validation = validateEmployeeInput(req.body);
+  if (!validation.valid) {
+    return res.status(400).json(validation.error);
   }
 
-  if (name.length < 2) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'name' трябва да е поне 2 символа"
-    });
-  }
-
-  if (!department) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'department' е задължително"
-    });
-  }
-
-  if (department.length < 2) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'department' трябва да е поне 2 символа"
-    });
-  }
-
-  if (!position) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'position' е задължително"
-    });
-  }
-
-  if (position.length < 2) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'position' трябва да е поне 2 символа"
-    });
-  }
-
-  if (rawVacationAllowance === undefined || rawVacationAllowance === null || String(rawVacationAllowance).trim() === '') {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'vacationAllowance' е задължително"
-    });
-  }
-
-  const vacationAllowance = Number(rawVacationAllowance);
-
-  if (!Number.isFinite(vacationAllowance)) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'vacationAllowance' трябва да е число"
-    });
-  }
-
-  if (vacationAllowance < 0) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'vacationAllowance' трябва да е >= 0"
-    });
-  }
-
-  const isValidUuid =
-    typeof rawId === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(rawId);
-
-  const id = isValidUuid ? rawId : require('uuid').v4();
+  const { name, department, position, vacationAllowance } = validation.value;
 
   try {
     const result = await pool.query(
-      `INSERT INTO employees (id, name, department, position, vacation_allowance)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (id)
-       DO UPDATE SET name = EXCLUDED.name,
-                     department = EXCLUDED.department,
-                     position = EXCLUDED.position,
-                     vacation_allowance = EXCLUDED.vacation_allowance
+      `INSERT INTO employees (name, department, position, vacation_allowance)
+       VALUES ($1, $2, $3, $4)
       RETURNING id, name, department, position, vacation_allowance AS "vacationAllowance"`,
-      [id, name, department, position, vacationAllowance]
+      [name, department, position, vacationAllowance]
     );
 
     return res.status(201).json({ ok: true, employee: result.rows[0] });
