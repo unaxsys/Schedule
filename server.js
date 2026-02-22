@@ -8,7 +8,10 @@ const { Pool } = require('pg');
 const app = express();
 const port = Number(process.env.PORT || 4000);
 
-// ✅ Prefer DATABASE_URL, fallback to PG* vars
+/* ============================= */
+/*           DATABASE            */
+/* ============================= */
+
 const pool =
   process.env.DATABASE_URL && process.env.DATABASE_URL.trim().length > 0
     ? new Pool({ connectionString: process.env.DATABASE_URL })
@@ -20,6 +23,10 @@ const pool =
         password: process.env.PGPASSWORD || '',
       });
 
+/* ============================= */
+/*         MIDDLEWARES           */
+/* ============================= */
+
 app.use(
   cors({
     origin: '*',
@@ -29,7 +36,55 @@ app.use(
 );
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname)));
+
+/* ============================= */
+/*        HELPER FUNCTIONS       */
+/* ============================= */
+
+function isValidUuid(v) {
+  return typeof v === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+}
+
+function cleanStr(v) {
+  return String(v ?? '').trim();
+}
+
+function validateEmployeeInput(body) {
+  const name = cleanStr(body?.name);
+  const department = cleanStr(body?.department);
+  const position = cleanStr(body?.position);
+  const vacationAllowance = Number(body?.vacationAllowance ?? 20);
+
+  if (!name || name.length < 2) {
+    return { error: 'Името е задължително (мин. 2 символа).' };
+  }
+
+  if (!department || department.length < 2) {
+    return { error: 'Отделът е задължителен.' };
+  }
+
+  if (!position || position.length < 2) {
+    return { error: 'Длъжността е задължителна.' };
+  }
+
+  if (!Number.isFinite(vacationAllowance) || vacationAllowance < 0) {
+    return { error: 'Невалиден брой дни отпуск.' };
+  }
+
+  return {
+    value: {
+      name,
+      department,
+      position,
+      vacationAllowance,
+    },
+  };
+}
+
+/* ============================= */
+/*         INIT DATABASE         */
+/* ============================= */
 
 function validateEmployeeInput(data = {}) {
   const normalizeString = (value) => (typeof value === 'string' ? value.trim() : String(value ?? '').trim());
@@ -110,7 +165,7 @@ async function initDatabase() {
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
-      id UUID PRIMARY KEY,
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
       department TEXT NOT NULL,
       position TEXT NOT NULL,
@@ -141,42 +196,52 @@ async function initDatabase() {
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `);
-
-  await pool.query('ALTER TABLE schedule_entries ALTER COLUMN shift_code TYPE VARCHAR(16)');
 }
+
+/* ============================= */
+/*            ROUTES             */
+/* ============================= */
 
 app.get('/api/health', async (_req, res) => {
   try {
     await pool.query('SELECT 1');
     res.json({ ok: true, database: 'connected' });
   } catch (error) {
-    console.error('DB health error:', error);
     res.status(500).json({ ok: false, message: error.message });
   }
 });
 
 app.get('/api/state', async (_req, res) => {
   try {
-    const employeesResult = await pool.query(
-      'SELECT id, name, department, position, vacation_allowance AS "vacationAllowance" FROM employees ORDER BY created_at, name'
+    const employees = await pool.query(
+      `SELECT id, name, department, position,
+       vacation_allowance AS "vacationAllowance"
+       FROM employees ORDER BY created_at, name`
     );
 
-    const scheduleResult = await pool.query(
-      'SELECT employee_id, month_key, day, shift_code FROM schedule_entries'
+    const scheduleEntries = await pool.query(
+      `SELECT employee_id, month_key, day, shift_code FROM schedule_entries`
     );
 
-    const shiftsResult = await pool.query(
-      'SELECT code, name, start_time AS start, end_time AS "end", hours FROM shift_templates ORDER BY created_at, code'
+    const shiftTemplates = await pool.query(
+      `SELECT code, name,
+       start_time AS start,
+       end_time AS "end",
+       hours
+       FROM shift_templates ORDER BY created_at, code`
     );
 
     const schedule = {};
-    for (const row of scheduleResult.rows) {
+    for (const row of scheduleEntries.rows) {
       schedule[`${row.employee_id}|${row.month_key}|${row.day}`] = row.shift_code;
     }
 
-    res.json({ employees: employeesResult.rows, schedule, shiftTemplates: shiftsResult.rows });
+    res.json({
+      employees: employees.rows,
+      schedule,
+      shiftTemplates: shiftTemplates.rows,
+    });
   } catch (error) {
-    console.error('STATE error:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -197,10 +262,13 @@ app.post('/api/employees', async (req, res) => {
       [name, department, position, vacationAllowance]
     );
 
-    return res.status(201).json({ ok: true, employee: result.rows[0] });
+    res.status(201).json({
+      ok: true,
+      employee: result.rows[0],
+    });
   } catch (error) {
-    console.error('EMPLOYEES POST error:', error);
-    return res.status(500).json({ message: error.message });
+    console.error('EMPLOYEE POST ERROR:', error);
+    res.status(500).json({ message: error.message });
   }
 });
 
@@ -208,18 +276,20 @@ app.delete('/api/employees/:id', async (req, res) => {
   const id = req.params.id;
 
   if (!isValidUuid(id)) {
-    res.status(400).json({ message: 'Невалиден employee id.' });
-    return;
+    return res.status(400).json({ message: 'Невалиден employee id.' });
   }
 
   try {
     await pool.query('DELETE FROM employees WHERE id = $1', [id]);
     res.json({ ok: true });
   } catch (error) {
-    console.error('EMPLOYEES DELETE error:', error);
     res.status(500).json({ message: error.message });
   }
 });
+
+/* ============================= */
+/*         SCHEDULE ENTRY        */
+/* ============================= */
 
 app.post('/api/schedule-entry', async (req, res) => {
   const employeeId = req.body?.employeeId;
@@ -228,8 +298,7 @@ app.post('/api/schedule-entry', async (req, res) => {
   const shiftCode = cleanStr(req.body?.shiftCode);
 
   if (!isValidUuid(employeeId) || !month || !day || !shiftCode) {
-    res.status(400).json({ message: 'Невалидни данни за графика.' });
-    return;
+    return res.status(400).json({ message: 'Невалидни данни за графика.' });
   }
 
   try {
@@ -238,21 +307,28 @@ app.post('/api/schedule-entry', async (req, res) => {
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (employee_id, month_key, day)
        DO UPDATE SET shift_code = EXCLUDED.shift_code`,
-      [employeeId, month, Number(day), shiftCode]
+      [employeeId, month, day, shiftCode]
     );
 
     res.json({ ok: true });
   } catch (error) {
-    console.error('SCHEDULE ENTRY error:', error);
     res.status(500).json({ message: error.message });
   }
 });
 
+/* ============================= */
+/*       SHIFT TEMPLATES         */
+/* ============================= */
+
 app.post('/api/shift-template', async (req, res) => {
-  const { code, name, start, end, hours } = req.body;
-  if (!code || !name || !start || !end || Number(hours) <= 0) {
-    res.status(400).json({ message: 'Невалидни данни за смяна.' });
-    return;
+  const code = cleanStr(req.body?.code);
+  const name = cleanStr(req.body?.name);
+  const start = cleanStr(req.body?.start);
+  const end = cleanStr(req.body?.end);
+  const hours = Number(req.body?.hours);
+
+  if (!code || !name || !start || !end || !(hours > 0)) {
+    return res.status(400).json({ message: 'Невалидни данни за смяна.' });
   }
 
   try {
@@ -260,16 +336,16 @@ app.post('/api/shift-template', async (req, res) => {
       `INSERT INTO shift_templates (code, name, start_time, end_time, hours)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (code)
-       DO UPDATE SET name = EXCLUDED.name,
-                     start_time = EXCLUDED.start_time,
-                     end_time = EXCLUDED.end_time,
-                     hours = EXCLUDED.hours`,
-      [code, name, start, end, Number(hours)]
+       DO UPDATE SET
+         name = EXCLUDED.name,
+         start_time = EXCLUDED.start_time,
+         end_time = EXCLUDED.end_time,
+         hours = EXCLUDED.hours`,
+      [code, name, start, end, hours]
     );
 
     res.json({ ok: true });
   } catch (error) {
-    console.error('SHIFT TEMPLATE error:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -279,10 +355,19 @@ app.delete('/api/shift-template/:code', async (req, res) => {
     await pool.query('DELETE FROM shift_templates WHERE code = $1', [req.params.code]);
     res.json({ ok: true });
   } catch (error) {
-    console.error('SHIFT TEMPLATE DELETE error:', error);
     res.status(500).json({ message: error.message });
   }
 });
+
+/* ============================= */
+/*        STATIC FRONTEND        */
+/* ============================= */
+
+app.use(express.static(path.join(__dirname)));
+
+/* ============================= */
+/*            START              */
+/* ============================= */
 
 initDatabase()
   .then(() => {
