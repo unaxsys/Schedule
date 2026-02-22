@@ -1,14 +1,15 @@
-const SHIFT_CODES = {
-  R: { label: 'Р', hours: 8, type: 'work' },
-  P: { label: 'П', hours: 0, type: 'rest' },
-  O: { label: 'О', hours: 0, type: 'vacation' },
-  B: { label: 'Б', hours: 0, type: 'sick' }
-};
-
 const DEFAULT_RATES = {
   weekend: 1.75,
   holiday: 2
 };
+
+const SYSTEM_SHIFTS = [
+  { code: 'P', label: 'П', name: 'Почивка', type: 'rest', start: '', end: '', hours: 0, locked: true },
+  { code: 'O', label: 'О', name: 'Отпуск', type: 'vacation', start: '', end: '', hours: 0, locked: true },
+  { code: 'B', label: 'Б', name: 'Болничен', type: 'sick', start: '', end: '', hours: 0, locked: true }
+];
+
+const DEFAULT_WORK_SHIFT = { code: 'R', label: 'Р', name: 'Редовна', type: 'work', start: '09:00', end: '17:00', hours: 8, locked: true };
 
 const state = {
   month: todayMonth(),
@@ -16,7 +17,9 @@ const state = {
   schedule: {},
   backendAvailable: false,
   apiBaseUrl: '',
-  rates: loadRates()
+  rates: loadRates(),
+  shiftTemplates: loadShiftTemplates(),
+  lockedMonths: loadLockedMonths()
 };
 
 const monthPicker = document.getElementById('monthPicker');
@@ -42,6 +45,18 @@ const vacationLedger = document.getElementById('vacationLedger');
 const ratesForm = document.getElementById('ratesForm');
 const weekendRateInput = document.getElementById('weekendRateInput');
 const holidayRateInput = document.getElementById('holidayRateInput');
+const shiftForm = document.getElementById('shiftForm');
+const shiftCodeInput = document.getElementById('shiftCodeInput');
+const shiftNameInput = document.getElementById('shiftNameInput');
+const shiftStartInput = document.getElementById('shiftStartInput');
+const shiftEndInput = document.getElementById('shiftEndInput');
+const shiftList = document.getElementById('shiftList');
+const shiftLegend = document.getElementById('shiftLegend');
+const lockScheduleBtn = document.getElementById('lockScheduleBtn');
+const unlockScheduleBtn = document.getElementById('unlockScheduleBtn');
+const exportExcelBtn = document.getElementById('exportExcelBtn');
+const exportPdfBtn = document.getElementById('exportPdfBtn');
+const lockStatus = document.getElementById('lockStatus');
 
 init();
 
@@ -62,6 +77,8 @@ async function init() {
   attachTabs();
   attachRatesForm();
   attachVacationForm();
+  attachShiftForm();
+  attachLockAndExport();
 
   const synced = await loadFromBackend();
   if (!synced) {
@@ -107,36 +124,66 @@ function attachRatesForm() {
   });
 }
 
-function attachVacationForm() {
-  vacationForm.addEventListener('submit', async (event) => {
+function attachShiftForm() {
+  shiftForm.addEventListener('submit', (event) => {
     event.preventDefault();
 
-    const employeeId = vacationEmployeeSelect.value;
-    const start = new Date(vacationStartInput.value);
-    const end = new Date(vacationEndInput.value);
+    const code = shiftCodeInput.value.trim().toUpperCase();
+    const name = shiftNameInput.value.trim();
+    const start = shiftStartInput.value;
+    const end = shiftEndInput.value;
 
-    if (!employeeId || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+    if (!code || !name || !start || !end) {
       return;
     }
 
-    const startMonth = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`;
-    const endMonth = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}`;
-    if (startMonth !== state.month || endMonth !== state.month) {
-      setStatus('Диапазонът за отпуск трябва да е в избрания месец.', false);
+    if (state.shiftTemplates.some((shift) => shift.code === code)) {
+      setStatus(`Смяна с код ${code} вече съществува.`, false);
       return;
     }
 
-    const promises = [];
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const day = d.getDate();
-      const key = scheduleKey(employeeId, state.month, day);
-      state.schedule[key] = 'O';
-      promises.push(saveScheduleEntryBackend(employeeId, state.month, day, 'O'));
+    const hours = calcShiftHours(start, end);
+    if (hours <= 0) {
+      setStatus('Невалиден интервал за смяна.', false);
+      return;
     }
 
-    saveScheduleLocal();
-    await Promise.all(promises);
+    state.shiftTemplates.push({
+      code,
+      label: code,
+      name,
+      type: 'work',
+      start,
+      end,
+      hours,
+      locked: false
+    });
+
+    saveShiftTemplates();
+    shiftForm.reset();
     renderAll();
+  });
+}
+
+function attachLockAndExport() {
+  lockScheduleBtn.addEventListener('click', () => {
+    state.lockedMonths[state.month] = true;
+    saveLockedMonths();
+    renderSchedule();
+  });
+
+  unlockScheduleBtn.addEventListener('click', () => {
+    delete state.lockedMonths[state.month];
+    saveLockedMonths();
+    renderSchedule();
+  });
+
+  exportExcelBtn.addEventListener('click', () => {
+    exportScheduleToExcel();
+  });
+
+  exportPdfBtn.addEventListener('click', () => {
+    exportScheduleToPdf();
   });
 }
 
@@ -182,6 +229,61 @@ function renderAll() {
   renderSchedule();
   renderVacationLedger();
   renderVacationEmployeeOptions();
+  renderShiftList();
+  renderLegend();
+}
+
+function renderLegend() {
+  shiftLegend.innerHTML = '';
+  state.shiftTemplates.forEach((shift) => {
+    const span = document.createElement('span');
+    if (shift.type === 'work') {
+      span.innerHTML = `<b>${shift.code}</b> - ${shift.name} (${shift.start}-${shift.end}, ${shift.hours}ч)`;
+    } else {
+      span.innerHTML = `<b>${shift.code}</b> - ${shift.name}`;
+    }
+    shiftLegend.appendChild(span);
+  });
+}
+
+function renderShiftList() {
+  shiftList.innerHTML = '';
+  const table = document.createElement('table');
+  table.innerHTML = '<tr><th>Код</th><th>Име</th><th>Начало</th><th>Край</th><th>Часове</th><th>Тип</th><th>Действие</th></tr>';
+
+  state.shiftTemplates.forEach((shift) => {
+    const row = document.createElement('tr');
+    row.innerHTML = `<td>${shift.code}</td><td>${shift.name}</td><td>${shift.start || '-'}</td><td>${shift.end || '-'}</td><td>${shift.hours}</td><td>${shift.type}</td>`;
+
+    const actionCell = document.createElement('td');
+    if (shift.locked) {
+      actionCell.textContent = 'Системна';
+    } else {
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = 'Изтрий';
+      removeBtn.addEventListener('click', () => {
+        state.shiftTemplates = state.shiftTemplates.filter((entry) => entry.code !== shift.code);
+        saveShiftTemplates();
+        replaceDeletedShiftCodes(shift.code);
+        renderAll();
+      });
+      actionCell.appendChild(removeBtn);
+    }
+    row.appendChild(actionCell);
+    table.appendChild(row);
+  });
+
+  shiftList.appendChild(table);
+}
+
+function replaceDeletedShiftCodes(deletedCode) {
+  Object.keys(state.schedule).forEach((key) => {
+    if (state.schedule[key] === deletedCode) {
+      state.schedule[key] = 'P';
+    }
+  });
+  saveScheduleLocal();
 }
 
 function renderEmployees() {
@@ -231,6 +333,44 @@ function renderVacationEmployeeOptions() {
   });
 }
 
+function attachVacationForm() {
+  vacationForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+
+    if (isMonthLocked(state.month)) {
+      setStatus('Графикът за този месец е заключен. Отключете, за да редактирате.', false);
+      return;
+    }
+
+    const employeeId = vacationEmployeeSelect.value;
+    const start = new Date(vacationStartInput.value);
+    const end = new Date(vacationEndInput.value);
+
+    if (!employeeId || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+      return;
+    }
+
+    const startMonth = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`;
+    const endMonth = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}`;
+    if (startMonth !== state.month || endMonth !== state.month) {
+      setStatus('Диапазонът за отпуск трябва да е в избрания месец.', false);
+      return;
+    }
+
+    const promises = [];
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const day = d.getDate();
+      const key = scheduleKey(employeeId, state.month, day);
+      state.schedule[key] = 'O';
+      promises.push(saveScheduleEntryBackend(employeeId, state.month, day, 'O'));
+    }
+
+    saveScheduleLocal();
+    await Promise.all(promises);
+    renderAll();
+  });
+}
+
 function renderVacationLedger() {
   if (!state.employees.length) {
     vacationLedger.textContent = 'Добавете служители, за да следите отпуските.';
@@ -258,6 +398,9 @@ function renderSchedule() {
   const [year, monthIndex] = month.split('-').map(Number);
   const totalDays = new Date(year, monthIndex, 0).getDate();
   const monthStats = getMonthStats(year, monthIndex, totalDays);
+  const monthLocked = isMonthLocked(month);
+
+  lockStatus.textContent = `Статус: ${monthLocked ? 'Заключен' : 'Отключен'}`;
 
   monthInfo.innerHTML = `
     <b>Работни дни по календар:</b> ${monthStats.workingDays} ·
@@ -322,18 +465,22 @@ function renderSchedule() {
 
       const select = document.createElement('select');
       select.className = 'shift-select';
+      select.disabled = monthLocked;
 
-      Object.keys(SHIFT_CODES).forEach((code) => {
+      state.shiftTemplates.forEach((shift) => {
         const option = document.createElement('option');
-        option.value = code;
-        option.textContent = SHIFT_CODES[code].label;
-        if (code === currentShift) {
+        option.value = shift.code;
+        option.textContent = shift.label;
+        if (shift.code === currentShift) {
           option.selected = true;
         }
         select.appendChild(option);
       });
 
       select.addEventListener('change', async () => {
+        if (monthLocked) {
+          return;
+        }
         state.schedule[key] = select.value;
         saveScheduleLocal();
         await saveScheduleEntryBackend(employee.id, month, day, select.value);
@@ -354,13 +501,13 @@ function renderSchedule() {
       summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours;
     const deviation = summary.workedHours - monthStats.normHours;
 
-    row.innerHTML += `<td class="summary-col">${summary.workedDays}</td><td class="summary-col">${summary.workedHours}</td><td class="summary-col">${monthStats.normHours}</td><td class="summary-col ${deviation < 0 ? 'negative' : 'positive'}">${deviation}</td><td class="summary-col">${summary.holidayWorkedHours}</td><td class="summary-col">${summary.weekendWorkedHours}</td><td class="summary-col">${payableHours.toFixed(2)}</td><td class="summary-col">${summary.vacationDays}</td><td class="summary-col">${remainingVacation}</td><td class="summary-col">${summary.sickDays}</td>`;
+    row.innerHTML += `<td class="summary-col">${summary.workedDays}</td><td class="summary-col">${summary.workedHours.toFixed(2)}</td><td class="summary-col">${monthStats.normHours}</td><td class="summary-col ${deviation < 0 ? 'negative' : 'positive'}">${deviation.toFixed(2)}</td><td class="summary-col">${summary.holidayWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.weekendWorkedHours.toFixed(2)}</td><td class="summary-col">${payableHours.toFixed(2)}</td><td class="summary-col">${summary.vacationDays}</td><td class="summary-col">${remainingVacation}</td><td class="summary-col">${summary.sickDays}</td>`;
     scheduleTable.appendChild(row);
   });
 }
 
 function collectSummary(summary, shiftCode, holiday, weekend) {
-  const shift = SHIFT_CODES[shiftCode] || SHIFT_CODES.P;
+  const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
 
   if (shift.type === 'work') {
     summary.workedDays += 1;
@@ -378,6 +525,10 @@ function collectSummary(summary, shiftCode, holiday, weekend) {
   if (shift.type === 'sick') {
     summary.sickDays += 1;
   }
+}
+
+function getShiftByCode(code) {
+  return state.shiftTemplates.find((shift) => shift.code === code);
 }
 
 function getMonthStats(year, monthIndex, totalDays) {
@@ -521,6 +672,56 @@ async function saveScheduleEntryBackend(employeeId, month, day, shiftCode) {
   }
 }
 
+function exportScheduleToExcel() {
+  const tableHtml = scheduleTable.outerHTML;
+  const html = `
+    <html>
+      <head><meta charset="UTF-8"></head>
+      <body>
+        <h3>График за ${state.month}</h3>
+        ${tableHtml}
+      </body>
+    </html>
+  `;
+
+  const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `grafik-${state.month}.xls`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function exportScheduleToPdf() {
+  const popup = window.open('', '_blank');
+  if (!popup) {
+    return;
+  }
+
+  popup.document.write(`
+    <html>
+      <head>
+        <title>График ${state.month}</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 12px; }
+          table { border-collapse: collapse; width: 100%; font-size: 10px; }
+          th, td { border: 1px solid #999; padding: 4px; text-align: center; }
+          th:first-child, td:first-child { text-align: left; }
+        </style>
+      </head>
+      <body>
+        <h3>График за ${state.month}</h3>
+        ${scheduleTable.outerHTML}
+      </body>
+    </html>
+  `);
+
+  popup.document.close();
+  popup.focus();
+  popup.print();
+}
+
 function setStatus(message, good) {
   storageStatus.textContent = message;
   storageStatus.className = good ? 'status-ok' : 'status-warn';
@@ -575,6 +776,59 @@ function loadRates() {
   } catch {
     return { ...DEFAULT_RATES };
   }
+}
+
+function saveShiftTemplates() {
+  localStorage.setItem('shiftTemplates', JSON.stringify(state.shiftTemplates));
+}
+
+function loadShiftTemplates() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('shiftTemplates') || '[]');
+    const merged = [...SYSTEM_SHIFTS, DEFAULT_WORK_SHIFT];
+    parsed.forEach((shift) => {
+      if (!merged.some((existing) => existing.code === shift.code)) {
+        merged.push({
+          ...shift,
+          hours: Number(shift.hours) || calcShiftHours(shift.start, shift.end),
+          locked: Boolean(shift.locked)
+        });
+      }
+    });
+    return merged;
+  } catch {
+    return [...SYSTEM_SHIFTS, DEFAULT_WORK_SHIFT];
+  }
+}
+
+function saveLockedMonths() {
+  localStorage.setItem('lockedMonths', JSON.stringify(state.lockedMonths));
+}
+
+function loadLockedMonths() {
+  try {
+    return JSON.parse(localStorage.getItem('lockedMonths') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function isMonthLocked(month) {
+  return Boolean(state.lockedMonths[month]);
+}
+
+function calcShiftHours(start, end) {
+  const [startHour, startMinute] = start.split(':').map(Number);
+  const [endHour, endMinute] = end.split(':').map(Number);
+
+  const startMinutes = startHour * 60 + startMinute;
+  let endMinutes = endHour * 60 + endMinute;
+
+  if (endMinutes <= startMinutes) {
+    endMinutes += 24 * 60;
+  }
+
+  return Number(((endMinutes - startMinutes) / 60).toFixed(2));
 }
 
 function todayMonth() {

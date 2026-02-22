@@ -37,13 +37,15 @@
             <input id="monthPicker" type="month" />
             <button id="generateBtn" type="button">Генерирай календар</button>
           </div>
-          <div id="monthInfo" class="month-info"></div>
-          <div class="legend">
-            <span><b>Р</b> - Работа (8ч)</span>
-            <span><b>П</b> - Почивка</span>
-            <span><b>О</b> - Отпуск</span>
-            <span><b>Б</b> - Болничен</span>
+          <div class="row actions-row">
+            <button id="lockScheduleBtn" type="button">Заключи графика</button>
+            <button id="unlockScheduleBtn" type="button">Отключи графика</button>
+            <button id="exportExcelBtn" type="button">Експорт Excel</button>
+            <button id="exportPdfBtn" type="button">Експорт PDF</button>
+            <span id="lockStatus" class="lock-status">Статус: Отключен</span>
           </div>
+          <div id="monthInfo" class="month-info"></div>
+          <div class="legend" id="shiftLegend"></div>
           <div class="table-wrap">
             <table id="scheduleTable"></table>
           </div>
@@ -85,7 +87,17 @@
             <input id="holidayRateInput" type="number" min="1" step="0.05" value="2" />
             <button type="submit">Запази коефициенти</button>
           </form>
-          <small>Стойностите са конфигурируеми според вътрешните правила и договорите.</small>
+
+          <h3>Смени (начало/край)</h3>
+          <form id="shiftForm" class="row">
+            <input id="shiftCodeInput" maxlength="4" required placeholder="Код (напр. D1)" />
+            <input id="shiftNameInput" required placeholder="Име на смяна" />
+            <input id="shiftStartInput" type="time" required />
+            <input id="shiftEndInput" type="time" required />
+            <button type="submit">Добави смяна</button>
+          </form>
+          <div id="shiftList" class="shift-list"></div>
+          <small>Смените „Почивка“, „Отпуск“ и „Болничен“ са системни и не се трият.</small>
         </section>
       </div>
     </main>

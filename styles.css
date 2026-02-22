@@ -90,6 +90,13 @@ header p {
   flex-wrap: wrap;
   align-items: center;
 }
+.actions-row {
+  margin-top: 0.7rem;
+}
+.lock-status {
+  font-weight: 700;
+}
+
 input,
 button,
 select {
@@ -165,7 +172,7 @@ td.day-weekend {
   background: #fffbeb;
 }
 select.shift-select {
-  width: 56px;
+  width: 64px;
   padding: 0.2rem;
   font-size: 0.85rem;
 }
@@ -178,6 +185,9 @@ select.shift-select {
 }
 .negative {
   color: #b91c1c;
+}
+.shift-list {
+  margin-top: 0.7rem;
 }
 
 @media (max-width: 900px) {
