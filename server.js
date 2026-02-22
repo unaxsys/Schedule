@@ -4,7 +4,6 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
-const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -33,6 +32,8 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
 async function initDatabase() {
+  await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
       id UUID PRIMARY KEY,
@@ -43,6 +44,8 @@ async function initDatabase() {
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query('ALTER TABLE employees ALTER COLUMN id SET DEFAULT gen_random_uuid()');
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schedule_entries (
@@ -105,7 +108,7 @@ app.get('/api/state', async (_req, res) => {
 });
 
 app.post('/api/employees', async (req, res) => {
-  const { id: rawId, name: rawName, department: rawDepartment, position: rawPosition, vacationAllowance: rawVacationAllowance } =
+  const { name: rawName, department: rawDepartment, position: rawPosition, vacationAllowance: rawVacationAllowance } =
     req.body ?? {};
 
   const safeTrim = (value) => (typeof value === 'string' ? value.trim() : String(value ?? '').trim());
@@ -179,23 +182,12 @@ app.post('/api/employees', async (req, res) => {
     });
   }
 
-  const isValidUuid =
-    typeof rawId === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(rawId);
-
-  const id = isValidUuid ? rawId : require('uuid').v4();
-
   try {
     const result = await pool.query(
-      `INSERT INTO employees (id, name, department, position, vacation_allowance)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (id)
-       DO UPDATE SET name = EXCLUDED.name,
-                     department = EXCLUDED.department,
-                     position = EXCLUDED.position,
-                     vacation_allowance = EXCLUDED.vacation_allowance
+      `INSERT INTO employees (name, department, position, vacation_allowance)
+       VALUES ($1, $2, $3, $4)
       RETURNING id, name, department, position, vacation_allowance AS "vacationAllowance"`,
-      [id, name, department, position, vacationAllowance]
+      [name, department, position, vacationAllowance]
     );
 
     return res.status(201).json({ ok: true, employee: result.rows[0] });

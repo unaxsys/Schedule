@@ -719,7 +719,12 @@ async function saveEmployeeBackend(employee) {
     const response = await apiFetch('/api/employees', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(employee)
+      body: JSON.stringify({
+        name: employee.name,
+        department: employee.department,
+        position: employee.position,
+        vacationAllowance: employee.vacationAllowance
+      })
     });
 
     if (!response.ok) {
