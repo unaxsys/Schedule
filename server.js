@@ -4,6 +4,7 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -27,6 +28,7 @@ app.use(
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
@@ -140,8 +142,15 @@ app.post('/api/employees', async (req, res) => {
 });
 
 app.delete('/api/employees/:id', async (req, res) => {
+  const id = req.params.id;
+
+  if (!isValidUuid(id)) {
+    res.status(400).json({ message: 'Невалиден employee id.' });
+    return;
+  }
+
   try {
-    await pool.query('DELETE FROM employees WHERE id = $1', [req.params.id]);
+    await pool.query('DELETE FROM employees WHERE id = $1', [id]);
     res.json({ ok: true });
   } catch (error) {
     console.error('EMPLOYEES DELETE error:', error);
@@ -150,9 +159,12 @@ app.delete('/api/employees/:id', async (req, res) => {
 });
 
 app.post('/api/schedule-entry', async (req, res) => {
-  const { employeeId, month, day, shiftCode } = req.body;
+  const employeeId = req.body?.employeeId;
+  const month = cleanStr(req.body?.month);
+  const day = Number(req.body?.day);
+  const shiftCode = cleanStr(req.body?.shiftCode);
 
-  if (!employeeId || !month || !day || !shiftCode) {
+  if (!isValidUuid(employeeId) || !month || !day || !shiftCode) {
     res.status(400).json({ message: 'Невалидни данни за графика.' });
     return;
   }
