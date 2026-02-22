@@ -225,7 +225,11 @@ employeeForm.addEventListener('submit', async (event) => {
 
   state.employees.push(employee);
   persistEmployeesLocal();
-  await saveEmployeeBackend(employee);
+  const persistedEmployee = await saveEmployeeBackend(employee);
+  if (persistedEmployee && persistedEmployee.id !== employee.id) {
+    state.employees = state.employees.map((entry) => (entry.id === employee.id ? persistedEmployee : entry));
+    persistEmployeesLocal();
+  }
 
   employeeForm.reset();
   vacationAllowanceInput.value = 20;
@@ -708,7 +712,7 @@ async function loadFromBackend() {
 
 async function saveEmployeeBackend(employee) {
   if (!state.backendAvailable) {
-    return;
+    return null;
   }
 
   try {
@@ -721,9 +725,13 @@ async function saveEmployeeBackend(employee) {
     if (!response.ok) {
       throw new Error('Save employee failed');
     }
+
+    const payload = await response.json();
+    return payload.employee || employee;
   } catch {
     setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
     state.backendAvailable = false;
+    return null;
   }
 }
 

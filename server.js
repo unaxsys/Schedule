@@ -32,21 +32,10 @@ app.use(
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
-function isValidUuid(v) {
-  return typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
-}
-
-function cleanStr(v) {
-  return String(v ?? '').trim();
-}
-
 async function initDatabase() {
-  // needed for gen_random_uuid()
-  await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      id UUID PRIMARY KEY,
       name TEXT NOT NULL,
       department TEXT NOT NULL,
       position TEXT NOT NULL,
@@ -116,19 +105,21 @@ app.get('/api/state', async (_req, res) => {
 });
 
 app.post('/api/employees', async (req, res) => {
-  // ⚠️ client may send non-uuid id (e.g. "emp-...") → we generate uuid instead
   const rawId = req.body?.id;
-  const name = cleanStr(req.body?.name);
-  const department = cleanStr(req.body?.department);
-  const position = cleanStr(req.body?.position);
+  const name = String(req.body?.name ?? '').trim();
+  const department = String(req.body?.department ?? '').trim();
+  const position = String(req.body?.position ?? '').trim();
   const vacationAllowance = Number(req.body?.vacationAllowance ?? 20);
 
   if (!name || !department || !position) {
-    res.status(400).json({ message: 'Невалидни данни за служител.' });
-    return;
+    return res.status(400).json({ message: 'Невалидни данни за служител.' });
   }
 
-  const id = isValidUuid(rawId) ? rawId : uuidv4();
+  const isValidUuid =
+    typeof rawId === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(rawId);
+
+  const id = isValidUuid ? rawId : require('uuid').v4();
 
   try {
     const result = await pool.query(
@@ -143,11 +134,10 @@ app.post('/api/employees', async (req, res) => {
       [id, name, department, position, Number.isFinite(vacationAllowance) ? vacationAllowance : 20]
     );
 
-    // return created/updated row so frontend can store the real uuid
-    res.status(201).json({ ok: true, employee: result.rows[0] });
+    return res.status(201).json({ ok: true, employee: result.rows[0] });
   } catch (error) {
     console.error('EMPLOYEES POST error:', error);
-    res.status(500).json({ message: error.message });
+    return res.status(500).json({ message: error.message });
   }
 });
 
@@ -196,13 +186,8 @@ app.post('/api/schedule-entry', async (req, res) => {
 });
 
 app.post('/api/shift-template', async (req, res) => {
-  const code = cleanStr(req.body?.code);
-  const name = cleanStr(req.body?.name);
-  const start = cleanStr(req.body?.start);
-  const end = cleanStr(req.body?.end);
-  const hours = Number(req.body?.hours);
-
-  if (!code || !name || !start || !end || !(hours > 0)) {
+  const { code, name, start, end, hours } = req.body;
+  if (!code || !name || !start || !end || Number(hours) <= 0) {
     res.status(400).json({ message: 'Невалидни данни за смяна.' });
     return;
   }
