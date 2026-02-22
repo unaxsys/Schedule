@@ -31,6 +31,80 @@ app.use(
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
+function validateEmployeeInput(data) {
+  const normalizeString = (value) => (typeof value === 'string' ? value.trim() : String(value ?? '').trim());
+
+  const name = normalizeString(data?.name);
+  if (name.length < 2) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'name',
+        message: 'Името е задължително и трябва да съдържа поне 2 символа.'
+      }
+    };
+  }
+
+  const department = normalizeString(data?.department);
+  if (department.length < 2) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'department',
+        message: 'Отделът е задължителен и трябва да съдържа поне 2 символа.'
+      }
+    };
+  }
+
+  const position = normalizeString(data?.position);
+  if (position.length < 2) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'position',
+        message: 'Позицията е задължителна и трябва да съдържа поне 2 символа.'
+      }
+    };
+  }
+
+  const rawVacationAllowance = data?.vacationAllowance;
+  if (rawVacationAllowance === undefined || rawVacationAllowance === null || String(rawVacationAllowance).trim() === '') {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'vacationAllowance',
+        message: 'Полагаемият отпуск е задължителен и трябва да е число >= 0.'
+      }
+    };
+  }
+
+  const vacationAllowance = Number(rawVacationAllowance);
+  if (!Number.isFinite(vacationAllowance) || vacationAllowance < 0) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'vacationAllowance',
+        message: 'Полагаемият отпуск е задължителен и трябва да е число >= 0.'
+      }
+    };
+  }
+
+  return {
+    valid: true,
+    value: {
+      name,
+      department,
+      position,
+      vacationAllowance
+    }
+  };
+}
+
 async function initDatabase() {
   await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
 
@@ -108,79 +182,12 @@ app.get('/api/state', async (_req, res) => {
 });
 
 app.post('/api/employees', async (req, res) => {
-  const { name: rawName, department: rawDepartment, position: rawPosition, vacationAllowance: rawVacationAllowance } =
-    req.body ?? {};
-
-  const safeTrim = (value) => (typeof value === 'string' ? value.trim() : String(value ?? '').trim());
-
-  const name = safeTrim(rawName);
-  const department = safeTrim(rawDepartment);
-  const position = safeTrim(rawPosition);
-
-  if (!name) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'name' е задължително"
-    });
+  const validation = validateEmployeeInput(req.body);
+  if (!validation.valid) {
+    return res.status(400).json(validation.error);
   }
 
-  if (name.length < 2) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'name' трябва да е поне 2 символа"
-    });
-  }
-
-  if (!department) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'department' е задължително"
-    });
-  }
-
-  if (department.length < 2) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'department' трябва да е поне 2 символа"
-    });
-  }
-
-  if (!position) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'position' е задължително"
-    });
-  }
-
-  if (position.length < 2) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'position' трябва да е поне 2 символа"
-    });
-  }
-
-  if (rawVacationAllowance === undefined || rawVacationAllowance === null || String(rawVacationAllowance).trim() === '') {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'vacationAllowance' е задължително"
-    });
-  }
-
-  const vacationAllowance = Number(rawVacationAllowance);
-
-  if (!Number.isFinite(vacationAllowance)) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'vacationAllowance' трябва да е число"
-    });
-  }
-
-  if (vacationAllowance < 0) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: "Полето 'vacationAllowance' трябва да е >= 0"
-    });
-  }
+  const { name, department, position, vacationAllowance } = validation.value;
 
   try {
     const result = await pool.query(
