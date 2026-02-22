@@ -3,7 +3,7 @@ const DEFAULT_RATES = {
   holiday: 2
 };
 
-const NIGHT_HOURS_COEFFICIENT = 1.143;
+const NIGHT_HOURS_COEFFICIENT = 1.14286;
 const MAX_NIGHT_SHIFT_HOURS = 12;
 
 const SYSTEM_SHIFTS = [
@@ -22,7 +22,8 @@ const state = {
   apiBaseUrl: '',
   rates: loadRates(),
   shiftTemplates: loadShiftTemplates(),
-  lockedMonths: loadLockedMonths()
+  lockedMonths: loadLockedMonths(),
+  sirvPeriodMonths: loadSirvPeriodMonths()
 };
 
 const monthPicker = document.getElementById('monthPicker');
@@ -48,6 +49,7 @@ const vacationLedger = document.getElementById('vacationLedger');
 const ratesForm = document.getElementById('ratesForm');
 const weekendRateInput = document.getElementById('weekendRateInput');
 const holidayRateInput = document.getElementById('holidayRateInput');
+const sirvPeriodInput = document.getElementById('sirvPeriodInput');
 const shiftForm = document.getElementById('shiftForm');
 const shiftCodeInput = document.getElementById('shiftCodeInput');
 const shiftNameInput = document.getElementById('shiftNameInput');
@@ -74,6 +76,7 @@ async function init() {
 
   weekendRateInput.value = String(state.rates.weekend);
   holidayRateInput.value = String(state.rates.holiday);
+  sirvPeriodInput.value = String(state.sirvPeriodMonths);
   apiUrlInput.value = state.apiBaseUrl;
 
   attachApiControls();
@@ -123,6 +126,9 @@ function attachRatesForm() {
     state.rates.weekend = Number(weekendRateInput.value) || DEFAULT_RATES.weekend;
     state.rates.holiday = Number(holidayRateInput.value) || DEFAULT_RATES.holiday;
     localStorage.setItem('laborRates', JSON.stringify(state.rates));
+    state.sirvPeriodMonths = normalizeSirvPeriod(sirvPeriodInput.value);
+    sirvPeriodInput.value = String(state.sirvPeriodMonths);
+    saveSirvPeriodMonths();
     renderSchedule();
   });
 }
@@ -438,7 +444,7 @@ function renderSchedule() {
   }
 
   header.innerHTML +=
-    '<th class="summary-col">Отр. дни</th><th class="summary-col">Часове</th><th class="summary-col">Норма</th><th class="summary-col">Отклонение</th><th class="summary-col">Труд празник (ч)</th><th class="summary-col">Труд почивен (ч)</th><th class="summary-col">Нощен труд (ч)</th><th class="summary-col">Нощен коеф. (ч)</th><th class="summary-col">Платими часове</th><th class="summary-col">Отпуск</th><th class="summary-col">Ост. отпуск</th><th class="summary-col">Болничен</th>';
+    '<th class="summary-col">Отр. дни</th><th class="summary-col">Часове</th><th class="summary-col">Норма</th><th class="summary-col">Отклонение</th><th class="summary-col">СИРВ норма</th><th class="summary-col">СИРВ отраб.</th><th class="summary-col">Извънреден</th><th class="summary-col">Труд празник (ч)</th><th class="summary-col">Труд почивен (ч)</th><th class="summary-col">Нощен труд (ч)</th><th class="summary-col">Нощен коеф. (ч)</th><th class="summary-col">Платими часове</th><th class="summary-col">Отпуск</th><th class="summary-col">Ост. отпуск</th><th class="summary-col">Болничен</th>';
 
   scheduleTable.innerHTML = '';
   scheduleTable.appendChild(header);
@@ -513,8 +519,9 @@ function renderSchedule() {
     const payableHours =
       summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + summary.nightConvertedHours;
     const deviation = summary.workedHours + summary.nightConvertedHours - monthStats.normHours;
+    const sirvTotals = getSirvTotalsForEmployee(employee.id, month, state.sirvPeriodMonths);
 
-    row.innerHTML += `<td class="summary-col">${summary.workedDays}</td><td class="summary-col">${summary.workedHours.toFixed(2)}</td><td class="summary-col">${monthStats.normHours}</td><td class="summary-col ${deviation < 0 ? 'negative' : 'positive'}">${deviation.toFixed(2)}</td><td class="summary-col">${summary.holidayWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.weekendWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.nightWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.nightConvertedHours.toFixed(2)}</td><td class="summary-col">${payableHours.toFixed(2)}</td><td class="summary-col">${summary.vacationDays}</td><td class="summary-col">${remainingVacation}</td><td class="summary-col">${summary.sickDays}</td>`;
+    row.innerHTML += `<td class="summary-col">${summary.workedDays}</td><td class="summary-col">${summary.workedHours.toFixed(2)}</td><td class="summary-col">${monthStats.normHours}</td><td class="summary-col ${deviation < 0 ? 'negative' : 'positive'}">${deviation.toFixed(2)}</td><td class="summary-col">${sirvTotals.normHours.toFixed(2)}</td><td class="summary-col">${sirvTotals.convertedWorkedHours.toFixed(2)}</td><td class="summary-col ${sirvTotals.overtimeHours > 0 ? 'negative' : 'positive'}">${sirvTotals.overtimeHours.toFixed(2)}</td><td class="summary-col">${summary.holidayWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.weekendWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.nightWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.nightConvertedHours.toFixed(2)}</td><td class="summary-col">${payableHours.toFixed(2)}</td><td class="summary-col">${summary.vacationDays}</td><td class="summary-col">${remainingVacation}</td><td class="summary-col">${summary.sickDays}</td>`;
     scheduleTable.appendChild(row);
   });
 }
@@ -577,6 +584,67 @@ function getMonthStats(year, monthIndex, totalDays) {
     workingDays,
     normHours: workingDays * 8
   };
+}
+
+
+function normalizeSirvPeriod(value) {
+  const parsed = Number(value);
+  if (Number.isNaN(parsed)) {
+    return 1;
+  }
+  return Math.min(6, Math.max(1, Math.trunc(parsed)));
+}
+
+function saveSirvPeriodMonths() {
+  localStorage.setItem('sirvPeriodMonths', String(state.sirvPeriodMonths));
+}
+
+function loadSirvPeriodMonths() {
+  return normalizeSirvPeriod(localStorage.getItem('sirvPeriodMonths') || '1');
+}
+
+function addMonths(monthKey, delta) {
+  const [year, month] = monthKey.split('-').map(Number);
+  const date = new Date(year, month - 1 + delta, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function getPeriodMonths(endMonth, periodMonths) {
+  const months = [];
+  for (let offset = periodMonths - 1; offset >= 0; offset -= 1) {
+    months.push(addMonths(endMonth, -offset));
+  }
+  return months;
+}
+
+function getSirvTotalsForEmployee(employeeId, endMonth, periodMonths) {
+  const months = getPeriodMonths(endMonth, periodMonths);
+  const totals = {
+    normHours: 0,
+    convertedWorkedHours: 0,
+    overtimeHours: 0
+  };
+
+  months.forEach((monthKey) => {
+    const [year, monthIndex] = monthKey.split('-').map(Number);
+    const totalDays = new Date(year, monthIndex, 0).getDate();
+    const monthStats = getMonthStats(year, monthIndex, totalDays);
+    totals.normHours += monthStats.normHours;
+
+    for (let day = 1; day <= totalDays; day += 1) {
+      const shiftCode = state.schedule[scheduleKey(employeeId, monthKey, day)] || 'P';
+      const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
+      if (shift.type !== 'work') {
+        continue;
+      }
+      const workedHours = Number(shift.hours) || 0;
+      const nightHours = calcNightHours(shift.start, shift.end);
+      totals.convertedWorkedHours += workedHours + nightHours * (NIGHT_HOURS_COEFFICIENT - 1);
+    }
+  });
+
+  totals.overtimeHours = Math.max(0, totals.convertedWorkedHours - totals.normHours);
+  return totals;
 }
 
 function detectApiBaseUrl() {
