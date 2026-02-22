@@ -73,7 +73,7 @@ generateBtn.addEventListener('click', () => {
 employeeForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const employee = {
-    id: crypto.randomUUID(),
+    id: createEmployeeId(),
     name: nameInput.value.trim(),
     department: departmentInput.value.trim(),
     position: positionInput.value.trim(),
@@ -92,6 +92,14 @@ employeeForm.addEventListener('submit', async (event) => {
   vacationAllowanceInput.value = 20;
   renderAll();
 });
+
+function createEmployeeId() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID();
+  }
+
+  return `emp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 function renderAll() {
   renderEmployees();
