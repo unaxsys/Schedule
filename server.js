@@ -1441,12 +1441,78 @@ app.get('/api/platform/super-admin/overview', requireSuperAdmin, async (req, res
       ),
     ]);
 
+    const tableHasTenantColumn = async (tableName) => {
+      const check = await pool.query(
+        `SELECT 1
+         FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = $1
+           AND column_name = 'tenant_id'
+         LIMIT 1`,
+        [tableName]
+      );
+      return Boolean(check.rowCount);
+    };
+
+    const countRowsByTenant = async (tableName) => {
+      if (!(await tableHasTenantColumn(tableName))) {
+        return new Map();
+      }
+
+      const rows = await pool.query(
+        `SELECT tenant_id AS "tenantId", COUNT(*)::int AS count
+         FROM ${tableName}
+         WHERE tenant_id IS NOT NULL
+         GROUP BY tenant_id`
+      );
+
+      return new Map(rows.rows.map((row) => [String(row.tenantId), row.count]));
+    };
+
+    const [employeesByTenant, departmentsByTenant, schedulesByTenant, scheduleEntriesByTenant, auditByTenant, requestsByTenant] = await Promise.all([
+      countRowsByTenant('employees'),
+      countRowsByTenant('departments'),
+      countRowsByTenant('schedules'),
+      countRowsByTenant('schedule_entries'),
+      countRowsByTenant('audit_log'),
+      countRowsByTenant('request_log'),
+    ]);
+
+    const usersByTenant = new Map();
+    tenantsResult.rows.forEach((tenant) => {
+      usersByTenant.set(String(tenant.id), 0);
+    });
+    const tenantUserCounts = await pool.query(
+      `SELECT tenant_id AS "tenantId", COUNT(*)::int AS count
+       FROM tenant_users
+       GROUP BY tenant_id`
+    );
+    tenantUserCounts.rows.forEach((row) => {
+      usersByTenant.set(String(row.tenantId), row.count);
+    });
+
+    const tenantUsage = tenantsResult.rows.map((tenant) => {
+      const tenantId = String(tenant.id);
+      return {
+        id: tenant.id,
+        name: tenant.name,
+        status: tenant.status,
+        usersCount: usersByTenant.get(tenantId) ?? 0,
+        employeesCount: employeesByTenant.get(tenantId) ?? 0,
+        departmentsCount: departmentsByTenant.get(tenantId) ?? 0,
+        schedulesCount: schedulesByTenant.get(tenantId) ?? 0,
+        scheduleEntriesCount: scheduleEntriesByTenant.get(tenantId) ?? 0,
+        auditEventsCount: auditByTenant.get(tenantId) ?? 0,
+        requestsCount: requestsByTenant.get(tenantId) ?? 0,
+      };
+    });
+
     return res.json({
       ok: true,
       tenants: tenantsResult.rows,
       usersByRole: usersByRole.rows,
       usage: dbStats.rows[0],
-      tenantUsage: tenantUsageStats.rows,
+      tenantUsage,
       logs: latestLogs.rows,
     });
   } catch (error) {
