@@ -258,19 +258,14 @@ app.delete('/api/employees/:id', async (req, res) => {
 });
 
 app.post('/api/schedules', async (req, res) => {
-  const month = cleanStr(req.body?.month || req.body?.monthKey);
+  const month = cleanStr(req.body?.month_key || req.body?.month || req.body?.monthKey);
   const departmentRaw = req.body?.department;
   const department = cleanStr(departmentRaw);
   const isCommon = departmentRaw === null || departmentRaw === undefined || department === '';
   const name = cleanStr(req.body?.name) || `${isCommon ? 'Общ' : department} график ${month}`;
-  const status = cleanStr(req.body?.status || 'draft').toLowerCase();
 
   if (!isValidMonthKey(month)) {
     return res.status(400).json({ message: 'Месецът трябва да е във формат YYYY-MM.' });
-  }
-
-  if (!['draft', 'locked'].includes(status)) {
-    return res.status(400).json({ message: 'status трябва да е draft или locked.' });
   }
 
   try {
@@ -278,7 +273,7 @@ app.post('/api/schedules', async (req, res) => {
       `INSERT INTO schedules (name, month_key, department, status)
        VALUES ($1, $2, $3, $4)
        RETURNING id, name, month_key AS month, department, status, created_at AS "createdAt"`,
-      [name, month, isCommon ? null : department, status]
+      [name, month, isCommon ? null : department, 'draft']
     );
 
     const employees = await pool.query(
@@ -291,6 +286,7 @@ app.post('/api/schedules', async (req, res) => {
 
     res.status(201).json({
       ok: true,
+      schedule_id: created.rows[0].id,
       schedule: created.rows[0],
       employees: employees.rows,
     });
@@ -323,45 +319,60 @@ app.get('/api/schedules', async (req, res) => {
       params
     );
 
-    const entriesByDepartmentResult = await pool.query(
-      `SELECT s.month_key AS month,
-              COALESCE(s.department, e.department) AS department,
-              e.id AS employee_id,
-              e.name AS employee_name,
-              jsonb_agg(
-                jsonb_build_object(
-                  'scheduleId', se.schedule_id,
-                  'day', se.day,
-                  'shiftCode', se.shift_code
-                ) ORDER BY se.day
-              ) AS entries
-       FROM schedule_entries se
-       JOIN schedules s ON s.id = se.schedule_id
-       JOIN employees e ON e.id = se.employee_id
-       ${whereSql}
-       GROUP BY s.month_key, COALESCE(s.department, e.department), e.id, e.name
-       ORDER BY s.month_key, department, e.name`,
-      params
+    res.json({ schedules: schedulesResult.rows });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.get('/api/schedules/merged', async (req, res) => {
+  const month = cleanStr(req.query.month);
+  if (!isValidMonthKey(month)) {
+    return res.status(400).json({ message: 'month трябва да е във формат YYYY-MM.' });
+  }
+
+  try {
+    const schedulesResult = await pool.query(
+      `SELECT id, name, month_key AS month, department, status, created_at AS "createdAt"
+       FROM schedules
+       WHERE month_key = $1
+       ORDER BY COALESCE(department, ''), created_at, id`,
+      [month]
     );
 
-    const commonByMonth = {};
-    for (const row of entriesByDepartmentResult.rows) {
-      if (!commonByMonth[row.month]) {
-        commonByMonth[row.month] = {};
-      }
-      if (!commonByMonth[row.month][row.department]) {
-        commonByMonth[row.month][row.department] = [];
-      }
-      commonByMonth[row.month][row.department].push({
-        employeeId: row.employee_id,
-        employeeName: row.employee_name,
-        entries: row.entries,
-      });
-    }
+    const entriesResult = await pool.query(
+      `WITH ranked_entries AS (
+         SELECT
+           se.schedule_id,
+           se.employee_id,
+           se.day,
+           se.shift_code,
+           ROW_NUMBER() OVER (
+             PARTITION BY se.employee_id, se.day
+             ORDER BY s.created_at DESC, se.schedule_id DESC
+           ) AS rn
+         FROM schedule_entries se
+         JOIN schedules s ON s.id = se.schedule_id
+         WHERE s.month_key = $1
+       )
+       SELECT
+         re.schedule_id AS "scheduleId",
+         re.employee_id AS "employeeId",
+         e.name AS "employeeName",
+         e.department,
+         re.day,
+         re.shift_code AS "shiftCode"
+       FROM ranked_entries re
+       JOIN employees e ON e.id = re.employee_id
+       WHERE re.rn = 1
+       ORDER BY e.department, e.name, re.day`,
+      [month]
+    );
 
     res.json({
+      month,
       schedules: schedulesResult.rows,
-      commonSchedule: commonByMonth,
+      entries: entriesResult.rows,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
