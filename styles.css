@@ -35,6 +35,8 @@ header p {
 }
 .status-warn {
   background: rgba(239, 68, 68, 0.25);
+  color: #b91c1c;
+  font-weight: 700;
 }
 .api-config {
   margin-top: 0.6rem;
