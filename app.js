@@ -37,9 +37,10 @@ const state = {
   employees: [],
   schedule: {},
   scheduleEntriesById: {},
-  schedulesByDepartment: {},
+  schedules: [],
+  selectedScheduleIds: [],
+  activeScheduleId: null,
   departments: [],
-  selectedDepartments: [],
   backendAvailable: false,
   apiBaseUrl: '',
   rates: loadRates(),
@@ -64,8 +65,10 @@ const saveApiUrlBtn = document.getElementById('saveApiUrlBtn');
 const tabButtons = document.querySelectorAll('.tab-btn');
 const tabPanels = document.querySelectorAll('.tab-panel');
 const monthInfo = document.getElementById('monthInfo');
-const departmentSelect = document.getElementById('departmentSelect');
-const showDepartmentsBtn = document.getElementById('showDepartmentsBtn');
+const scheduleDepartmentSelect = document.getElementById('scheduleDepartmentSelect');
+const scheduleNameInput = document.getElementById('scheduleNameInput');
+const createScheduleBtn = document.getElementById('createScheduleBtn');
+const scheduleList = document.getElementById('scheduleList');
 const vacationForm = document.getElementById('vacationForm');
 const vacationEmployeeSelect = document.getElementById('vacationEmployeeSelect');
 const vacationStartInput = document.getElementById('vacationStartInput');
@@ -153,40 +156,144 @@ function attachSettingsControls() {
 }
 
 function attachDepartmentControls() {
-  if (!departmentSelect) {
+  if (!scheduleDepartmentSelect) {
     return;
   }
 
-  const applySelection = async () => {
-    state.selectedDepartments = Array.from(departmentSelect.selectedOptions).map((option) => option.value);
-    await refreshMonthlyView();
-    renderAll();
-  };
-
-  departmentSelect.addEventListener('change', () => {
-    void applySelection();
+  scheduleDepartmentSelect.addEventListener('change', () => {
+    updateScheduleNameSuggestion();
   });
 
-  if (showDepartmentsBtn) {
-    showDepartmentsBtn.addEventListener('click', () => {
-      void applySelection();
+  if (createScheduleBtn) {
+    createScheduleBtn.addEventListener('click', async () => {
+      await createScheduleForCurrentMonth();
     });
   }
 }
 
 function renderDepartmentOptions() {
-  if (!departmentSelect) {
+  if (!scheduleDepartmentSelect) {
     return;
   }
 
-  departmentSelect.innerHTML = '';
+  scheduleDepartmentSelect.innerHTML = '';
+
+  const commonOption = document.createElement('option');
+  commonOption.value = 'Общ';
+  commonOption.textContent = 'Общ';
+  scheduleDepartmentSelect.appendChild(commonOption);
+
   state.departments.forEach((department) => {
     const option = document.createElement('option');
     option.value = department;
     option.textContent = department;
-    option.selected = state.selectedDepartments.includes(department);
-    departmentSelect.appendChild(option);
+    scheduleDepartmentSelect.appendChild(option);
   });
+
+  if (!scheduleDepartmentSelect.value) {
+    scheduleDepartmentSelect.value = 'Общ';
+  }
+
+  updateScheduleNameSuggestion();
+}
+
+function updateScheduleNameSuggestion() {
+  if (!scheduleNameInput || !scheduleDepartmentSelect) {
+    return;
+  }
+
+  const department = scheduleDepartmentSelect.value || 'Общ';
+  const month = state.month || monthPicker.value || todayMonth();
+  if (!scheduleNameInput.value.trim()) {
+    scheduleNameInput.value = `График ${department} – ${month}`;
+  }
+}
+
+function renderScheduleList() {
+  if (!scheduleList) {
+    return;
+  }
+
+  scheduleList.innerHTML = '';
+  if (!state.schedules.length) {
+    scheduleList.textContent = 'Няма графици за избрания месец.';
+    return;
+  }
+
+  state.schedules.forEach((schedule) => {
+    const label = document.createElement('label');
+    label.className = 'settings-checkbox';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.value = schedule.id;
+    checkbox.checked = state.selectedScheduleIds.includes(schedule.id);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) {
+        if (!state.selectedScheduleIds.includes(schedule.id)) {
+          state.selectedScheduleIds.push(schedule.id);
+        }
+        state.activeScheduleId = schedule.id;
+      } else {
+        state.selectedScheduleIds = state.selectedScheduleIds.filter((id) => id !== schedule.id);
+      }
+
+      if (!state.selectedScheduleIds.length && state.schedules.length) {
+        state.selectedScheduleIds = [state.schedules[0].id];
+      }
+
+      if (!state.selectedScheduleIds.includes(state.activeScheduleId)) {
+        state.activeScheduleId = state.selectedScheduleIds[0] || null;
+      }
+
+      renderScheduleList();
+      void refreshMonthlyView().then(() => renderAll());
+    });
+
+    const text = document.createElement('span');
+    const departmentLabel = schedule.department || 'Общ';
+    text.textContent = `${departmentLabel} – ${schedule.name}`;
+
+    label.appendChild(checkbox);
+    label.appendChild(text);
+    scheduleList.appendChild(label);
+  });
+}
+
+async function createScheduleForCurrentMonth() {
+  if (!state.backendAvailable) {
+    setStatus('Създаване на график изисква връзка с бекенд.', false);
+    return;
+  }
+
+  const month = state.month || monthPicker.value || todayMonth();
+  const department = scheduleDepartmentSelect?.value || 'Общ';
+  const name = (scheduleNameInput?.value || '').trim() || `График ${department} – ${month}`;
+
+  const response = await apiFetch('/api/schedules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ month_key: month, department, name })
+  });
+
+  if (!response.ok) {
+    setStatus('Неуспешно създаване на график.', false);
+    return;
+  }
+
+  const payload = await response.json();
+  const created = payload.schedule;
+  if (created?.id) {
+    state.activeScheduleId = created.id;
+    state.selectedScheduleIds = [created.id, ...state.selectedScheduleIds.filter((id) => id !== created.id)];
+  }
+
+  if (scheduleNameInput) {
+    scheduleNameInput.value = '';
+  }
+
+  await refreshMonthlyView();
+  renderAll();
 }
 
 function attachTabs() {
@@ -277,13 +384,21 @@ function attachShiftForm() {
 
 function attachLockAndExport() {
   lockScheduleBtn.addEventListener('click', () => {
-    state.lockedMonths[state.month] = true;
+    const active = getActiveSchedule();
+    if (!active) {
+      return;
+    }
+    state.lockedMonths[active.id] = true;
     saveLockedMonths();
     renderSchedule();
   });
 
   unlockScheduleBtn.addEventListener('click', () => {
-    delete state.lockedMonths[state.month];
+    const active = getActiveSchedule();
+    if (!active) {
+      return;
+    }
+    delete state.lockedMonths[active.id];
     saveLockedMonths();
     renderSchedule();
   });
@@ -517,16 +632,30 @@ function renderVacationLedger() {
   vacationLedger.appendChild(table);
 }
 
-function getEmployeesForCurrentDepartments() {
-  if (!state.selectedDepartments.length) {
-    return state.employees;
+function getActiveSchedule() {
+  if (!state.schedules.length) {
+    return null;
   }
 
-  return state.employees.filter((employee) => state.selectedDepartments.includes(employee.department));
+  return state.schedules.find((schedule) => schedule.id === state.activeScheduleId)
+    || state.schedules.find((schedule) => state.selectedScheduleIds.includes(schedule.id))
+    || state.schedules[0];
+}
+
+function getEmployeesForSelectedSchedules() {
+  if (!state.selectedScheduleIds.length) {
+    return [];
+  }
+
+  const selectedSet = new Set(state.selectedScheduleIds);
+  return state.employees.filter((employee) => {
+    const scheduleId = employee.scheduleId;
+    return selectedSet.has(scheduleId);
+  });
 }
 
 function getEmployeeScheduleId(employee) {
-  return state.schedulesByDepartment[employee.department] || null;
+  return employee?.scheduleId || null;
 }
 
 function getShiftCodeForCell(employee, month, day) {
@@ -544,8 +673,9 @@ function renderSchedule() {
   const totalDays = new Date(year, monthIndex, 0).getDate();
   const monthStats = getMonthStats(year, monthIndex, totalDays);
   const monthLocked = isMonthLocked(month);
+  const activeSchedule = getActiveSchedule();
 
-  lockStatus.textContent = `Статус: ${monthLocked ? 'Заключен' : 'Отключен'}`;
+  lockStatus.textContent = `Статус: ${monthLocked ? 'Заключен' : 'Отключен'}${activeSchedule ? ` · Активен: ${activeSchedule.name}` : ''}`;
 
   monthInfo.innerHTML = `
     <b>Работни дни по календар:</b> ${monthStats.workingDays} ·
@@ -600,32 +730,27 @@ function renderSchedule() {
     sickDays: 0
   };
 
-  const employeesToRender = getEmployeesForCurrentDepartments();
+  const employeesToRender = getEmployeesForSelectedSchedules();
   const groupedEmployees = employeesToRender.reduce((acc, employee) => {
-    if (!acc[employee.department]) {
-      acc[employee.department] = [];
+    const department = employee.scheduleDepartment || employee.department || 'Общ';
+    if (!acc[department]) {
+      acc[department] = [];
     }
-    acc[employee.department].push(employee);
+    acc[department].push(employee);
     return acc;
   }, {});
 
-  const departmentOrder = state.selectedDepartments.length
-    ? state.selectedDepartments.filter((department) => groupedEmployees[department]?.length)
-    : Object.keys(groupedEmployees).sort((a, b) => a.localeCompare(b, 'bg'));
+  const departmentOrder = Object.keys(groupedEmployees).sort((a, b) => a.localeCompare(b, 'bg'));
 
   departmentOrder.forEach((department) => {
-    const employeesInDepartment = groupedEmployees[department] || [];
+    const sectionRow = document.createElement('tr');
+    const sectionCell = document.createElement('td');
+    sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length;
+    sectionCell.innerHTML = `<b>Отдел: ${department}</b>`;
+    sectionRow.appendChild(sectionCell);
+    scheduleTable.appendChild(sectionRow);
 
-    if (departmentOrder.length > 1) {
-      const sectionRow = document.createElement('tr');
-      const sectionCell = document.createElement('td');
-      sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length;
-      sectionCell.innerHTML = `<b>Отдел: ${department}</b>`;
-      sectionRow.appendChild(sectionCell);
-      scheduleTable.appendChild(sectionRow);
-    }
-
-    employeesInDepartment.forEach((employee) => {
+    (groupedEmployees[department] || []).forEach((employee) => {
       const row = document.createElement('tr');
       const nameCell = document.createElement('td');
       nameCell.className = 'sticky';
@@ -645,11 +770,9 @@ function renderSchedule() {
 
       for (let day = 1; day <= totalDays; day += 1) {
         const currentShift = getShiftCodeForCell(employee, month, day);
-
         const date = new Date(year, monthIndex - 1, day);
         const holiday = isOfficialHoliday(date);
         const weekend = isWeekend(date);
-
         const cell = document.createElement('td');
         if (holiday) {
           cell.classList.add('day-holiday');
@@ -665,9 +788,7 @@ function renderSchedule() {
           const option = document.createElement('option');
           option.value = shift.code;
           option.textContent = shift.label;
-          if (shift.code === currentShift) {
-            option.selected = true;
-          }
+          option.selected = shift.code === currentShift;
           select.appendChild(option);
         });
 
@@ -675,11 +796,13 @@ function renderSchedule() {
           if (monthLocked) {
             return;
           }
+
           const toShift = select.value;
           const scheduleId = getEmployeeScheduleId(employee);
           if (scheduleId) {
             state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = toShift;
           }
+
           state.schedule[scheduleKey(employee.id, month, day)] = toShift;
           saveScheduleLocal();
           renderSchedule();
@@ -689,22 +812,12 @@ function renderSchedule() {
 
         cell.appendChild(select);
         row.appendChild(cell);
-
         collectSummary(summary, currentShift, holiday, weekend);
       }
 
-      const employeeTotals = calculateEmployeeTotals({
-        employee,
-        summary,
-        year,
-        month,
-        monthNormHours: monthStats.normHours
-      });
-
+      const employeeTotals = calculateEmployeeTotals({ employee, summary, year, month, monthNormHours: monthStats.normHours });
       accumulateTotals(totals, employeeTotals);
-
       appendSummaryColumns(row, employeeTotals, visibleSummaryColumns);
-
       scheduleTable.appendChild(row);
     });
   });
@@ -724,7 +837,6 @@ function renderSchedule() {
     }
 
     appendSummaryColumns(totalsRow, totals, visibleSummaryColumns, true);
-
     scheduleTable.appendChild(totalsRow);
   }
 }
@@ -1008,33 +1120,45 @@ async function loadDepartmentsFromBackend() {
 
   const payload = await response.json();
   state.departments = Array.isArray(payload.departments) ? payload.departments : [];
-  if (!state.selectedDepartments.length && state.departments.length) {
-    state.selectedDepartments = [state.departments[0]];
-  }
   renderDepartmentOptions();
 }
 
-async function ensureScheduleForDepartment(month, department) {
-  if (!department) {
-    return;
-  }
-
-  if (state.schedulesByDepartment[department]) {
-    return;
-  }
-
-  const response = await apiFetch('/api/schedules', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ month_key: month, department, name: `${department} график ${month}` })
-  });
-
+async function loadSchedulesForMonth() {
+  const query = new URLSearchParams({ month: state.month || todayMonth() });
+  const response = await apiFetch(`/api/schedules?${query.toString()}`);
   if (!response.ok) {
-    throw new Error('Schedule create failed');
+    throw new Error('Schedules unavailable');
   }
 
   const payload = await response.json();
-  state.schedulesByDepartment[department] = payload.schedule_id;
+  state.schedules = Array.isArray(payload.schedules) ? payload.schedules : [];
+  state.schedules.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+  const validIds = new Set(state.schedules.map((schedule) => schedule.id));
+  state.selectedScheduleIds = state.selectedScheduleIds.filter((id) => validIds.has(id));
+
+  if (!state.selectedScheduleIds.length && state.schedules.length) {
+    state.selectedScheduleIds = [state.schedules[0].id];
+  }
+
+  if (!state.activeScheduleId || !validIds.has(state.activeScheduleId)) {
+    state.activeScheduleId = state.selectedScheduleIds[0] || state.schedules[0]?.id || null;
+  }
+
+  if (state.activeScheduleId && !state.selectedScheduleIds.includes(state.activeScheduleId)) {
+    state.selectedScheduleIds.unshift(state.activeScheduleId);
+  }
+
+  renderScheduleList();
+}
+
+async function fetchScheduleDetails(scheduleId) {
+  const response = await apiFetch(`/api/schedules/${scheduleId}`);
+  if (!response.ok) {
+    throw new Error('Schedule details unavailable');
+  }
+
+  return response.json();
 }
 
 async function refreshMonthlyView() {
@@ -1042,56 +1166,38 @@ async function refreshMonthlyView() {
     return;
   }
 
-  const month = state.month || todayMonth();
-  const departments = state.selectedDepartments.length ? state.selectedDepartments : state.departments.slice(0, 1);
+  await loadSchedulesForMonth();
 
-  if (!departments.length) {
+  if (!state.selectedScheduleIds.length) {
     state.employees = [];
     state.scheduleEntriesById = {};
-    state.schedulesByDepartment = {};
     return;
   }
 
-  for (const department of departments) {
-    await ensureScheduleForDepartment(month, department);
-  }
+  const selectedIds = state.selectedScheduleIds.slice();
+  const requests = selectedIds.map((id) => fetchScheduleDetails(id));
+  const details = await Promise.all(requests);
 
-  const query = new URLSearchParams({ month, departments: departments.join(',') });
-  const response = await apiFetch(`/api/schedule-view?${query.toString()}`);
-  if (!response.ok) {
-    throw new Error('Schedule view unavailable');
-  }
-
-  const payload = await response.json();
-  state.employees = payload.employees || [];
-
-  const schedules = Array.isArray(payload.schedules) ? payload.schedules : [];
-  const byDepartment = {};
-  schedules.forEach((schedule) => {
-    if (!byDepartment[schedule.department]) {
-      byDepartment[schedule.department] = schedule.id;
-    }
-  });
-
-  for (const department of departments) {
-    if (!byDepartment[department]) {
-      await ensureScheduleForDepartment(month, department);
-      byDepartment[department] = state.schedulesByDepartment[department];
-    }
-  }
-
-  state.schedulesByDepartment = byDepartment;
-
-  const visibleScheduleIds = new Set(Object.values(byDepartment));
-  const entries = Array.isArray(payload.entries) ? payload.entries : [];
+  const mergedEmployees = [];
   const mappedEntries = {};
-  entries.forEach((entry) => {
-    if (!visibleScheduleIds.has(entry.schedule_id)) {
-      return;
-    }
-    mappedEntries[`${entry.schedule_id}|${entry.employee_id}|${entry.day}`] = entry.shift_code;
+
+  details.forEach((detail) => {
+    const schedule = detail.schedule || {};
+    const scheduleDepartment = schedule.department || 'Общ';
+    (detail.employees || []).forEach((employee) => {
+      mergedEmployees.push({
+        ...employee,
+        scheduleId: schedule.id,
+        scheduleDepartment
+      });
+    });
+
+    (detail.entries || []).forEach((entry) => {
+      mappedEntries[`${schedule.id}|${entry.employeeId}|${entry.day}`] = entry.shiftCode;
+    });
   });
 
+  state.employees = mergedEmployees;
   state.scheduleEntriesById = mappedEntries;
 }
 
@@ -1186,7 +1292,7 @@ async function saveScheduleEntryBackend(employee, day, shiftCode) {
     const response = await apiFetch(`/api/schedules/${scheduleId}/entry`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ employee_id: employee.id, day, shift_code: shiftCode })
+      body: JSON.stringify({ employee_id: employee.id, day, shift_code: shiftCode, month_key: state.month })
     });
 
     if (!response.ok) {
@@ -1237,12 +1343,13 @@ async function deleteShiftTemplateBackend(code) {
 }
 
 function exportScheduleToExcel() {
+  const active = getActiveSchedule();
   const tableHtml = scheduleTable.outerHTML;
   const html = `
     <html>
       <head><meta charset="UTF-8"></head>
       <body>
-        <h3>График за ${state.month}</h3>
+        <h3>${state.selectedScheduleIds.length > 1 ? 'Обединен график' : `График ${active?.name || ''}`} за ${state.month}</h3>
         ${tableHtml}
       </body>
     </html>
@@ -1258,6 +1365,7 @@ function exportScheduleToExcel() {
 }
 
 function exportScheduleToPdf() {
+  const active = getActiveSchedule();
   const popup = window.open('', '_blank');
   if (!popup) {
     return;
@@ -1266,7 +1374,7 @@ function exportScheduleToPdf() {
   popup.document.write(`
     <html>
       <head>
-        <title>График ${state.month}</title>
+        <title>${state.selectedScheduleIds.length > 1 ? 'Обединен график' : `График ${active?.name || ''}`} ${state.month}</title>
         <style>
           body { font-family: Arial, sans-serif; padding: 12px; }
           table { border-collapse: collapse; width: 100%; font-size: 10px; }
@@ -1275,7 +1383,7 @@ function exportScheduleToPdf() {
         </style>
       </head>
       <body>
-        <h3>График за ${state.month}</h3>
+        <h3>${state.selectedScheduleIds.length > 1 ? 'Обединен график' : `График ${active?.name || ''}`} за ${state.month}</h3>
         ${scheduleTable.outerHTML}
       </body>
     </html>
@@ -1391,8 +1499,12 @@ function loadLockedMonths() {
   }
 }
 
-function isMonthLocked(month) {
-  return Boolean(state.lockedMonths[month]);
+function isMonthLocked(_month) {
+  const active = getActiveSchedule();
+  if (!active) {
+    return false;
+  }
+  return Boolean(state.lockedMonths[active.id]);
 }
 
 function calcNightHours(start, end) {
