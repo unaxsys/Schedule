@@ -61,6 +61,9 @@ const state = {
   currentUser: loadCurrentUser()
 };
 
+const DEPARTMENT_VIEW_ALL = 'all';
+const DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS = 'all_by_departments';
+
 const monthPicker = document.getElementById('monthPicker');
 const generateBtn = document.getElementById('generateBtn');
 const employeeForm = document.getElementById('employeeForm');
@@ -580,7 +583,7 @@ function attachSettingsControls() {
 function attachDepartmentControls() {
   if (scheduleFilterDepartmentSelect) {
     scheduleFilterDepartmentSelect.addEventListener('change', async () => {
-      state.selectedDepartmentId = scheduleFilterDepartmentSelect.value || 'all';
+      state.selectedDepartmentId = scheduleFilterDepartmentSelect.value || DEPARTMENT_VIEW_ALL;
       await refreshMonthlyView();
       renderAll();
     });
@@ -623,9 +626,14 @@ function renderDepartmentOptions() {
   if (scheduleFilterDepartmentSelect) {
     scheduleFilterDepartmentSelect.innerHTML = '';
     const commonFilterOption = document.createElement('option');
-    commonFilterOption.value = 'all';
+    commonFilterOption.value = DEPARTMENT_VIEW_ALL;
     commonFilterOption.textContent = 'Общ';
     scheduleFilterDepartmentSelect.appendChild(commonFilterOption);
+
+    const groupedCommonFilterOption = document.createElement('option');
+    groupedCommonFilterOption.value = DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS;
+    groupedCommonFilterOption.textContent = 'Общ по отдели';
+    scheduleFilterDepartmentSelect.appendChild(groupedCommonFilterOption);
 
     state.departments.forEach((department) => {
       const option = document.createElement('option');
@@ -709,7 +717,7 @@ function renderScheduleList() {
       }
 
       if (!state.selectedScheduleIds.length && state.schedules.length) {
-        state.selectedScheduleIds = state.selectedDepartmentId === 'all'
+        state.selectedScheduleIds = [DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)
           ? state.schedules.map((item) => item.id)
           : [state.schedules[0].id];
       }
@@ -1168,7 +1176,7 @@ function renderDepartmentList() {
       }
 
       if (state.selectedDepartmentId === department.id) {
-        state.selectedDepartmentId = 'all';
+        state.selectedDepartmentId = DEPARTMENT_VIEW_ALL;
       }
       await loadDepartmentsFromBackend();
       await refreshMonthlyView();
@@ -1744,24 +1752,29 @@ function renderSchedule() {
   };
 
   const employeesToRender = getEmployeesForSelectedSchedules();
-  const groupedEmployees = employeesToRender.reduce((acc, employee) => {
-    const department = employee.scheduleDepartment || employee.department || 'Общ';
-    if (!acc[department]) {
-      acc[department] = [];
-    }
-    acc[department].push(employee);
-    return acc;
-  }, {});
+  const shouldGroupByDepartment = state.selectedDepartmentId === DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS;
+  const groupedEmployees = shouldGroupByDepartment
+    ? employeesToRender.reduce((acc, employee) => {
+      const department = employee.scheduleDepartment || employee.department || 'Общ';
+      if (!acc[department]) {
+        acc[department] = [];
+      }
+      acc[department].push(employee);
+      return acc;
+    }, {})
+    : { Всички: employeesToRender };
 
   const departmentOrder = Object.keys(groupedEmployees).sort((a, b) => a.localeCompare(b, 'bg'));
 
   departmentOrder.forEach((department) => {
-    const sectionRow = document.createElement('tr');
-    const sectionCell = document.createElement('td');
-    sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length;
-    sectionCell.innerHTML = `<b>Отдел: ${department}</b>`;
-    sectionRow.appendChild(sectionCell);
-    scheduleTable.appendChild(sectionRow);
+    if (shouldGroupByDepartment) {
+      const sectionRow = document.createElement('tr');
+      const sectionCell = document.createElement('td');
+      sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length;
+      sectionCell.innerHTML = `<b>Отдел: ${department}</b>`;
+      sectionRow.appendChild(sectionCell);
+      scheduleTable.appendChild(sectionRow);
+    }
 
     (groupedEmployees[department] || []).forEach((employee) => {
       const row = document.createElement('tr');
@@ -2280,7 +2293,7 @@ async function loadSchedulesForMonth() {
   const wasSelectAll = previousScheduleIds.length > 0 && previousScheduleIds.every((id) => previousSelectedIds.includes(id));
 
   const query = new URLSearchParams({ month_key: monthKey });
-  if (state.selectedDepartmentId && state.selectedDepartmentId !== 'all') {
+  if (state.selectedDepartmentId && ![DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)) {
     query.set('department_id', state.selectedDepartmentId);
   }
 
@@ -2296,12 +2309,13 @@ async function loadSchedulesForMonth() {
   const validIds = new Set(state.schedules.map((schedule) => schedule.id));
   let selectedScheduleIds = previousSelectedIds.filter((id) => validIds.has(id));
 
-  if (state.selectedDepartmentId === 'all' && (wasSelectAll || !state.hasManualScheduleSelection)) {
+  if ([DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)
+    && (wasSelectAll || !state.hasManualScheduleSelection)) {
     selectedScheduleIds = state.schedules.map((schedule) => schedule.id);
   }
 
   if (!selectedScheduleIds.length && state.schedules.length) {
-    selectedScheduleIds = state.selectedDepartmentId === 'all'
+    selectedScheduleIds = [DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)
       ? state.schedules.map((schedule) => schedule.id)
       : [state.schedules[0].id];
   }
@@ -2335,7 +2349,7 @@ async function refreshMonthlyView() {
   await loadSchedulesForMonth();
 
   const monthParam = encodeURIComponent(month);
-  const employeeQuery = state.selectedDepartmentId && state.selectedDepartmentId !== 'all'
+  const employeeQuery = state.selectedDepartmentId && ![DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)
     ? `/api/employees?department_id=${encodeURIComponent(state.selectedDepartmentId)}&month_key=${monthParam}`
     : `/api/employees?month_key=${monthParam}`;
   const employeeResponse = await apiFetch(employeeQuery);
