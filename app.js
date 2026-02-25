@@ -61,6 +61,8 @@ const lastNameInput = document.getElementById('lastNameInput');
 const departmentInput = document.getElementById('departmentInput');
 const positionInput = document.getElementById('positionInput');
 const egnInput = document.getElementById('egnInput');
+const startDateInput = document.getElementById('startDateInput');
+const endDateInput = document.getElementById('endDateInput');
 const vacationAllowanceInput = document.getElementById('vacationAllowanceInput');
 const employeeList = document.getElementById('employeeList');
 const scheduleTable = document.getElementById('scheduleTable');
@@ -110,6 +112,8 @@ const editLastNameInput = document.getElementById('editLastNameInput');
 const editDepartmentInput = document.getElementById('editDepartmentInput');
 const editPositionInput = document.getElementById('editPositionInput');
 const editEgnInput = document.getElementById('editEgnInput');
+const editStartDateInput = document.getElementById('editStartDateInput');
+const editEndDateInput = document.getElementById('editEndDateInput');
 const editVacationAllowanceInput = document.getElementById('editVacationAllowanceInput');
 const cancelEmployeeEditBtn = document.getElementById('cancelEmployeeEditBtn');
 
@@ -517,10 +521,12 @@ employeeForm.addEventListener('submit', async (event) => {
     departmentId: departmentInput.value || null,
     position: positionInput.value.trim(),
     egn: (egnInput?.value || '').trim(),
+    startDate: (startDateInput?.value || '').trim(),
+    endDate: (endDateInput?.value || '').trim() || null,
     vacationAllowance: Number(vacationAllowanceInput.value)
   };
 
-  if (!firstName || !middleName || !lastName || !employee.position || !/^\d{10}$/.test(employee.egn)) {
+  if (!firstName || !middleName || !lastName || !employee.position || !/^\d{10}$/.test(employee.egn) || !isValidEmploymentDates(employee.startDate, employee.endDate)) {
     return;
   }
 
@@ -538,6 +544,12 @@ employeeForm.addEventListener('submit', async (event) => {
     departmentInput.value = '';
   }
   vacationAllowanceInput.value = 20;
+  if (startDateInput) {
+    startDateInput.value = '';
+  }
+  if (endDateInput) {
+    endDateInput.value = '';
+  }
   renderAll();
 });
 
@@ -842,10 +854,12 @@ function attachEmployeeEditModalControls() {
     const position = editPositionInput.value.trim();
     const egn = editEgnInput.value.trim();
     const vacationAllowance = Number(editVacationAllowanceInput.value);
+    const startDate = (editStartDateInput?.value || '').trim();
+    const endDate = (editEndDateInput?.value || '').trim() || null;
     const departmentId = editDepartmentInput.value || null;
     const selectedDepartment = departmentId ? state.departments.find((dep) => dep.id === departmentId) : null;
 
-    if (!firstName || !middleName || !lastName || !position || !/^\d{10}$/.test(egn) || !Number.isFinite(vacationAllowance) || vacationAllowance < 0) {
+    if (!firstName || !middleName || !lastName || !position || !/^\d{10}$/.test(egn) || !Number.isFinite(vacationAllowance) || vacationAllowance < 0 || !isValidEmploymentDates(startDate, endDate)) {
       setStatus('Невалидни данни за редакция на служител.', false);
       return;
     }
@@ -855,7 +869,9 @@ function attachEmployeeEditModalControls() {
         name: `${firstName} ${middleName} ${lastName}`.trim(),
         position,
         egn,
-        vacationAllowance
+        vacationAllowance,
+        startDate,
+        endDate
       });
 
       if (updatedEmployee) {
@@ -864,7 +880,9 @@ function attachEmployeeEditModalControls() {
             ...entry,
             ...updatedEmployee,
             departmentId,
-            department: selectedDepartment ? selectedDepartment.name : 'Без отдел'
+            department: selectedDepartment ? selectedDepartment.name : 'Без отдел',
+            startDate,
+            endDate
           }
           : entry));
 
@@ -902,6 +920,8 @@ function openEmployeeEditModal(employee) {
   editLastNameInput.value = names.lastName || '';
   editPositionInput.value = employee.position || '';
   editEgnInput.value = employee.egn || '';
+  editStartDateInput.value = employee.startDate || '';
+  editEndDateInput.value = employee.endDate || '';
   editVacationAllowanceInput.value = String(employee.vacationAllowance ?? 20);
 
   editDepartmentInput.innerHTML = '';
@@ -943,7 +963,8 @@ function renderEmployees() {
     item.className = 'employee-item employee-item--top';
 
     const details = document.createElement('div');
-    details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Полагаем отпуск: ${employee.vacationAllowance} дни`;
+    const employmentRange = formatEmploymentRange(employee);
+    details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Период: ${employmentRange}<br>Полагаем отпуск: ${employee.vacationAllowance} дни`;
 
     const employeeDepartmentSelect = document.createElement('select');
     const emptyOption = document.createElement('option');
@@ -980,13 +1001,33 @@ function renderEmployees() {
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
-    removeBtn.textContent = 'Изтрий';
+    removeBtn.textContent = 'Освободи';
     removeBtn.className = 'btn-delete';
     removeBtn.addEventListener('click', async () => {
-      state.employees = state.employees.filter((e) => e.id !== employee.id);
-      persistEmployeesLocal();
-      await deleteEmployeeBackend(employee.id);
-      renderAll();
+      const monthEnd = getMonthEndDate(state.month || todayMonth());
+      const releaseDate = promptLastWorkingDate(employee, monthEnd);
+      if (!releaseDate) {
+        return;
+      }
+
+      const updatedEmployee = await updateEmployeeBackend(employee.id, {
+        name: employee.name,
+        position: employee.position,
+        egn: employee.egn,
+        vacationAllowance: employee.vacationAllowance,
+        startDate: employee.startDate || getMonthStartDate(state.month || todayMonth()),
+        endDate: releaseDate
+      });
+
+      if (updatedEmployee) {
+        state.employees = state.employees.map((entry) => (entry.id === employee.id
+          ? { ...entry, ...updatedEmployee }
+          : entry));
+        persistEmployeesLocal();
+        await deleteEmployeeBackend(employee.id, releaseDate);
+        await refreshMonthlyView();
+        renderAll();
+      }
     });
 
     actions.append(employeeDepartmentSelect, editBtn, removeBtn);
@@ -1097,11 +1138,13 @@ function getEmployeesForSelectedSchedules() {
   }
 
   const selectedSet = new Set(state.selectedScheduleIds);
+  const monthKey = state.month || todayMonth();
   return state.employees.filter((employee) => {
     const scheduleId = employee.scheduleId;
-    return selectedSet.has(scheduleId);
+    return selectedSet.has(scheduleId) && isEmployeeVisibleInMonth(employee, monthKey);
   });
 }
+
 
 function getEmployeeScheduleId(employee) {
   return employee?.scheduleId || null;
@@ -1207,6 +1250,7 @@ function renderSchedule() {
       row.appendChild(nameCell);
 
       const summary = {
+        monthNormHours: 0,
         workedDays: 0,
         workedHours: 0,
         holidayWorkedHours: 0,
@@ -1218,6 +1262,7 @@ function renderSchedule() {
       };
 
       for (let day = 1; day <= totalDays; day += 1) {
+        const inEmployment = isEmployeeActiveOnDay(employee, year, monthIndex, day);
         const currentShift = getShiftCodeForCell(employee, month, day);
         const date = new Date(year, monthIndex - 1, day);
         const holiday = isOfficialHoliday(date);
@@ -1231,7 +1276,11 @@ function renderSchedule() {
 
         const select = document.createElement('select');
         select.className = 'shift-select';
-        select.disabled = monthLocked;
+        if (!inEmployment) {
+          cell.classList.add('day-outside-employment');
+          select.classList.add('shift-select--inactive');
+        }
+        select.disabled = monthLocked || !inEmployment;
 
         state.shiftTemplates.forEach((shift) => {
           const option = document.createElement('option');
@@ -1261,10 +1310,13 @@ function renderSchedule() {
 
         cell.appendChild(select);
         row.appendChild(cell);
-        collectSummary(summary, currentShift, holiday, weekend);
+        collectSummary(summary, currentShift, holiday, weekend, inEmployment);
+        if (inEmployment && !holiday && !weekend) {
+          summary.monthNormHours += 8;
+        }
       }
 
-      const employeeTotals = calculateEmployeeTotals({ employee, summary, year, month, monthNormHours: monthStats.normHours });
+      const employeeTotals = calculateEmployeeTotals({ employee, summary, year, month, monthNormHours: summary.monthNormHours });
       accumulateTotals(totals, employeeTotals);
       appendSummaryColumns(row, employeeTotals, visibleSummaryColumns);
       scheduleTable.appendChild(row);
@@ -1339,7 +1391,7 @@ function calculateEmployeeTotals({ employee, summary, year, month, monthNormHour
   const payableHours =
     summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + summary.nightConvertedHours;
   const deviation = summary.workedHours + summary.nightConvertedHours - monthNormHours;
-  const sirvTotals = getSirvTotalsForEmployee(employee.id, month, state.sirvPeriodMonths);
+  const sirvTotals = getSirvTotalsForEmployee(employee, month, state.sirvPeriodMonths);
 
   return {
     workedDays: summary.workedDays,
@@ -1393,7 +1445,11 @@ function getWorkShiftHours(shift) {
   return getStoredShiftHours(shift);
 }
 
-function collectSummary(summary, shiftCode, holiday, weekend) {
+function collectSummary(summary, shiftCode, holiday, weekend, inEmployment = true) {
+  if (!inEmployment) {
+    return;
+  }
+
   const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
 
   if (shift.type === 'work') {
@@ -1503,7 +1559,8 @@ function getPeriodMonths(endMonth, periodMonths) {
   return months;
 }
 
-function getSirvTotalsForEmployee(employeeId, endMonth, periodMonths) {
+function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
+  const employeeId = employee?.id;
   const months = getPeriodMonths(endMonth, periodMonths);
   const totals = {
     normHours: 0,
@@ -1514,10 +1571,16 @@ function getSirvTotalsForEmployee(employeeId, endMonth, periodMonths) {
   months.forEach((monthKey) => {
     const [year, monthIndex] = monthKey.split('-').map(Number);
     const totalDays = new Date(year, monthIndex, 0).getDate();
-    const monthStats = getMonthStats(year, monthIndex, totalDays);
-    totals.normHours += monthStats.normHours;
-
     for (let day = 1; day <= totalDays; day += 1) {
+      if (!isEmployeeActiveOnDate(employee, year, monthIndex, day)) {
+        continue;
+      }
+
+      const date = new Date(year, monthIndex - 1, day);
+      if (!isOfficialHoliday(date) && !isWeekend(date)) {
+        totals.normHours += 8;
+      }
+
       const shiftCode = state.schedule[scheduleKey(employeeId, monthKey, day)] || 'P';
       const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
       if (shift.type !== 'work') {
@@ -1531,6 +1594,114 @@ function getSirvTotalsForEmployee(employeeId, endMonth, periodMonths) {
 
   totals.overtimeHours = Math.max(0, totals.convertedWorkedHours - totals.normHours);
   return totals;
+}
+
+
+function normalizeDateOnly(value) {
+  const text = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return '';
+  }
+  return text;
+}
+
+function isValidEmploymentDates(startDate, endDate) {
+  const normalizedStart = normalizeDateOnly(startDate);
+  if (!normalizedStart) {
+    return false;
+  }
+
+  const normalizedEnd = normalizeDateOnly(endDate);
+  if (!normalizedEnd) {
+    return endDate === null || endDate === undefined || String(endDate).trim() === '';
+  }
+
+  return normalizedEnd >= normalizedStart;
+}
+
+function formatDateForDisplay(value) {
+  const normalized = normalizeDateOnly(value);
+  if (!normalized) {
+    return '—';
+  }
+
+  const [year, month, day] = normalized.split('-');
+  return `${day}.${month}.${year}`;
+}
+
+function formatEmploymentRange(employee) {
+  const start = formatDateForDisplay(employee.startDate);
+  const end = employee.endDate ? formatDateForDisplay(employee.endDate) : 'без край';
+  return `${start} → ${end}`;
+}
+
+function getMonthStartDate(monthKey) {
+  return `${monthKey}-01`;
+}
+
+function getMonthEndDate(monthKey) {
+  const [year, month] = monthKey.split('-').map(Number);
+  const totalDays = new Date(year, month, 0).getDate();
+  return `${year}-${String(month).padStart(2, '0')}-${String(totalDays).padStart(2, '0')}`;
+}
+
+function isEmployeeVisibleInMonth(employee, monthKey) {
+  const startDate = normalizeDateOnly(employee?.startDate);
+  const endDate = normalizeDateOnly(employee?.endDate);
+  if (!startDate && !endDate) {
+    return true;
+  }
+
+  const monthStart = getMonthStartDate(monthKey);
+  const monthEnd = getMonthEndDate(monthKey);
+  if (startDate && startDate > monthEnd) {
+    return false;
+  }
+  if (endDate && endDate < monthStart) {
+    return false;
+  }
+  return true;
+}
+
+function isEmployeeActiveOnDate(employee, year, monthIndex, day) {
+  const date = `${year}-${String(monthIndex).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  return isDateWithinEmployment(employee, date);
+}
+
+function isEmployeeActiveOnDay(employee, year, monthIndex, day) {
+  return isEmployeeActiveOnDate(employee, year, monthIndex, day);
+}
+
+function isDateWithinEmployment(employee, date) {
+  const startDate = normalizeDateOnly(employee?.startDate);
+  const endDate = normalizeDateOnly(employee?.endDate);
+  if (!startDate) {
+    return true;
+  }
+  if (date < startDate) {
+    return false;
+  }
+  if (endDate && date > endDate) {
+    return false;
+  }
+  return true;
+}
+
+function promptLastWorkingDate(employee, defaultDate) {
+  const currentEndDate = normalizeDateOnly(employee.endDate);
+  const suggestedDate = currentEndDate || defaultDate;
+  const result = window.prompt('Въведете последен работен ден (YYYY-MM-DD):', suggestedDate);
+  if (result === null) {
+    return null;
+  }
+
+  const normalized = normalizeDateOnly(result);
+  if (!normalized || !isValidEmploymentDates(employee.startDate, normalized)) {
+    setStatus('Невалидна дата за последен работен ден.', false);
+    return null;
+  }
+
+  return normalized;
 }
 
 function detectApiBaseUrl() {
@@ -1711,6 +1882,8 @@ async function saveEmployeeBackend(employee) {
         department_id: employee.departmentId || null,
         position: employee.position,
         egn: employee.egn,
+        startDate: employee.startDate,
+        endDate: employee.endDate,
         vacationAllowance: employee.vacationAllowance
       })
     });
@@ -1728,13 +1901,14 @@ async function saveEmployeeBackend(employee) {
   }
 }
 
-async function deleteEmployeeBackend(employeeId) {
+async function deleteEmployeeBackend(employeeId, endDate) {
   if (!state.backendAvailable) {
     return;
   }
 
   try {
-    const response = await apiFetch(`/api/employees/${employeeId}`, { method: 'DELETE' });
+    const query = endDate ? `?end_date=${encodeURIComponent(endDate)}` : '';
+    const response = await apiFetch(`/api/employees/${employeeId}${query}`, { method: 'DELETE' });
     if (!response.ok) {
       throw new Error('Delete employee failed');
     }
