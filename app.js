@@ -6,6 +6,9 @@ const DEFAULT_RATES = {
 const NIGHT_HOURS_COEFFICIENT = 1.14286;
 const MAX_NIGHT_SHIFT_HOURS = 12;
 
+const TELK_EXTRA_VACATION_DAYS = 5;
+const YOUNG_WORKER_EXTRA_VACATION_DAYS = 6;
+
 const SYSTEM_SHIFTS = [
   { code: 'P', label: 'П', name: 'Почивка', type: 'rest', start: '', end: '', hours: 0, locked: true },
   { code: 'O', label: 'О', name: 'Отпуск', type: 'vacation', start: '', end: '', hours: 0, locked: true },
@@ -786,9 +789,6 @@ function createEmployeeId() {
 
   return `emp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
-
-const TELK_EXTRA_VACATION_DAYS = 5;
-const YOUNG_WORKER_EXTRA_VACATION_DAYS = 6;
 
 function getExtraVacationDays(hasTelk, hasYoungWorkerBenefit) {
   return (hasTelk ? TELK_EXTRA_VACATION_DAYS : 0) + (hasYoungWorkerBenefit ? YOUNG_WORKER_EXTRA_VACATION_DAYS : 0);
