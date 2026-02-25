@@ -144,6 +144,115 @@
         gap: 1rem;
       }
 
+      .sa-table-wrap {
+        border: 1px solid #dbeafe;
+        border-radius: 12px;
+        background: #fff;
+        overflow: auto;
+        max-height: 420px;
+      }
+
+      .sa-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.92rem;
+      }
+
+      .sa-table th,
+      .sa-table td {
+        border-bottom: 1px solid #e2e8f0;
+        padding: 0.55rem 0.65rem;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .sa-table th {
+        background: #eff6ff;
+        font-weight: 700;
+        color: #1e3a8a;
+        position: sticky;
+        top: 0;
+      }
+
+      .sa-table tr:hover td {
+        background: #f8fafc;
+      }
+
+      .sa-empty {
+        margin: 0;
+        padding: 0.75rem;
+        color: #64748b;
+      }
+
+
+      .sa-tenant-usage-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 0.7rem;
+      }
+
+      .sa-usage-card {
+        border: 1px solid #dbeafe;
+        border-radius: 12px;
+        background: #fff;
+        padding: 0.75rem;
+        display: grid;
+        gap: 0.55rem;
+      }
+
+      .sa-usage-stats {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(110px, 1fr));
+        gap: 0.45rem;
+      }
+
+      .sa-usage-pill {
+        background: #f1f5f9;
+        border-radius: 999px;
+        padding: 0.25rem 0.55rem;
+        font-size: 0.82rem;
+        display: inline-flex;
+        justify-content: space-between;
+        gap: 0.4rem;
+      }
+
+      .sa-card-list {
+        display: grid;
+        gap: 0.65rem;
+        max-height: 420px;
+        overflow: auto;
+      }
+
+      .sa-row-card {
+        border: 1px solid #dbeafe;
+        border-radius: 12px;
+        background: #fff;
+        padding: 0.7rem;
+        display: grid;
+        gap: 0.45rem;
+      }
+
+      .sa-row-title {
+        margin: 0;
+        font-size: 0.92rem;
+      }
+
+      .sa-bubbles {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+      }
+
+      .sa-bubble {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        color: #1e3a8a;
+        border-radius: 999px;
+        padding: 0.2rem 0.55rem;
+        font-size: 0.8rem;
+        max-width: 100%;
+      }
+
       #saStatus {
         font-weight: 600;
       }
@@ -177,13 +286,18 @@
       </section>
 
       <section class="panel">
-        <h3>Натоварване / използване</h3>
+        <h3>Общо натоварване</h3>
         <div id="saUsageCards" class="sa-stats"></div>
       </section>
 
       <section class="panel">
         <h3>Регистрации на фирми</h3>
         <div id="saTenants" class="sa-tenants"></div>
+      </section>
+
+      <section class="panel">
+        <h3>Натоварване по фирми</h3>
+        <div id="saTenantUsage" class="sa-tenant-usage-grid"></div>
       </section>
 
       <section class="panel sa-grid-2">
@@ -204,12 +318,14 @@
             </select>
             <button type="submit">Преглед</button>
           </form>
-          <pre id="saTableOutput" class="json-box">Няма данни.</pre>
+          <div id="saTableOutput" class="sa-card-list">
+            <p class="sa-empty">Няма данни.</p>
+          </div>
         </div>
 
         <div>
           <h3>Audit log (последни 200)</h3>
-          <pre id="saLogs" class="json-box">Няма данни.</pre>
+          <div id="saLogs" class="sa-card-list"><p class="sa-empty">Няма данни.</p></div>
         </div>
       </section>
     </main>
@@ -220,6 +336,7 @@
       const refreshBtn = document.getElementById('saRefreshBtn');
       const usageCards = document.getElementById('saUsageCards');
       const tenantsEl = document.getElementById('saTenants');
+      const tenantUsageEl = document.getElementById('saTenantUsage');
       const logsEl = document.getElementById('saLogs');
       const tableForm = document.getElementById('saTableForm');
       const tableNameInput = document.getElementById('saTableName');
@@ -230,6 +347,7 @@
       let refreshTimer = null;
       let apiBaseUrl = localStorage.getItem('apiBaseUrl') || `${window.location.protocol}//${window.location.hostname}:4000`;
       let previousTenantSnapshot = new Map();
+      let tenantNameById = new Map();
       apiUrlInput.value = apiBaseUrl;
 
       function setStatus(text, ok = true) {
@@ -340,6 +458,7 @@
 
       function renderTenants(payload) {
         const tenants = payload.tenants || [];
+        tenantNameById = new Map(tenants.map((tenant) => [String(tenant.id), tenant.name || '—']));
         if (!tenants.length) {
           tenantsEl.innerHTML = '<div class="sa-tenant"><small>Няма регистрирани фирми.</small></div>';
           return;
@@ -364,7 +483,6 @@
                   <div>
                     <strong>${escapeHtml(tenant.name || 'Без име')}</strong>
                     <div class="sa-tenant-meta">
-                      <span><strong>Фирма ID:</strong> ${escapeHtml(tenant.id)}</span>
                       <span><strong>ЕИК:</strong> ${escapeHtml(eik)}</span>
                       <span><strong>Собственик:</strong> ${escapeHtml(ownerName)}</span>
                       <span><strong>Email:</strong> ${escapeHtml(ownerEmail)}</span>
@@ -385,8 +503,148 @@
         previousTenantSnapshot = nextSnapshot;
       }
 
+      function renderTenantUsage(payload) {
+        const stats = payload.tenantUsage || [];
+        if (!stats.length) {
+          tenantUsageEl.innerHTML = '<p class="sa-empty">Няма данни за фирми.</p>';
+          return;
+        }
+
+        tenantUsageEl.innerHTML = stats
+          .map(
+            (item) => `
+              <article class="sa-usage-card">
+                <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:flex-start;">
+                  <strong>${escapeHtml(item.name || 'Без име')}</strong>
+                  ${getStatusBadge(item.status)}
+                </div>
+                <div class="sa-usage-stats">
+                  <span class="sa-usage-pill"><span>Потребители</span><strong>${escapeHtml(item.usersCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Служители</span><strong>${escapeHtml(item.employeesCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Отдели</span><strong>${escapeHtml(item.departmentsCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Графици</span><strong>${escapeHtml(item.schedulesCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Записи</span><strong>${escapeHtml(item.scheduleEntriesCount ?? 0)}</strong></span>
+                </div>
+              </article>
+            `,
+          )
+          .join('');
+      }
+
+      function renderBubbles(row, hiddenKeys = new Set()) {
+        const bubbles = Object.entries(row || {})
+          .filter(([key]) => !hiddenKeys.has(key))
+          .map(([key, value]) => `<span class="sa-bubble"><strong>${escapeHtml(prettifyColumnName(key))}:</strong> ${escapeHtml(formatTableValue(key, value))}</span>`)
+          .join('');
+        return bubbles || '<span class="sa-bubble">Няма детайли</span>';
+      }
+
       function renderLogs(payload) {
-        logsEl.textContent = JSON.stringify(payload.logs || [], null, 2);
+        const logs = payload.logs || [];
+        if (!logs.length) {
+          logsEl.innerHTML = '<p class="sa-empty">Няма audit записи.</p>';
+          return;
+        }
+
+        logsEl.innerHTML = logs
+          .map(
+            (log) => `
+              <article class="sa-row-card">
+                <p class="sa-row-title"><strong>${escapeHtml(log.action || 'audit')}</strong> · ${escapeHtml(log.entity || 'entity')} · ${escapeHtml(fmtDate(log.createdAt))}</p>
+                <div class="sa-bubbles">${renderBubbles(log, new Set(['id', 'action', 'entity', 'createdAt']))}</div>
+              </article>
+            `,
+          )
+          .join('');
+      }
+
+      function prettifyColumnName(column) {
+        const labels = {
+          tenant_id: 'Фирма',
+          tenantid: 'Фирма',
+          company_id: 'Фирма',
+          companyid: 'Фирма',
+          created_at: 'Създадена',
+          updated_at: 'Обновена',
+          approved_at: 'Одобрена',
+          deleted_at: 'Изтрита',
+          full_name: 'Име',
+          first_name: 'Име',
+          last_name: 'Фамилия',
+          phone_number: 'Телефон',
+          email_address: 'Имейл',
+          user_id: 'Потребител',
+          role_id: 'Роля',
+          schedule_id: 'График',
+          department_id: 'Отдел',
+          shift_template_id: 'Шаблон смяна',
+        };
+
+        const key = String(column || '')
+          .replace(/([a-z])([A-Z])/g, '$1_$2')
+          .toLowerCase();
+        if (labels[key]) {
+          return labels[key];
+        }
+
+        const normalized = key.replaceAll('_', ' ').trim();
+        return normalized ? normalized[0].toUpperCase() + normalized.slice(1) : String(column || '');
+      }
+
+      function isTenantKey(key) {
+        const normalized = String(key || '')
+          .replace(/([a-z])([A-Z])/g, '$1_$2')
+          .toLowerCase();
+        return normalized === 'tenant_id' || normalized === 'tenantid' || normalized === 'company_id' || normalized === 'companyid';
+      }
+
+      function formatTableValue(key, value) {
+        if (value === null || value === undefined || value === '') {
+          return '—';
+        }
+
+        if (isTenantKey(key)) {
+          return tenantNameById.get(String(value)) || `Непозната фирма (${value})`;
+        }
+
+        if (typeof value === 'boolean') {
+          return value ? 'Да' : 'Не';
+        }
+
+        if (typeof value === 'object') {
+          return JSON.stringify(value);
+        }
+
+        const keyName = String(key || '').toLowerCase();
+        if (keyName.includes('date') || keyName.endsWith('at')) {
+          return fmtDate(value);
+        }
+
+        return String(value);
+      }
+
+      function renderTableRows(tableName, rows) {
+        if (!rows.length) {
+          tableOutput.innerHTML = '<p class="sa-empty">Няма данни в избраната таблица.</p>';
+          return;
+        }
+
+        const hiddenKeys = new Set();
+        if (tableName === 'tenants') {
+          hiddenKeys.add('id');
+        }
+
+        tableOutput.innerHTML = rows
+          .map((row, index) => {
+            const title = row.name || row.title || row.email || `Ред #${index + 1}`;
+            return `
+              <article class="sa-row-card">
+                <p class="sa-row-title"><strong>${escapeHtml(title)}</strong></p>
+                <div class="sa-bubbles">${renderBubbles(row, hiddenKeys)}</div>
+              </article>
+            `;
+          })
+          .join('');
       }
 
       async function refreshOverview(isAuto = false) {
@@ -394,6 +652,7 @@
           const payload = await apiRequest('/api/platform/super-admin/overview');
           renderUsage(payload);
           renderTenants(payload);
+          renderTenantUsage(payload);
           renderLogs(payload);
           setStatus(`${isAuto ? 'Live' : 'Ръчно'} обновяване: ${new Date().toLocaleTimeString('bg-BG')}`);
         } catch (error) {
@@ -432,8 +691,9 @@
       tableForm.addEventListener('submit', async (event) => {
         event.preventDefault();
         try {
-          const payload = await apiRequest(`/api/platform/super-admin/tables/${encodeURIComponent(tableNameInput.value)}`);
-          tableOutput.textContent = JSON.stringify(payload.rows || [], null, 2);
+          const tableName = tableNameInput.value;
+          const payload = await apiRequest(`/api/platform/super-admin/tables/${encodeURIComponent(tableName)}`);
+          renderTableRows(tableName, payload.rows || []);
           setStatus('Таблицата е заредена.');
         } catch (error) {
           setStatus(error.message, false);
