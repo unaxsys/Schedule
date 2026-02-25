@@ -1,19 +1,31 @@
-// welcome.js (Illustrated SaaS WOW welcome + hard auto-hide)
+// welcome.js (FIXED: no infinite loop, overlay covers UI; WOW illustrated)
 (() => {
   const SHOW_MS = 5000;          // точно 5 секунди
   const ANIM_MS = 5200;          // прогрес анимация
-  const HARD_FAILSAFE_MS = 8000; // ако нещо се обърка - маха до 8 сек
+  const HARD_FAILSAFE_MS = 8000; // fallback ако нещо се обърка
 
   function qs(sel) { return document.querySelector(sel); }
   function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
   function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
 
-  function isVisible(el) {
-    if (!el) return false;
-    const s = window.getComputedStyle(el);
-    if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return false;
-    if (el.classList.contains('hidden')) return false;
-    return true;
+  function hasCurrentUser() {
+    const raw = localStorage.getItem('currentUser');
+    if (!raw) return false;
+    try {
+      const u = JSON.parse(raw);
+      return !!(u && (u.email || u.id || u.username));
+    } catch {
+      return true; // ако е string, пак приемаме че има сесия
+    }
+  }
+
+  function isAuthed() {
+    const preAuth = qs('#preAuthScreen');
+    // ако preAuth е скрит => автнат
+    if (preAuth && preAuth.classList.contains('hidden')) return true;
+
+    // fallback => по localStorage
+    return hasCurrentUser();
   }
 
   function ensureOverlay() {
@@ -54,7 +66,6 @@
         </div>
 
         <div class="ws-hero">
-          <!-- LEFT -->
           <div class="ws-left">
             <h1 class="ws-h1" id="wsH1">Добре дошъл 👋</h1>
             <p class="ws-sub">
@@ -108,7 +119,6 @@
             </div>
           </div>
 
-          <!-- RIGHT (Illustration) -->
           <div class="ws-right" aria-hidden="true">
             <div class="ws-desk">
               <div class="ws-card card-left">
@@ -201,7 +211,7 @@
   let hardFailsafe = null;
   let running = false;
 
-  function showOverlay(appShell) {
+  function showOverlay() {
     if (running) return;
     running = true;
 
@@ -211,44 +221,48 @@
     el.classList.remove('hidden');
     document.documentElement.classList.add('welcome-lock');
 
-    if (appShell) appShell.classList.add('welcome-app-hidden');
-
     runProgress();
 
-    // controls
+    const hideNow = () => hideOverlay();
+
     const skipBtn = qs('#wsSkipBtn');
     const getStarted = qs('#wsGetStarted');
     const learnMore = qs('#wsLearnMore');
 
-    const hideNow = () => hideOverlay(appShell);
-
     if (skipBtn) skipBtn.onclick = hideNow;
     if (getStarted) getStarted.onclick = hideNow;
     if (learnMore) learnMore.onclick = () => {
-      alert('Зареждаме: API връзка, профил, отдели, шаблони смени и календар. След малко влизаш в приложението.');
+      // НЕ ползваме alert (може да дразни), показваме кратък toast-style box:
+      showInfoToast('Зареждаме: API връзка, профил, отдели, шаблони смени и календар. След малко влизаш в приложението.');
     };
 
     window.addEventListener('keydown', onKeyDown);
 
-    // ✅ ГАРАНТИРАНО махане след 5 сек
     hideTimer = setTimeout(hideNow, SHOW_MS);
-
-    // ✅ failsafe
     hardFailsafe = setTimeout(hideNow, HARD_FAILSAFE_MS);
   }
 
-  function onKeyDown(e) {
-    if (e.key === 'Escape') {
-      const appShell = qs('#appShell');
-      hideOverlay(appShell);
+  function showInfoToast(text) {
+    let box = qs('#wsToast');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'wsToast';
+      box.className = 'ws-toast';
+      document.body.appendChild(box);
     }
+    box.textContent = text;
+    box.classList.add('show');
+    setTimeout(() => box.classList.remove('show'), 2200);
   }
 
-  function hideOverlay(appShell) {
+  function onKeyDown(e) {
+    if (e.key === 'Escape') hideOverlay();
+  }
+
+  function hideOverlay() {
     const el = ensureOverlay();
     el.classList.add('hidden');
     document.documentElement.classList.remove('welcome-lock');
-    if (appShell) appShell.classList.remove('welcome-app-hidden');
 
     if (hideTimer) clearTimeout(hideTimer);
     if (hardFailsafe) clearTimeout(hardFailsafe);
@@ -284,27 +298,31 @@
 
   function observeAuthGate() {
     const preAuth = qs('#preAuthScreen');
-    const appShell = qs('#appShell');
-    if (!appShell) return;
 
     let lastAuthed = false;
 
     const check = () => {
-      const authed = isVisible(appShell) && (preAuth ? !isVisible(preAuth) : true);
+      const authed = isAuthed();
 
-      if (authed && !lastAuthed) showOverlay(appShell);
-      if (!authed && lastAuthed) hideOverlay(appShell);
+      // показваме welcome само когато преминем от NOT authed -> authed
+      if (authed && !lastAuthed) showOverlay();
+
+      // ако logout – махаме overlay (ако случайно е останал)
+      if (!authed && lastAuthed) hideOverlay();
 
       lastAuthed = authed;
     };
 
     check();
 
-    const mo = new MutationObserver(check);
-    mo.observe(appShell, { attributes: true, attributeFilter: ['class', 'style'] });
-    if (preAuth) mo.observe(preAuth, { attributes: true, attributeFilter: ['class', 'style'] });
+    // наблюдаваме само preAuthScreen (не appShell), за да няма loop
+    if (preAuth) {
+      const mo = new MutationObserver(check);
+      mo.observe(preAuth, { attributes: true, attributeFilter: ['class', 'style'] });
+    }
 
-    setInterval(check, 900);
+    // fallback poll
+    setInterval(check, 1000);
   }
 
   window.addEventListener('DOMContentLoaded', () => {
