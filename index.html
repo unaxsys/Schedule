@@ -43,14 +43,18 @@
 
           <div class="panel" style="margin: 12px 0;">
             <h3>Графици</h3>
-            <div class="row">
-              <label for="scheduleFilterDepartmentSelect">Отдел (преглед)</label>
-              <select id="scheduleFilterDepartmentSelect"></select>
-              <label for="scheduleDepartmentSelect">Отдел (създаване)</label>
-              <select id="scheduleDepartmentSelect"></select>
-              <label for="scheduleNameInput">Име на график</label>
-              <input id="scheduleNameInput" type="text" placeholder="График Общ – 2026-02" />
-              <button id="createScheduleBtn" type="button">Създай график</button>
+            <div class="schedule-controls">
+              <div class="schedule-controls-row schedule-controls-row--single">
+                <label for="scheduleFilterDepartmentSelect">Отдел (преглед)</label>
+                <select id="scheduleFilterDepartmentSelect"></select>
+              </div>
+              <div class="schedule-controls-row">
+                <label for="scheduleDepartmentSelect">Отдел (създаване)</label>
+                <select id="scheduleDepartmentSelect"></select>
+                <label for="scheduleNameInput">Име на график</label>
+                <input id="scheduleNameInput" type="text" placeholder="График Общ – 2026-02" />
+                <button id="createScheduleBtn" type="button">Създай график</button>
+              </div>
             </div>
             <div>
               <strong>Покажи графици за месеца</strong>
