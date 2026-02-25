@@ -89,7 +89,14 @@
             <label class="field-inline">Начална дата <input id="startDateInput" type="date" required /></label>
             <label class="field-inline">Последен работен ден <input id="endDateInput" type="date" /></label>
             <input id="vacationAllowanceInput" type="number" min="0" value="20" required placeholder="Годишен отпуск" />
-            <label class="field-inline field-checkbox"><input id="telkInput" type="checkbox" /> ТЕЛК (+6 дни отпуск)</label>
+            <label class="field-inline field-checkbox">
+              <input id="telkInput" type="checkbox" />
+              <span>ТЕЛК (+6 дни отпуск)</span>
+              <span class="hover-tooltip" tabindex="0" aria-label="Инфо за ТЕЛК">
+                ?
+                <span class="hover-tooltip__text">с 50% и над 50%</span>
+              </span>
+            </label>
             <label class="field-inline field-checkbox">
               <input id="youngWorkerInput" type="checkbox" />
               <span>Служители от 16 - 18 г. (+6 дни отпуск)</span>
@@ -307,7 +314,14 @@
           <label class="field-inline">Начална дата <input id="editStartDateInput" type="date" required /></label>
           <label class="field-inline">Последен работен ден <input id="editEndDateInput" type="date" /></label>
           <input id="editVacationAllowanceInput" type="number" min="0" required placeholder="Годишен отпуск" />
-          <label class="field-inline field-checkbox"><input id="editTelkInput" type="checkbox" /> ТЕЛК (+6 дни отпуск)</label>
+          <label class="field-inline field-checkbox">
+            <input id="editTelkInput" type="checkbox" />
+            <span>ТЕЛК (+6 дни отпуск)</span>
+            <span class="hover-tooltip" tabindex="0" aria-label="Инфо за ТЕЛК">
+              ?
+              <span class="hover-tooltip__text">с 50% и над 50%</span>
+            </span>
+          </label>
           <label class="field-inline field-checkbox">
             <input id="editYoungWorkerInput" type="checkbox" />
             <span>Служители от 16 - 18 г. (+6 дни отпуск)</span>
