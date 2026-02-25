@@ -64,6 +64,7 @@ const egnInput = document.getElementById('egnInput');
 const startDateInput = document.getElementById('startDateInput');
 const endDateInput = document.getElementById('endDateInput');
 const vacationAllowanceInput = document.getElementById('vacationAllowanceInput');
+const telkInput = document.getElementById('telkInput');
 const employeeList = document.getElementById('employeeList');
 const scheduleTable = document.getElementById('scheduleTable');
 const storageStatus = document.getElementById('storageStatus');
@@ -115,6 +116,7 @@ const editEgnInput = document.getElementById('editEgnInput');
 const editStartDateInput = document.getElementById('editStartDateInput');
 const editEndDateInput = document.getElementById('editEndDateInput');
 const editVacationAllowanceInput = document.getElementById('editVacationAllowanceInput');
+const editTelkInput = document.getElementById('editTelkInput');
 const cancelEmployeeEditBtn = document.getElementById('cancelEmployeeEditBtn');
 
 init();
@@ -125,7 +127,7 @@ async function init() {
   const loadedSchedule = loadScheduleState();
   state.month = loadedSchedule.month || todayMonth();
   state.schedule = loadedSchedule.schedule || {};
-  state.employees = loadEmployees();
+  state.employees = loadEmployees().map(normalizeEmployeeVacationData);
   state.apiBaseUrl = detectApiBaseUrl();
 
   weekendRateInput.value = String(state.rates.weekend);
@@ -514,6 +516,9 @@ employeeForm.addEventListener('submit', async (event) => {
   const middleName = (middleNameInput?.value || '').trim();
   const lastName = (lastNameInput?.value || '').trim();
 
+  const baseVacationAllowance = Number(vacationAllowanceInput.value);
+  const hasTelk = Boolean(telkInput?.checked);
+
   const employee = {
     id: createEmployeeId(),
     name: `${firstName} ${middleName} ${lastName}`.trim(),
@@ -523,10 +528,12 @@ employeeForm.addEventListener('submit', async (event) => {
     egn: (egnInput?.value || '').trim(),
     startDate: (startDateInput?.value || '').trim(),
     endDate: (endDateInput?.value || '').trim() || null,
-    vacationAllowance: Number(vacationAllowanceInput.value)
+    vacationAllowance: calculateVacationAllowance(baseVacationAllowance, hasTelk),
+    telk: hasTelk,
+    baseVacationAllowance
   };
 
-  if (!firstName || !middleName || !lastName || !employee.position || !/^\d{10}$/.test(employee.egn) || !isValidEmploymentDates(employee.startDate, employee.endDate)) {
+  if (!firstName || !middleName || !lastName || !employee.position || !/^\d{10}$/.test(employee.egn) || !Number.isFinite(baseVacationAllowance) || baseVacationAllowance < 0 || !isValidEmploymentDates(employee.startDate, employee.endDate)) {
     return;
   }
 
@@ -534,7 +541,7 @@ employeeForm.addEventListener('submit', async (event) => {
   persistEmployeesLocal();
   const persistedEmployee = await saveEmployeeBackend(employee);
   if (persistedEmployee && persistedEmployee.id !== employee.id) {
-    state.employees = state.employees.map((entry) => (entry.id === employee.id ? persistedEmployee : entry));
+    state.employees = state.employees.map((entry) => (entry.id === employee.id ? normalizeEmployeeVacationData(persistedEmployee) : entry));
     persistEmployeesLocal();
   }
 
@@ -544,6 +551,9 @@ employeeForm.addEventListener('submit', async (event) => {
     departmentInput.value = '';
   }
   vacationAllowanceInput.value = 20;
+  if (telkInput) {
+    telkInput.checked = false;
+  }
   if (startDateInput) {
     startDateInput.value = '';
   }
@@ -770,6 +780,34 @@ function createEmployeeId() {
   return `emp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+const TELK_EXTRA_VACATION_DAYS = 6;
+
+function calculateVacationAllowance(baseVacationAllowance, hasTelk) {
+  const normalizedBase = Number(baseVacationAllowance);
+  if (!Number.isFinite(normalizedBase)) {
+    return 0;
+  }
+  return normalizedBase + (hasTelk ? TELK_EXTRA_VACATION_DAYS : 0);
+}
+
+function resolveBaseVacationAllowance(employee) {
+  const explicitBase = Number(employee?.baseVacationAllowance);
+  if (Number.isFinite(explicitBase) && explicitBase >= 0) {
+    return explicitBase;
+  }
+
+  const total = Number(employee?.vacationAllowance);
+  if (!Number.isFinite(total)) {
+    return 20;
+  }
+
+  if (employee?.telk) {
+    return Math.max(0, total - TELK_EXTRA_VACATION_DAYS);
+  }
+
+  return total;
+}
+
 function renderAll() {
   renderEmployees();
   renderSchedule();
@@ -853,13 +891,15 @@ function attachEmployeeEditModalControls() {
     const lastName = editLastNameInput.value.trim();
     const position = editPositionInput.value.trim();
     const egn = editEgnInput.value.trim();
-    const vacationAllowance = Number(editVacationAllowanceInput.value);
+    const baseVacationAllowance = Number(editVacationAllowanceInput.value);
+    const hasTelk = Boolean(editTelkInput?.checked);
+    const vacationAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk);
     const startDate = (editStartDateInput?.value || '').trim();
     const endDate = (editEndDateInput?.value || '').trim() || null;
     const departmentId = editDepartmentInput.value || null;
     const selectedDepartment = departmentId ? state.departments.find((dep) => dep.id === departmentId) : null;
 
-    if (!firstName || !middleName || !lastName || !position || !/^\d{10}$/.test(egn) || !Number.isFinite(vacationAllowance) || vacationAllowance < 0 || !isValidEmploymentDates(startDate, endDate)) {
+    if (!firstName || !middleName || !lastName || !position || !/^\d{10}$/.test(egn) || !Number.isFinite(baseVacationAllowance) || baseVacationAllowance < 0 || !isValidEmploymentDates(startDate, endDate)) {
       setStatus('Невалидни данни за редакция на служител.', false);
       return;
     }
@@ -870,6 +910,8 @@ function attachEmployeeEditModalControls() {
         position,
         egn,
         vacationAllowance,
+        telk: hasTelk,
+        baseVacationAllowance,
         startDate,
         endDate
       });
@@ -882,7 +924,9 @@ function attachEmployeeEditModalControls() {
             departmentId,
             department: selectedDepartment ? selectedDepartment.name : 'Без отдел',
             startDate,
-            endDate
+            endDate,
+            telk: hasTelk,
+            baseVacationAllowance
           }
           : entry));
 
@@ -922,7 +966,10 @@ function openEmployeeEditModal(employee) {
   editEgnInput.value = employee.egn || '';
   editStartDateInput.value = employee.startDate || '';
   editEndDateInput.value = employee.endDate || '';
-  editVacationAllowanceInput.value = String(employee.vacationAllowance ?? 20);
+  editVacationAllowanceInput.value = String(resolveBaseVacationAllowance(employee));
+  if (editTelkInput) {
+    editTelkInput.checked = Boolean(employee.telk);
+  }
 
   editDepartmentInput.innerHTML = '';
   const emptyOption = document.createElement('option');
@@ -964,7 +1011,7 @@ function renderEmployees() {
 
     const details = document.createElement('div');
     const employmentRange = formatEmploymentRange(employee);
-    details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Период: ${employmentRange}<br>Полагаем отпуск: ${employee.vacationAllowance} дни`;
+    details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Период: ${employmentRange}<br>Полагаем отпуск: ${employee.vacationAllowance} дни${employee.telk ? ' (ТЕЛК)' : ''}`;
 
     const employeeDepartmentSelect = document.createElement('select');
     const emptyOption = document.createElement('option');
@@ -1015,13 +1062,15 @@ function renderEmployees() {
         position: employee.position,
         egn: employee.egn,
         vacationAllowance: employee.vacationAllowance,
+        telk: Boolean(employee.telk),
+        baseVacationAllowance: resolveBaseVacationAllowance(employee),
         startDate: employee.startDate || getMonthStartDate(state.month || todayMonth()),
         endDate: releaseDate
       });
 
       if (updatedEmployee) {
         state.employees = state.employees.map((entry) => (entry.id === employee.id
-          ? { ...entry, ...updatedEmployee }
+          ? normalizeEmployeeVacationData({ ...entry, ...updatedEmployee })
           : entry));
         persistEmployeesLocal();
         await deleteEmployeeBackend(employee.id, releaseDate);
@@ -1797,7 +1846,7 @@ async function refreshMonthlyView() {
   const allowedIds = new Set(allowedEmployees.map((employee) => employee.id));
 
   if (!state.selectedScheduleIds.length) {
-    state.employees = allowedEmployees;
+    state.employees = allowedEmployees.map(normalizeEmployeeVacationData);
     state.scheduleEntriesById = {};
     return;
   }
@@ -1832,7 +1881,7 @@ async function refreshMonthlyView() {
   });
 
   mergedEmployees.sort((a, b) => a.name.localeCompare(b.name, 'bg'));
-  state.employees = mergedEmployees;
+  state.employees = mergedEmployees.map(normalizeEmployeeVacationData);
   state.scheduleEntriesById = mappedEntries;
 }
 
@@ -1884,7 +1933,9 @@ async function saveEmployeeBackend(employee) {
         egn: employee.egn,
         startDate: employee.startDate,
         endDate: employee.endDate,
-        vacationAllowance: employee.vacationAllowance
+        vacationAllowance: employee.vacationAllowance,
+        telk: Boolean(employee.telk),
+        baseVacationAllowance: resolveBaseVacationAllowance(employee)
       })
     });
 
@@ -2048,6 +2099,15 @@ function getVacationUsedForYear(employeeId, year) {
     used += 1;
   });
   return used;
+}
+
+
+function normalizeEmployeeVacationData(employee) {
+  const normalized = employee ? { ...employee } : {};
+  normalized.telk = Boolean(normalized.telk);
+  normalized.baseVacationAllowance = resolveBaseVacationAllowance(normalized);
+  normalized.vacationAllowance = calculateVacationAllowance(normalized.baseVacationAllowance, normalized.telk);
+  return normalized;
 }
 
 function scheduleKey(employeeId, month, day) {
