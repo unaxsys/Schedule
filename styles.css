@@ -153,6 +153,27 @@ button:hover {
   justify-content: space-between;
   align-items: center;
 }
+.department-row-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+}
+.department-header {
+  cursor: pointer;
+}
+.department-members {
+  display: none;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 0.45rem;
+}
+.department-members.expanded {
+  display: block;
+}
+.department-member-item {
+  font-size: 0.9rem;
+  padding: 0.2rem 0;
+}
 .legend {
   display: flex;
   gap: 0.8rem;
