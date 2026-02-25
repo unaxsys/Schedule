@@ -171,7 +171,7 @@ function validateEmployeeInput(data = {}) {
   const telk = Boolean(data.telk);
   const youngWorkerBenefit = Boolean(data.youngWorkerBenefit ?? data.young_worker_benefit);
   const baseVacationAllowance = Number(rawVacationAllowance);
-  const vacationAllowance = baseVacationAllowance + (telk ? 6 : 0) + (youngWorkerBenefit ? 6 : 0);
+  const vacationAllowance = baseVacationAllowance + (telk ? 5 : 0) + (youngWorkerBenefit ? 6 : 0);
   if (!Number.isFinite(baseVacationAllowance) || baseVacationAllowance < 0) {
     return {
       valid: false,
