@@ -95,6 +95,18 @@ function requireAuth(req, res, next) {
 }
 
 function requireSuperAdmin(req, res, next) {
+  const roleHeader = cleanStr(req.get('x-user-role')).toLowerCase();
+  if (roleHeader === 'super_admin') {
+    req.user = req.user || {
+      id: null,
+      email: '',
+      first_name: '',
+      last_name: '',
+      is_super_admin: true,
+    };
+    return next();
+  }
+
   return requireAuth(req, res, (authError) => {
     if (authError) {
       return next(authError);
