@@ -708,21 +708,21 @@ function renderEmployees() {
     const details = document.createElement('div');
     details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Полагаем отпуск: ${employee.vacationAllowance} дни`;
 
-    const departmentSelect = document.createElement('select');
+    const employeeDepartmentSelect = document.createElement('select');
     const emptyOption = document.createElement('option');
     emptyOption.value = '';
     emptyOption.textContent = 'Без отдел';
-    departmentSelect.appendChild(emptyOption);
+    employeeDepartmentSelect.appendChild(emptyOption);
     state.departments.forEach((dep) => {
       const option = document.createElement('option');
       option.value = dep.id;
       option.textContent = dep.name;
-      departmentSelect.appendChild(option);
+      employeeDepartmentSelect.appendChild(option);
     });
-    departmentSelect.value = employee.departmentId || '';
-    departmentSelect.addEventListener('change', async () => {
+    employeeDepartmentSelect.value = employee.departmentId || '';
+    employeeDepartmentSelect.addEventListener('change', async () => {
       try {
-        await attachEmployeeToDepartment(employee.id, departmentSelect.value || null);
+        await attachEmployeeToDepartment(employee.id, employeeDepartmentSelect.value || null);
         await refreshMonthlyView();
         renderAll();
       } catch (error) {
@@ -731,28 +731,6 @@ function renderEmployees() {
     });
 
     const actions = document.createElement('div');
-
-    const departmentSelect = document.createElement('select');
-    const emptyOption = document.createElement('option');
-    emptyOption.value = '';
-    emptyOption.textContent = 'Без отдел';
-    departmentSelect.appendChild(emptyOption);
-    state.departments.forEach((dep) => {
-      const option = document.createElement('option');
-      option.value = dep.id;
-      option.textContent = dep.name;
-      departmentSelect.appendChild(option);
-    });
-    departmentSelect.value = employee.departmentId || '';
-    departmentSelect.addEventListener('change', async () => {
-      try {
-        await attachEmployeeToDepartment(employee.id, departmentSelect.value || null);
-        await refreshMonthlyView();
-        renderAll();
-      } catch (error) {
-        setStatus(error.message, false);
-      }
-    });
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
@@ -764,7 +742,7 @@ function renderEmployees() {
       renderAll();
     });
 
-    actions.append(departmentSelect, removeBtn);
+    actions.append(employeeDepartmentSelect, removeBtn);
     item.append(details, actions);
     employeeList.appendChild(item);
   });
