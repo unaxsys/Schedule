@@ -93,6 +93,26 @@ header p {
 .actions-row {
   margin-top: 0.7rem;
 }
+
+.schedule-controls {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.schedule-controls-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.schedule-controls-row--single {
+  margin-bottom: 0.15rem;
+}
+
+.schedule-controls-row label {
+  font-weight: 600;
+}
 .lock-status {
   font-weight: 700;
 }
