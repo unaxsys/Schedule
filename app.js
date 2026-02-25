@@ -2060,16 +2060,15 @@ async function saveEmployeeBackend(employee) {
   }
 }
 
-async function releaseEmployeeBackend(employeeId, endDate) {
+async function deleteEmployeeBackend(employeeId) {
   if (!state.backendAvailable) {
     throw new Error('Освобождаването е достъпно само с активен API бекенд.');
   }
 
   try {
-    const response = await apiFetch(`/api/employees/${employeeId}/release`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ end_date: endDate || null })
+    const response = await apiFetch(`/api/employees/${employeeId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' }
     });
 
     if (!response.ok) {
