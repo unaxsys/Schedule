@@ -86,6 +86,8 @@
             </select>
             <input id="positionInput" required placeholder="Длъжност" />
             <input id="egnInput" required maxlength="10" pattern="\d{10}" placeholder="ЕГН (10 цифри)" />
+            <label class="field-inline">Начална дата <input id="startDateInput" type="date" required /></label>
+            <label class="field-inline">Последен работен ден <input id="endDateInput" type="date" /></label>
             <input id="vacationAllowanceInput" type="number" min="0" value="20" required placeholder="Годишен отпуск" />
             <button type="submit" class="btn-add">Добави служител</button>
           </form>
@@ -193,7 +195,8 @@
                 <li>Задължителни полета: три имена, длъжност, ЕГН (10 цифри), годишен отпуск.</li>
                 <li>Всеки служител може да бъде асоцииран към отдел от падащото меню.</li>
                 <li>Може да редактирате служител през бутона <strong>„Редакция“</strong>.</li>
-                <li>При изтриване служителят се премахва и от текущия график.</li>
+                <li>Всеки служител има <strong>начална дата</strong> и <strong>последен работен ден</strong> (по избор).</li>
+                <li>Клетките извън периода на назначение се визуализират в сиво и не влизат в изчисленията.</li>
               </ul>
             </article>
 
@@ -292,6 +295,8 @@
           </select>
           <input id="editPositionInput" required placeholder="Длъжност" />
           <input id="editEgnInput" required maxlength="10" pattern="\d{10}" placeholder="ЕГН (10 цифри)" />
+          <label class="field-inline">Начална дата <input id="editStartDateInput" type="date" required /></label>
+          <label class="field-inline">Последен работен ден <input id="editEndDateInput" type="date" /></label>
           <input id="editVacationAllowanceInput" type="number" min="0" required placeholder="Годишен отпуск" />
           <div class="modal-actions">
             <button type="submit">Запази</button>

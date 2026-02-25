@@ -516,3 +516,20 @@ select.shift-select {
     grid-template-columns: 1fr;
   }
 }
+
+
+.field-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.9rem;
+}
+
+.day-outside-employment {
+  background: #e5e7eb !important;
+}
+
+.shift-select--inactive {
+  background: #d1d5db;
+  color: #6b7280;
+}
