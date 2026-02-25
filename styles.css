@@ -1,6 +1,12 @@
 :root {
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 body {
   margin: 0;
   background: #f1f5f9;
@@ -308,7 +314,9 @@ select.shift-select {
 }
 
 .modal-card {
-  width: min(560px, 100%);
+  width: min(720px, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
   background: #fff;
   border-radius: 12px;
   box-shadow: 0 20px 45px rgba(15, 23, 42, 0.28);
@@ -322,12 +330,17 @@ select.shift-select {
 .employee-edit-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.6rem;
+  gap: 0.7rem;
+}
+
+.employee-edit-form > * {
+  min-width: 0;
 }
 
 .employee-edit-form input,
 .employee-edit-form select {
   width: 100%;
+  max-width: 100%;
 }
 
 .employee-edit-form .modal-actions {
@@ -338,7 +351,18 @@ select.shift-select {
   margin-top: 0.3rem;
 }
 
+@media (max-width: 900px) {
+  .modal-card {
+    width: min(620px, calc(100vw - 1.5rem));
+  }
+}
+
 @media (max-width: 720px) {
+  .modal-card {
+    width: calc(100vw - 1rem);
+    padding: 0.85rem;
+  }
+
   .employee-edit-form {
     grid-template-columns: 1fr;
   }
