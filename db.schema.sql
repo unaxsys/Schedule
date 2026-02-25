@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS shift_templates (
 CREATE TABLE IF NOT EXISTS tenants (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
+  eik TEXT NOT NULL DEFAULT '',
+  owner_phone TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','disabled')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   approved_at TIMESTAMPTZ NULL
