@@ -38,6 +38,7 @@ const SUMMARY_COLUMNS = [
 const state = {
   month: todayMonth(),
   employees: [],
+  scheduleEmployees: [],
   schedule: {},
   scheduleEntriesById: {},
   schedules: [],
@@ -49,6 +50,7 @@ const state = {
   hasManualScheduleSelection: false,
   backendAvailable: false,
   apiBaseUrl: '',
+  userRole: loadUserRole(),
   rates: loadRates(),
   shiftTemplates: loadShiftTemplates(),
   lockedMonths: loadLockedMonths(),
@@ -75,6 +77,7 @@ const scheduleTable = document.getElementById('scheduleTable');
 const storageStatus = document.getElementById('storageStatus');
 const apiUrlInput = document.getElementById('apiUrlInput');
 const saveApiUrlBtn = document.getElementById('saveApiUrlBtn');
+const userRoleSelect = document.getElementById('userRoleSelect');
 const tabButtons = document.querySelectorAll('.tab-btn');
 const tabPanels = document.querySelectorAll('.tab-panel');
 const monthInfo = document.getElementById('monthInfo');
@@ -140,8 +143,12 @@ async function init() {
   holidayRateInput.value = String(state.rates.holiday);
   sirvPeriodInput.value = String(state.sirvPeriodMonths);
   apiUrlInput.value = state.apiBaseUrl;
+  if (userRoleSelect) {
+    userRoleSelect.value = state.userRole;
+  }
 
   attachApiControls();
+  attachRoleControls();
   attachTabs();
   attachRatesForm();
   attachVacationForm();
@@ -161,6 +168,40 @@ async function init() {
   monthPicker.value = state.month;
   await refreshMonthlyView();
   renderAll();
+}
+
+
+function normalizeUserRole(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['user', 'manager', 'admin'].includes(normalized) ? normalized : 'user';
+}
+
+function getRoleLabel(role) {
+  if (role === 'admin') {
+    return 'Администратор';
+  }
+  if (role === 'manager') {
+    return 'Мениджър';
+  }
+  return 'Потребител';
+}
+
+function canDeleteEmployees() {
+  return state.userRole === 'admin';
+}
+
+function attachRoleControls() {
+  if (!userRoleSelect) {
+    return;
+  }
+
+  userRoleSelect.value = state.userRole;
+  userRoleSelect.addEventListener('change', () => {
+    state.userRole = normalizeUserRole(userRoleSelect.value);
+    saveUserRole();
+    renderEmployees();
+    setStatus(`Активна роля: ${getRoleLabel(state.userRole)}.`, true);
+  });
 }
 
 function attachSettingsControls() {
@@ -1030,6 +1071,13 @@ function renderEmployees() {
     return;
   }
 
+  if (!canDeleteEmployees()) {
+    const roleNotice = document.createElement('small');
+    roleNotice.className = 'role-permission-note';
+    roleNotice.textContent = `Изтриването на служител е достъпно само за Администратор. Активна роля: ${getRoleLabel(state.userRole)}.`;
+    employeeList.appendChild(roleNotice);
+  }
+
   state.employees.forEach((employee) => {
     const item = document.createElement('div');
     item.className = 'employee-item employee-item--top';
@@ -1071,23 +1119,50 @@ function renderEmployees() {
       openEmployeeEditModal(employee);
     });
 
-    const removeBtn = document.createElement('button');
-    removeBtn.type = 'button';
-    removeBtn.textContent = 'Освободи';
-    removeBtn.className = 'btn-delete';
-    removeBtn.addEventListener('click', async () => {
+    const releaseBtn = document.createElement('button');
+    releaseBtn.type = 'button';
+    releaseBtn.textContent = 'Освободи';
+    releaseBtn.className = 'btn-delete';
+    releaseBtn.addEventListener('click', async () => {
       const monthEnd = getMonthEndDate(state.month || todayMonth());
       const releaseDate = promptLastWorkingDate(employee, monthEnd);
       if (!releaseDate) {
         return;
       }
 
-      await releaseEmployeeBackend(employee.id, releaseDate);
-      await refreshMonthlyView();
-      renderAll();
+      try {
+        await releaseEmployeeBackend(employee.id, releaseDate);
+        await refreshMonthlyView();
+        renderAll();
+      } catch (error) {
+        setStatus(error.message, false);
+      }
     });
 
-    actions.append(employeeDepartmentSelect, editBtn, removeBtn);
+    actions.append(employeeDepartmentSelect, editBtn, releaseBtn);
+
+    if (canDeleteEmployees()) {
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.textContent = 'Изтрий';
+      deleteBtn.className = 'btn-delete';
+      deleteBtn.addEventListener('click', async () => {
+        const confirmed = window.confirm(`Сигурни ли сте, че искате да изтриете служителя ${employee.name}?`);
+        if (!confirmed) {
+          return;
+        }
+
+        try {
+          await deleteEmployeeBackend(employee.id);
+          await refreshMonthlyView();
+          renderAll();
+        } catch (error) {
+          setStatus(error.message, false);
+        }
+      });
+      actions.append(deleteBtn);
+    }
+
     item.append(details, actions);
     employeeList.appendChild(item);
   });
@@ -1196,7 +1271,7 @@ function getEmployeesForSelectedSchedules() {
 
   const selectedSet = new Set(state.selectedScheduleIds);
   const monthKey = state.month || todayMonth();
-  return state.employees.filter((employee) => {
+  return state.scheduleEmployees.filter((employee) => {
     const scheduleId = employee.scheduleId;
     return selectedSet.has(scheduleId) && isEmployeeVisibleInMonth(employee, monthKey);
   });
@@ -1785,7 +1860,13 @@ function normalizeApiBaseUrl(url) {
 }
 
 async function apiFetch(path, options = {}) {
-  const response = await fetch(`${state.apiBaseUrl}${path}`, options);
+  const headers = new Headers(options.headers || {});
+  headers.set('X-User-Role', state.userRole);
+
+  const response = await fetch(`${state.apiBaseUrl}${path}`, {
+    ...options,
+    headers
+  });
   return response;
 }
 
@@ -1869,9 +1950,10 @@ async function refreshMonthlyView() {
   const employeePayload = employeeResponse.ok ? await employeeResponse.json() : { employees: [] };
   const allowedEmployees = Array.isArray(employeePayload.employees) ? employeePayload.employees : [];
   const allowedIds = new Set(allowedEmployees.map((employee) => employee.id));
+  state.employees = allowedEmployees.map(normalizeEmployeeVacationData);
 
   if (!state.selectedScheduleIds.length) {
-    state.employees = allowedEmployees.map(normalizeEmployeeVacationData);
+    state.scheduleEmployees = [];
     state.scheduleEntriesById = {};
     return;
   }
@@ -1906,7 +1988,7 @@ async function refreshMonthlyView() {
   });
 
   mergedEmployees.sort((a, b) => a.name.localeCompare(b.name, 'bg'));
-  state.employees = mergedEmployees.map(normalizeEmployeeVacationData);
+  state.scheduleEmployees = mergedEmployees.map(normalizeEmployeeVacationData);
   state.scheduleEntriesById = mappedEntries;
 }
 
@@ -1980,7 +2062,7 @@ async function saveEmployeeBackend(employee) {
 
 async function releaseEmployeeBackend(employeeId, endDate) {
   if (!state.backendAvailable) {
-    return;
+    throw new Error('Освобождаването е достъпно само с активен API бекенд.');
   }
 
   try {
@@ -1989,12 +2071,37 @@ async function releaseEmployeeBackend(employeeId, endDate) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ end_date: endDate || null })
     });
+
     if (!response.ok) {
-      throw new Error('Delete employee failed');
+      const errPayload = await response.json().catch(() => ({}));
+      throw new Error(errPayload.message || 'Release employee failed');
     }
-  } catch {
-    setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
-    state.backendAvailable = false;
+  } catch (error) {
+    throw new Error(error.message || 'Неуспешно освобождаване на служител.');
+  }
+}
+
+async function deleteEmployeeBackend(employeeId) {
+  if (!state.backendAvailable) {
+    throw new Error('Изтриването е достъпно само с активен API бекенд.');
+  }
+
+  if (!canDeleteEmployees()) {
+    throw new Error('Само администратор може да изтрива служители.');
+  }
+
+  try {
+    const response = await apiFetch(`/api/employees/${employeeId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    if (!response.ok) {
+      const errPayload = await response.json().catch(() => ({}));
+      throw new Error(errPayload.message || 'Delete employee failed');
+    }
+  } catch (error) {
+    throw new Error(error.message || 'Неуспешно изтриване на служител.');
   }
 }
 
@@ -2165,6 +2272,19 @@ function loadScheduleState() {
     return JSON.parse(localStorage.getItem('scheduleState') || '{}');
   } catch {
     return { month: todayMonth(), schedule: {} };
+  }
+}
+
+
+function saveUserRole() {
+  localStorage.setItem('userRole', state.userRole);
+}
+
+function loadUserRole() {
+  try {
+    return normalizeUserRole(localStorage.getItem('userRole'));
+  } catch {
+    return 'user';
   }
 }
 
