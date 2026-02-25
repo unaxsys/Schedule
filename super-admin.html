@@ -458,6 +458,7 @@
 
       function renderTenants(payload) {
         const tenants = payload.tenants || [];
+        const usageByTenantId = new Map((payload.tenantUsage || []).map((item) => [String(item.id), item]));
         tenantNameById = new Map(tenants.map((tenant) => [String(tenant.id), tenant.name || '—']));
         if (!tenants.length) {
           tenantsEl.innerHTML = '<div class="sa-tenant"><small>Няма регистрирани фирми.</small></div>';
@@ -476,6 +477,7 @@
             const ownerEmail = tenant.ownerEmail || '—';
             const ownerPhone = tenant.ownerPhone || '—';
             const eik = tenant.eik || '—';
+            const tenantUsage = usageByTenantId.get(String(tenant.id)) || {};
 
             return `
               <article class="sa-tenant" ${changed ? 'style="box-shadow:0 0 0 2px #bfdbfe inset;"' : ''}>
@@ -492,6 +494,16 @@
                     </div>
                   </div>
                   <div>${getStatusBadge(tenant.status)}</div>
+                </div>
+
+                <div class="sa-usage-stats">
+                  <span class="sa-usage-pill"><span>Потребители</span><strong>${escapeHtml(tenantUsage.usersCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Служители</span><strong>${escapeHtml(tenantUsage.employeesCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Отдели</span><strong>${escapeHtml(tenantUsage.departmentsCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Графици</span><strong>${escapeHtml(tenantUsage.schedulesCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Записи</span><strong>${escapeHtml(tenantUsage.scheduleEntriesCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Audit</span><strong>${escapeHtml(tenantUsage.auditEventsCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Заявки</span><strong>${escapeHtml(tenantUsage.requestsCount ?? 0)}</strong></span>
                 </div>
 
                 <div class="sa-actions">${actionsForTenant(tenant)}</div>
