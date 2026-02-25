@@ -198,3 +198,54 @@ select.shift-select {
     position: static;
   }
 }
+
+.marketing-panel {
+  border: 1px solid #bfdbfe;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+}
+.marketing-panel h2 {
+  margin-top: 0;
+  color: #1e3a8a;
+}
+.marketing-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+.marketing-columns article,
+.benefits-grid article {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.8rem;
+}
+.marketing-columns h3,
+.benefits-grid h4 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  color: #0f172a;
+}
+.marketing-columns ul,
+.benefits-grid ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+.benefits-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+.marketing-note {
+  margin-top: 1rem;
+  background: #dbeafe;
+  color: #1e3a8a;
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+}
+
+@media (max-width: 900px) {
+  .marketing-columns,
+  .benefits-grid {
+    grid-template-columns: 1fr;
+  }
+}
