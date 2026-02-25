@@ -22,7 +22,7 @@ const pool =
 app.use(
   cors({
     origin: '*',
-    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
@@ -44,30 +44,24 @@ function isValidMonthKey(value) {
   return /^\d{4}-\d{2}$/.test(cleanStr(value));
 }
 
+function normalizeDepartmentName(value) {
+  const text = cleanStr(value);
+  return text.length ? text : null;
+}
+
 function validateEmployeeInput(data = {}) {
   const normalizeString = (value) =>
     typeof value === 'string' ? value.trim() : String(value ?? '').trim();
 
   const name = normalizeString(data.name);
-  if (name.length < 2) {
+  const nameParts = name.split(/\s+/).filter(Boolean);
+  if (nameParts.length < 3) {
     return {
       valid: false,
       error: {
         error: 'VALIDATION_ERROR',
         field: 'name',
-        message: 'Името е задължително и трябва да съдържа поне 2 символа.',
-      },
-    };
-  }
-
-  const department = normalizeString(data.department);
-  if (department.length < 2) {
-    return {
-      valid: false,
-      error: {
-        error: 'VALIDATION_ERROR',
-        field: 'department',
-        message: 'Отделът е задължителен и трябва да съдържа поне 2 символа.',
+        message: 'Моля, въведете 3 имена (собствено, бащино и фамилия).',
       },
     };
   }
@@ -80,6 +74,19 @@ function validateEmployeeInput(data = {}) {
         error: 'VALIDATION_ERROR',
         field: 'position',
         message: 'Позицията е задължителна и трябва да съдържа поне 2 символа.',
+      },
+    };
+  }
+
+
+  const egn = normalizeString(data.egn);
+  if (!/^\d{10}$/.test(egn)) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'egn',
+        message: 'ЕГН е задължително и трябва да съдържа точно 10 цифри.',
       },
     };
   }
@@ -116,8 +123,10 @@ function validateEmployeeInput(data = {}) {
     valid: true,
     value: {
       name,
-      department,
+      department: normalizeDepartmentName(data.department),
+      departmentId: cleanStr(data.department_id || data.departmentId) || null,
       position,
+      egn,
       vacationAllowance,
     },
   };
@@ -127,15 +136,45 @@ async function initDatabase() {
   await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS departments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
-      department TEXT NOT NULL,
+      department TEXT NULL,
       position TEXT NOT NULL,
+      egn CHAR(10) NULL,
       vacation_allowance INTEGER NOT NULL DEFAULT 20,
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS department_id UUID NULL`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS egn CHAR(10) NULL`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'employees_department_id_fkey'
+      ) THEN
+        ALTER TABLE employees
+          ADD CONSTRAINT employees_department_id_fkey
+          FOREIGN KEY (department_id)
+          REFERENCES departments(id)
+          ON DELETE SET NULL;
+      END IF;
+    END $$;
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_department_id ON employees(department_id)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_egn_unique ON employees(egn) WHERE egn IS NOT NULL`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schedules (
@@ -168,6 +207,21 @@ async function initDatabase() {
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query(
+    `INSERT INTO departments (name)
+     VALUES ('Производство'), ('Администрация'), ('Продажби')
+     ON CONFLICT (name) DO NOTHING`
+  );
+
+  await pool.query(`
+    UPDATE employees e
+    SET department_id = d.id
+    FROM departments d
+    WHERE e.department_id IS NULL
+      AND NULLIF(TRIM(e.department), '') IS NOT NULL
+      AND d.name = TRIM(e.department)
+  `);
 }
 
 app.get('/api/health', async (_req, res) => {
@@ -181,20 +235,25 @@ app.get('/api/health', async (_req, res) => {
 
 app.get('/api/state', async (_req, res) => {
   try {
-    const [employees, schedules, scheduleEntries, shiftTemplates] = await Promise.all([
+    const [employees, schedules, scheduleEntries, shiftTemplates, departments] = await Promise.all([
       pool.query(
-        `SELECT id, name, department, position,
-         vacation_allowance AS "vacationAllowance"
-         FROM employees ORDER BY created_at, name`
+        `SELECT e.id,
+                e.name,
+                e.department_id AS "departmentId",
+                COALESCE(d.name, e.department, 'Без отдел') AS department,
+                e.position,
+                e.egn,
+                e.vacation_allowance AS "vacationAllowance"
+         FROM employees e
+         LEFT JOIN departments d ON d.id = e.department_id
+         ORDER BY e.name ASC`
       ),
       pool.query(
         `SELECT id, name, month_key AS month, department, status,
          created_at AS "createdAt"
          FROM schedules ORDER BY created_at, id`
       ),
-      pool.query(
-        `SELECT schedule_id, employee_id, day, shift_code FROM schedule_entries`
-      ),
+      pool.query(`SELECT schedule_id, employee_id, day, shift_code FROM schedule_entries`),
       pool.query(
         `SELECT code, name,
          start_time AS start,
@@ -202,6 +261,7 @@ app.get('/api/state', async (_req, res) => {
          hours
          FROM shift_templates ORDER BY created_at, code`
       ),
+      pool.query(`SELECT id, name, created_at AS "createdAt" FROM departments ORDER BY name ASC`),
     ]);
 
     const schedule = {};
@@ -214,6 +274,7 @@ app.get('/api/state', async (_req, res) => {
       schedules: schedules.rows,
       schedule,
       shiftTemplates: shiftTemplates.rows,
+      departments: departments.rows,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -223,13 +284,136 @@ app.get('/api/state', async (_req, res) => {
 app.get('/api/departments', async (_req, res) => {
   try {
     const result = await pool.query(
-      `SELECT DISTINCT department
-       FROM employees
-       WHERE NULLIF(TRIM(department), '') IS NOT NULL
-       ORDER BY department`
+      `SELECT id, name, created_at AS "createdAt"
+       FROM departments
+       ORDER BY name ASC`
     );
 
-    res.json({ departments: result.rows.map((row) => row.department) });
+    res.json({ departments: result.rows });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/api/departments', async (req, res) => {
+  const name = normalizeDepartmentName(req.body?.name);
+  if (!name) {
+    return res.status(400).json({ message: 'Името на отдела е задължително.' });
+  }
+
+  try {
+    const created = await pool.query(
+      `INSERT INTO departments (name)
+       VALUES ($1)
+       RETURNING id, name, created_at AS "createdAt"`,
+      [name]
+    );
+    res.status(201).json({ ok: true, department: created.rows[0] });
+  } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ message: 'Отдел с това име вече съществува.' });
+    }
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.put('/api/departments/:id', async (req, res) => {
+  const id = cleanStr(req.params.id);
+  const name = normalizeDepartmentName(req.body?.name);
+
+  if (!isValidUuid(id)) {
+    return res.status(400).json({ message: 'Невалиден department id.' });
+  }
+  if (!name) {
+    return res.status(400).json({ message: 'Името на отдела е задължително.' });
+  }
+
+  try {
+    const updated = await pool.query(
+      `UPDATE departments
+       SET name = $2
+       WHERE id = $1
+       RETURNING id, name, created_at AS "createdAt"`,
+      [id, name]
+    );
+
+    if (!updated.rowCount) {
+      return res.status(404).json({ message: 'Отделът не е намерен.' });
+    }
+
+    await pool.query('UPDATE employees SET department = $2 WHERE department_id = $1', [id, name]);
+
+    res.json({ ok: true, department: updated.rows[0] });
+  } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ message: 'Отдел с това име вече съществува.' });
+    }
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.delete('/api/departments/:id', async (req, res) => {
+  const id = cleanStr(req.params.id);
+  if (!isValidUuid(id)) {
+    return res.status(400).json({ message: 'Невалиден department id.' });
+  }
+
+  try {
+    const employeesCount = await pool.query(
+      `SELECT COUNT(*)::int AS total
+       FROM employees
+       WHERE department_id = $1`,
+      [id]
+    );
+
+    if ((employeesCount.rows[0]?.total || 0) > 0) {
+      return res.status(409).json({
+        message: 'Отделът не може да бъде изтрит, защото има прикачени служители.',
+      });
+    }
+
+    const deleted = await pool.query('DELETE FROM departments WHERE id = $1', [id]);
+    if (!deleted.rowCount) {
+      return res.status(404).json({ message: 'Отделът не е намерен.' });
+    }
+
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.get('/api/employees', async (req, res) => {
+  const departmentId = cleanStr(req.query.department_id);
+
+  if (departmentId && !isValidUuid(departmentId)) {
+    return res.status(400).json({ message: 'Невалиден department_id.' });
+  }
+
+  try {
+    const params = [];
+    let where = '';
+    if (departmentId) {
+      params.push(departmentId);
+      where = `WHERE e.department_id = $${params.length}`;
+    }
+
+    const result = await pool.query(
+      `SELECT e.id,
+              e.name,
+              e.department_id AS "departmentId",
+              COALESCE(d.name, e.department, 'Без отдел') AS department,
+              e.position,
+              e.egn,
+              e.vacation_allowance AS "vacationAllowance"
+       FROM employees e
+       LEFT JOIN departments d ON d.id = e.department_id
+       ${where}
+       ORDER BY e.name ASC`,
+      params
+    );
+
+    res.json({ employees: result.rows });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -241,19 +425,124 @@ app.post('/api/employees', async (req, res) => {
     return res.status(400).json(validation.error);
   }
 
-  const { name, department, position, vacationAllowance } = validation.value;
+  const { name, department, departmentId, position, egn, vacationAllowance } = validation.value;
 
   try {
+    let resolvedDepartmentId = null;
+    let departmentName = department;
+
+    if (departmentId) {
+      if (!isValidUuid(departmentId)) {
+        return res.status(400).json({ message: 'Невалиден department_id.' });
+      }
+      const depById = await pool.query('SELECT id, name FROM departments WHERE id = $1', [departmentId]);
+      if (!depById.rowCount) {
+        return res.status(404).json({ message: 'Отделът не е намерен.' });
+      }
+      resolvedDepartmentId = depById.rows[0].id;
+      departmentName = depById.rows[0].name;
+    } else if (department) {
+      const depByName = await pool.query('SELECT id, name FROM departments WHERE name = $1', [department]);
+      if (depByName.rowCount) {
+        resolvedDepartmentId = depByName.rows[0].id;
+        departmentName = depByName.rows[0].name;
+      }
+    }
+
     const result = await pool.query(
-      `INSERT INTO employees (name, department, position, vacation_allowance)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, name, department, position, vacation_allowance AS "vacationAllowance"`,
-      [name, department, position, vacationAllowance]
+      `INSERT INTO employees (name, department, department_id, position, egn, vacation_allowance)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, name, department_id AS "departmentId", department, position, egn, vacation_allowance AS "vacationAllowance"`,
+      [name, departmentName, resolvedDepartmentId, position, egn, vacationAllowance]
     );
 
     res.status(201).json({ ok: true, employee: result.rows[0] });
   } catch (error) {
+    if (error.code === '23505' && String(error.constraint || '').includes('idx_employees_egn_unique')) {
+      return res.status(409).json({ message: 'Служител с това ЕГН вече съществува.' });
+    }
     console.error('EMPLOYEE POST ERROR:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+
+app.put('/api/employees/:id', async (req, res) => {
+  const id = cleanStr(req.params.id);
+  if (!isValidUuid(id)) {
+    return res.status(400).json({ message: 'Невалиден employee id.' });
+  }
+
+  const validation = validateEmployeeInput(req.body);
+  if (!validation.valid) {
+    return res.status(400).json(validation.error);
+  }
+
+  const { name, position, egn, vacationAllowance } = validation.value;
+
+  try {
+    const updated = await pool.query(
+      `UPDATE employees
+       SET name = $2,
+           position = $3,
+           egn = $4,
+           vacation_allowance = $5
+       WHERE id = $1
+       RETURNING id, name, department_id AS "departmentId", COALESCE(department, 'Без отдел') AS department,
+                 position, egn, vacation_allowance AS "vacationAllowance"`,
+      [id, name, position, egn, vacationAllowance]
+    );
+
+    if (!updated.rowCount) {
+      return res.status(404).json({ message: 'Служителят не е намерен.' });
+    }
+
+    res.json({ ok: true, employee: updated.rows[0] });
+  } catch (error) {
+    if (error.code === '23505' && String(error.constraint || '').includes('idx_employees_egn_unique')) {
+      return res.status(409).json({ message: 'Служител с това ЕГН вече съществува.' });
+    }
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.put('/api/employees/:id/department', async (req, res) => {
+  const id = cleanStr(req.params.id);
+  const departmentId = req.body?.department_id === null ? null : cleanStr(req.body?.department_id);
+
+  if (!isValidUuid(id)) {
+    return res.status(400).json({ message: 'Невалиден employee id.' });
+  }
+  if (departmentId && !isValidUuid(departmentId)) {
+    return res.status(400).json({ message: 'Невалиден department_id.' });
+  }
+
+  try {
+    let departmentName = null;
+    if (departmentId) {
+      const dep = await pool.query('SELECT id, name FROM departments WHERE id = $1', [departmentId]);
+      if (!dep.rowCount) {
+        return res.status(404).json({ message: 'Отделът не е намерен.' });
+      }
+      departmentName = dep.rows[0].name;
+    }
+
+    const updated = await pool.query(
+      `UPDATE employees
+       SET department_id = $2,
+           department = $3
+       WHERE id = $1
+       RETURNING id, name, department_id AS "departmentId", COALESCE($3, 'Без отдел') AS department, position,
+                 egn, vacation_allowance AS "vacationAllowance"`,
+      [id, departmentId, departmentName]
+    );
+
+    if (!updated.rowCount) {
+      return res.status(404).json({ message: 'Служителят не е намерен.' });
+    }
+
+    res.json({ ok: true, employee: updated.rows[0] });
+  } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
@@ -304,11 +593,67 @@ app.post('/api/schedules', async (req, res) => {
 
 app.get('/api/schedules', async (req, res) => {
   const month = cleanStr(req.query.month);
+  const departmentId = cleanStr(req.query.department_id);
+
   if (month && !isValidMonthKey(month)) {
     return res.status(400).json({ message: 'month трябва да е във формат YYYY-MM.' });
   }
 
+  if (departmentId && departmentId !== 'all' && !isValidUuid(departmentId)) {
+    return res.status(400).json({ message: 'department_id трябва да е uuid или all.' });
+  }
+
   try {
+    if (month && Object.prototype.hasOwnProperty.call(req.query, 'department_id')) {
+      const filterAll = !departmentId || departmentId === 'all';
+      const employeesQuery = filterAll
+        ? pool.query(
+            `SELECT e.id, e.name, e.department_id AS "departmentId", COALESCE(d.name, e.department, 'Без отдел') AS department,
+                    e.position, e.egn, e.vacation_allowance AS "vacationAllowance"
+             FROM employees e
+             LEFT JOIN departments d ON d.id = e.department_id
+             ORDER BY e.name ASC`
+          )
+        : pool.query(
+            `SELECT e.id, e.name, e.department_id AS "departmentId", COALESCE(d.name, e.department, 'Без отдел') AS department,
+                    e.position, e.egn, e.vacation_allowance AS "vacationAllowance"
+             FROM employees e
+             LEFT JOIN departments d ON d.id = e.department_id
+             WHERE e.department_id = $1
+             ORDER BY e.name ASC`,
+            [departmentId]
+          );
+
+      const entriesQuery = filterAll
+        ? pool.query(
+            `SELECT se.schedule_id AS "scheduleId", se.employee_id AS "employeeId", se.day, se.shift_code AS "shiftCode"
+             FROM schedule_entries se
+             JOIN schedules s ON s.id = se.schedule_id
+             WHERE s.month_key = $1
+             ORDER BY se.schedule_id, se.employee_id, se.day`,
+            [month]
+          )
+        : pool.query(
+            `SELECT se.schedule_id AS "scheduleId", se.employee_id AS "employeeId", se.day, se.shift_code AS "shiftCode"
+             FROM schedule_entries se
+             JOIN schedules s ON s.id = se.schedule_id
+             JOIN employees e ON e.id = se.employee_id
+             WHERE s.month_key = $1
+               AND e.department_id = $2
+             ORDER BY se.schedule_id, se.employee_id, se.day`,
+            [month, departmentId]
+          );
+
+      const [employeesResult, entriesResult] = await Promise.all([employeesQuery, entriesQuery]);
+
+      return res.json({
+        month,
+        department_id: filterAll ? 'all' : departmentId,
+        employees: employeesResult.rows,
+        entries: entriesResult.rows,
+      });
+    }
+
     const params = [];
     const where = [];
     if (month) {
@@ -327,141 +672,6 @@ app.get('/api/schedules', async (req, res) => {
     );
 
     res.json({ schedules: schedulesResult.rows });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-app.get('/api/schedule-view', async (req, res) => {
-  const month = cleanStr(req.query.month);
-  const departments = cleanStr(req.query.departments)
-    .split(',')
-    .map((department) => cleanStr(department))
-    .filter(Boolean);
-
-  if (!isValidMonthKey(month)) {
-    return res.status(400).json({ message: 'month трябва да е във формат YYYY-MM.' });
-  }
-
-  if (!departments.length) {
-    return res.status(400).json({ message: 'departments е задължителен списък.' });
-  }
-
-  try {
-    const employeesResult = await pool.query(
-      `SELECT id, name, department, position, vacation_allowance AS "vacationAllowance"
-       FROM employees
-       WHERE department = ANY($1::text[])
-       ORDER BY department, name`,
-      [departments]
-    );
-
-    const schedulesResult = await pool.query(
-      `SELECT id, department, name, status
-       FROM schedules
-       WHERE month_key = $1
-         AND department = ANY($2::text[])
-       ORDER BY department, created_at DESC`,
-      [month, departments]
-    );
-
-    const scheduleIds = schedulesResult.rows.map((row) => row.id);
-    const entriesResult = scheduleIds.length
-      ? await pool.query(
-          `SELECT schedule_id, employee_id, day, shift_code
-           FROM schedule_entries
-           WHERE schedule_id = ANY($1::uuid[])
-           ORDER BY schedule_id, employee_id, day`,
-          [scheduleIds]
-        )
-      : { rows: [] };
-
-    res.json({
-      month,
-      departments,
-      employees: employeesResult.rows,
-      schedules: schedulesResult.rows,
-      entries: entriesResult.rows,
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-app.get('/api/schedules/merged', async (req, res) => {
-  const month = cleanStr(req.query.month);
-  const ids = cleanStr(req.query.ids)
-    .split(',')
-    .map((id) => cleanStr(id))
-    .filter((id) => isValidUuid(id));
-
-  if (!isValidMonthKey(month)) {
-    return res.status(400).json({ message: 'month трябва да е във формат YYYY-MM.' });
-  }
-
-  if (!ids.length) {
-    return res.status(400).json({ message: 'ids е задължителен списък от uuid.' });
-  }
-
-  try {
-    const schedulesResult = await pool.query(
-      `SELECT id, name, month_key, department, status, created_at
-       FROM schedules
-       WHERE month_key = $1
-         AND id = ANY($2::uuid[])
-       ORDER BY created_at DESC`,
-      [month, ids]
-    );
-
-    const employeesResult = await pool.query(
-      `SELECT s.id AS schedule_id,
-              s.department AS schedule_department,
-              e.id,
-              e.name,
-              e.department,
-              e.position,
-              e.vacation_allowance AS "vacationAllowance"
-       FROM schedules s
-       JOIN employees e ON (s.department IS NULL OR e.department = s.department)
-       WHERE s.month_key = $1
-         AND s.id = ANY($2::uuid[])
-       ORDER BY COALESCE(s.department, 'Общ'), e.name`,
-      [month, ids]
-    );
-
-    const entriesResult = await pool.query(
-      `SELECT schedule_id, employee_id, day, shift_code
-       FROM schedule_entries
-       WHERE schedule_id = ANY($1::uuid[])
-       ORDER BY schedule_id, employee_id, day`,
-      [ids]
-    );
-
-    const grouped = {};
-    employeesResult.rows.forEach((employee) => {
-      const department = employee.schedule_department || 'Общ';
-      if (!grouped[department]) {
-        grouped[department] = { employees: [], entries: [] };
-      }
-      grouped[department].employees.push(employee);
-    });
-
-    entriesResult.rows.forEach((entry) => {
-      const schedule = schedulesResult.rows.find((row) => row.id === entry.schedule_id);
-      const department = schedule?.department || 'Общ';
-      if (!grouped[department]) {
-        grouped[department] = { employees: [], entries: [] };
-      }
-      grouped[department].entries.push(entry);
-    });
-
-    res.json({
-      month,
-      schedules: schedulesResult.rows,
-      grouped,
-      employees: employeesResult.rows,
-      entries: entriesResult.rows,
-    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -487,10 +697,12 @@ app.get('/api/schedules/:id', async (req, res) => {
     const schedule = scheduleResult.rows[0];
 
     const employeesResult = await pool.query(
-      `SELECT id, name, department, position, vacation_allowance AS "vacationAllowance"
-       FROM employees
-       WHERE ($1::text IS NULL OR department = $1)
-       ORDER BY name`,
+      `SELECT e.id, e.name, e.department_id AS "departmentId", COALESCE(d.name, e.department, 'Без отдел') AS department,
+              e.position, e.egn, e.vacation_allowance AS "vacationAllowance"
+       FROM employees e
+       LEFT JOIN departments d ON d.id = e.department_id
+       WHERE ($1::text IS NULL OR COALESCE(d.name, e.department) = $1)
+       ORDER BY e.name`,
       [schedule.department]
     );
 
@@ -539,7 +751,10 @@ app.post('/api/schedules/:id/entry', async (req, res) => {
     }
 
     const employeeResult = await pool.query(
-      `SELECT id, department FROM employees WHERE id = $1`,
+      `SELECT e.id, COALESCE(d.name, e.department) AS department
+       FROM employees e
+       LEFT JOIN departments d ON d.id = e.department_id
+       WHERE e.id = $1`,
       [employeeId]
     );
 
