@@ -20,7 +20,9 @@
           <option value="user">Потребител</option>
           <option value="manager">Мениджър</option>
           <option value="admin">Администратор</option>
+          <option value="super_admin">Супер администратор</option>
         </select>
+        <a id="superAdminPortalLink" href="super-admin.html" target="_blank" class="super-admin-link hidden">Супер админ панел</a>
       </div>
     </header>
 
@@ -34,6 +36,7 @@
           <button type="button" class="tab-btn" data-tab="vacationTab">Отпуски</button>
           <button type="button" class="tab-btn" data-tab="settingsTab">Настройки</button>
           <button type="button" class="tab-btn" data-tab="helpTab">FAQ / Help</button>
+          <button type="button" class="tab-btn" data-tab="authTab">Регистрация</button>
         </div>
       </aside>
 
@@ -179,6 +182,34 @@
             <div id="shiftList" class="shift-list"></div>
             <small>Смените „Почивка“, „Отпуск“ и „Болничен“ са системни и не се трият.</small>
           </div>
+        </section>
+
+
+        <section id="authTab" class="panel tab-panel">
+          <h2>Регистрация на организация</h2>
+          <p>Всеки новорегистриран профил получава роля <strong>Owner/Администратор</strong> и чака одобрение от супер администратор.</p>
+          <form id="registrationForm" class="employee-form">
+            <input id="companyNameInput" required placeholder="Име на фирма/организация" />
+            <input id="ownerFullNameInput" required placeholder="Имена на собственик" />
+            <input id="ownerEmailInput" type="email" required placeholder="Email на собственика" />
+            <input id="ownerPhoneInput" placeholder="Телефон (по желание)" />
+            <input id="ownerPasswordInput" type="password" minlength="8" required placeholder="Парола (мин. 8 символа)" />
+            <button id="submitRegistrationBtn" class="btn-add" type="submit">Подай регистрация</button>
+          </form>
+
+          <h3 style="margin-top: 1rem;">Добавяне на потребител към организация</h3>
+          <p>Owner/Admin може да добавя само роли <strong>Мениджър</strong> и <strong>Потребител</strong>.</p>
+          <form id="createPlatformUserForm" class="employee-form">
+            <input id="platformUserRegistrationIdInput" required placeholder="Tenant ID (UUID)" />
+            <input id="platformUserFullNameInput" required placeholder="Имена" />
+            <input id="platformUserEmailInput" type="email" required placeholder="Email" />
+            <input id="platformUserPasswordInput" type="password" minlength="8" required placeholder="Парола" />
+            <select id="platformUserRoleInput">
+              <option value="manager">Мениджър</option>
+              <option value="user">Потребител</option>
+            </select>
+            <button class="btn-add" type="submit">Добави потребител</button>
+          </form>
         </section>
 
         <section id="helpTab" class="panel tab-panel marketing-panel">

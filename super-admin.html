@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="bg">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Супер администраторски панел</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="panel" style="max-width:1200px;margin:1rem auto;">
+      <h1>Супер администраторски панел</h1>
+      <p>Тази страница е самостоятелна и е отделена от основния таб интерфейс.</p>
+      <div class="row">
+        <label for="saApiUrl">API URL:</label>
+        <input id="saApiUrl" type="text" placeholder="http://localhost:4000" />
+        <button id="saConnectBtn" type="button">Свържи</button>
+      </div>
+
+      <div class="row actions-row">
+        <button id="saRefreshBtn" type="button">Обнови overview</button>
+      </div>
+
+      <h3>Натоварване / използване</h3>
+      <pre id="saUsage" class="json-box">Няма данни.</pre>
+
+      <h3>Всички организации</h3>
+      <div id="saTenants" class="employee-list"></div>
+
+      <h3>Промяна на статус</h3>
+      <form id="saReviewForm" class="employee-form">
+        <input id="saTenantId" required placeholder="Tenant ID" />
+        <select id="saTenantStatus">
+          <option value="approved">approved</option>
+          <option value="pending">pending</option>
+          <option value="disabled">disabled</option>
+        </select>
+        <button type="submit">Запиши</button>
+      </form>
+
+      <h3>Таблици (read-only)</h3>
+      <form id="saTableForm" class="employee-form">
+        <select id="saTableName">
+          <option value="tenants">tenants</option>
+          <option value="users">users</option>
+          <option value="tenant_users">tenant_users</option>
+          <option value="audit_log">audit_log</option>
+          <option value="request_log">request_log</option>
+          <option value="employees">employees</option>
+          <option value="departments">departments</option>
+          <option value="schedules">schedules</option>
+          <option value="schedule_entries">schedule_entries</option>
+          <option value="shift_templates">shift_templates</option>
+        </select>
+        <button type="submit">Преглед</button>
+      </form>
+      <pre id="saTableOutput" class="json-box">Няма данни.</pre>
+
+      <h3>Audit log (последни 200)</h3>
+      <pre id="saLogs" class="json-box">Няма данни.</pre>
+      <small id="saStatus"></small>
+    </main>
+
+    <script>
+      const apiUrlInput = document.getElementById('saApiUrl');
+      const connectBtn = document.getElementById('saConnectBtn');
+      const refreshBtn = document.getElementById('saRefreshBtn');
+      const usageEl = document.getElementById('saUsage');
+      const tenantsEl = document.getElementById('saTenants');
+      const logsEl = document.getElementById('saLogs');
+      const reviewForm = document.getElementById('saReviewForm');
+      const tenantIdInput = document.getElementById('saTenantId');
+      const tenantStatusInput = document.getElementById('saTenantStatus');
+      const tableForm = document.getElementById('saTableForm');
+      const tableNameInput = document.getElementById('saTableName');
+      const tableOutput = document.getElementById('saTableOutput');
+      const statusEl = document.getElementById('saStatus');
+
+      let apiBaseUrl = localStorage.getItem('apiBaseUrl') || `${window.location.protocol}//${window.location.hostname}:4000`;
+      apiUrlInput.value = apiBaseUrl;
+
+      function setStatus(text, ok = true) {
+        statusEl.textContent = text;
+        statusEl.style.color = ok ? '#15803d' : '#b91c1c';
+      }
+
+      async function apiRequest(path, options = {}) {
+        const headers = { ...(options.headers || {}), 'X-User-Role': 'super_admin' };
+        if (options.body && !headers['Content-Type']) {
+          headers['Content-Type'] = 'application/json';
+        }
+
+        const response = await fetch(`${apiBaseUrl}${path}`, { ...options, headers });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.message || `HTTP ${response.status}`);
+        }
+        return payload;
+      }
+
+      function renderOverview(payload) {
+        usageEl.textContent = JSON.stringify(payload.usage || {}, null, 2);
+        logsEl.textContent = JSON.stringify(payload.logs || [], null, 2);
+
+        tenantsEl.innerHTML = '';
+        (payload.tenants || []).forEach((tenant) => {
+          const item = document.createElement('div');
+          item.className = 'employee-item employee-item--top';
+          item.innerHTML = `<div><strong>${tenant.name}</strong><br><small>ID: ${tenant.id}</small><br><small>Статус: ${tenant.status}</small></div>`;
+          tenantsEl.appendChild(item);
+        });
+      }
+
+      connectBtn.addEventListener('click', () => {
+        apiBaseUrl = apiUrlInput.value.trim().replace(/\/$/, '');
+        localStorage.setItem('apiBaseUrl', apiBaseUrl);
+        setStatus(`API URL е записан: ${apiBaseUrl}`);
+      });
+
+      refreshBtn.addEventListener('click', async () => {
+        try {
+          const payload = await apiRequest('/api/platform/super-admin/overview');
+          renderOverview(payload);
+          setStatus('Overview е обновен.');
+        } catch (error) {
+          setStatus(error.message, false);
+        }
+      });
+
+      reviewForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        try {
+          await apiRequest(`/api/platform/super-admin/registrations/${encodeURIComponent(tenantIdInput.value)}/status`, {
+            method: 'PATCH',
+            body: JSON.stringify({ status: tenantStatusInput.value }),
+          });
+          setStatus('Статусът е обновен.');
+        } catch (error) {
+          setStatus(error.message, false);
+        }
+      });
+
+      tableForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        try {
+          const payload = await apiRequest(`/api/platform/super-admin/tables/${encodeURIComponent(tableNameInput.value)}`);
+          tableOutput.textContent = JSON.stringify(payload.rows || [], null, 2);
+          setStatus('Таблицата е заредена.');
+        } catch (error) {
+          setStatus(error.message, false);
+        }
+      });
+    </script>
+  </body>
+</html>

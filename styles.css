@@ -592,3 +592,32 @@ select.shift-select {
   background: #d1d5db;
   color: #6b7280;
 }
+
+
+.json-box {
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 0.65rem;
+  overflow: auto;
+  max-height: 260px;
+  font-size: 0.82rem;
+}
+
+
+.hidden {
+  display: none !important;
+}
+
+.super-admin-link {
+  background: #7c3aed;
+  color: #fff;
+  text-decoration: none;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.super-admin-link:hover {
+  background: #6d28d9;
+}

@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
@@ -42,15 +43,67 @@ function cleanStr(v) {
 
 function getRequestUserRole(req) {
   const role = cleanStr(req.get('x-user-role')).toLowerCase();
-  return ['user', 'manager', 'admin'].includes(role) ? role : 'user';
+  return ['user', 'manager', 'admin', 'super_admin'].includes(role) ? role : 'user';
 }
 
 function ensureAdmin(req, res) {
-  if (getRequestUserRole(req) !== 'admin') {
+  if (!['admin', 'super_admin'].includes(getRequestUserRole(req))) {
     res.status(403).json({ message: 'Само администратор може да изтрива служители.' });
     return false;
   }
   return true;
+}
+
+function ensureSuperAdmin(req, res) {
+  if (getRequestUserRole(req) !== 'super_admin') {
+    res.status(403).json({ message: 'Само супер администратор има достъп.' });
+    return false;
+  }
+  return true;
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+async function insertAuditLog(action, entity, payload = {}) {
+  try {
+    await pool.query(
+      `INSERT INTO audit_log (tenant_id, actor_user_id, action, entity, entity_id, before_json, after_json, ip, user_agent)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)`,
+      [
+        payload.tenantId || null,
+        payload.actorUserId || null,
+        action,
+        entity || null,
+        payload.entityId || null,
+        payload.before ? JSON.stringify(payload.before) : null,
+        payload.after ? JSON.stringify(payload.after) : null,
+        payload.ip || null,
+        payload.userAgent || null,
+      ]
+    );
+  } catch (error) {
+    console.error('AUDIT LOG ERROR:', error.message);
+  }
+}
+
+function splitFullName(fullName) {
+  const parts = cleanStr(fullName).split(/\s+/).filter(Boolean);
+  if (!parts.length) {
+    return { firstName: '', lastName: '' };
+  }
+
+  if (parts.length === 1) {
+    return { firstName: parts[0], lastName: '' };
+  }
+
+  return {
+    firstName: parts.slice(0, -1).join(' '),
+    lastName: parts.slice(-1)[0],
+  };
 }
 
 function isValidMonthKey(value) {
@@ -349,6 +402,75 @@ async function initDatabase() {
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tenants (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','disabled')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      approved_at TIMESTAMPTZ NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      first_name TEXT NOT NULL DEFAULT '',
+      last_name TEXT NOT NULL DEFAULT '',
+      is_super_admin BOOLEAN NOT NULL DEFAULT FALSE,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_login_at TIMESTAMPTZ NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tenant_users (
+      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('owner','admin','manager','user')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (tenant_id, user_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NULL,
+      actor_user_id UUID NULL,
+      action TEXT NOT NULL,
+      entity TEXT NULL,
+      entity_id TEXT NULL,
+      before_json JSONB NULL,
+      after_json JSONB NULL,
+      ip TEXT NULL,
+      user_agent TEXT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS request_log (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NULL,
+      user_id UUID NULL,
+      method TEXT NOT NULL,
+      path TEXT NOT NULL,
+      status_code INT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_tenant_users_user_id ON tenant_users(user_id)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant_id ON tenant_users(tenant_id)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_request_log_created_at ON request_log(created_at DESC)');
 
   await pool.query(
     `INSERT INTO departments (name)
@@ -1005,6 +1127,232 @@ app.delete('/api/shift-template/:code', async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/api/platform/register', async (req, res) => {
+  const companyName = cleanStr(req.body?.companyName);
+  const ownerFullName = cleanStr(req.body?.ownerFullName);
+  const ownerEmail = cleanStr(req.body?.ownerEmail).toLowerCase();
+  const password = cleanStr(req.body?.password);
+
+  if (!companyName || !ownerFullName || !ownerEmail || !password || password.length < 8) {
+    return res.status(400).json({ message: 'Попълнете коректно фирма, собственик, имейл и парола (мин. 8 символа).' });
+  }
+
+  const { firstName, lastName } = splitFullName(ownerFullName);
+
+  try {
+    const tenantResult = await pool.query(
+      `INSERT INTO tenants (name, status)
+       VALUES ($1, 'pending')
+       RETURNING id, name, status, created_at AS "createdAt", approved_at AS "approvedAt"`,
+      [companyName]
+    );
+
+    const tenant = tenantResult.rows[0];
+
+    const ownerUserResult = await pool.query(
+      `INSERT INTO users (email, password_hash, first_name, last_name)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (email) DO UPDATE
+         SET first_name = EXCLUDED.first_name,
+             last_name = EXCLUDED.last_name
+       RETURNING id, email, first_name AS "firstName", last_name AS "lastName", is_active AS "isActive"`,
+      [ownerEmail, hashPassword(password), firstName, lastName]
+    );
+
+    const ownerUser = ownerUserResult.rows[0];
+
+    await pool.query(
+      `INSERT INTO tenant_users (tenant_id, user_id, role)
+       VALUES ($1, $2, 'owner')
+       ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = 'owner'`,
+      [tenant.id, ownerUser.id]
+    );
+
+    await insertAuditLog('tenant_registered', 'tenant', {
+      tenantId: tenant.id,
+      actorUserId: ownerUser.id,
+      entityId: tenant.id,
+      after: { tenant, ownerUser, role: 'owner' },
+      ip: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return res.status(201).json({ ok: true, tenant, ownerUser });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/api/platform/users', async (req, res) => {
+  const requestRole = getRequestUserRole(req);
+  if (!['admin', 'super_admin'].includes(requestRole)) {
+    return res.status(403).json({ message: 'Само администратор може да добавя потребители.' });
+  }
+
+  const tenantId = cleanStr(req.body?.tenantId || req.body?.registrationId);
+  const fullName = cleanStr(req.body?.fullName);
+  const email = cleanStr(req.body?.email).toLowerCase();
+  const password = cleanStr(req.body?.password);
+  const role = cleanStr(req.body?.role).toLowerCase();
+
+  if (!isValidUuid(tenantId) || !fullName || !email || !password || password.length < 8) {
+    return res.status(400).json({ message: 'Невалидни данни за потребител.' });
+  }
+  if (!['manager', 'user'].includes(role)) {
+    return res.status(400).json({ message: 'Позволени роли за добавяне: manager и user.' });
+  }
+
+  try {
+    const tenantCheck = await pool.query('SELECT id, name FROM tenants WHERE id = $1', [tenantId]);
+    if (!tenantCheck.rowCount) {
+      return res.status(404).json({ message: 'Организацията не е намерена.' });
+    }
+
+    const { firstName, lastName } = splitFullName(fullName);
+
+    const userResult = await pool.query(
+      `INSERT INTO users (email, password_hash, first_name, last_name)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (email) DO UPDATE
+         SET first_name = EXCLUDED.first_name,
+             last_name = EXCLUDED.last_name
+       RETURNING id, email, first_name AS "firstName", last_name AS "lastName", is_active AS "isActive", created_at AS "createdAt"`,
+      [email, hashPassword(password), firstName, lastName]
+    );
+
+    const user = userResult.rows[0];
+
+    await pool.query(
+      `INSERT INTO tenant_users (tenant_id, user_id, role)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
+      [tenantId, user.id, role]
+    );
+
+    await insertAuditLog('tenant_user_upserted', 'tenant_user', {
+      tenantId,
+      actorUserId: null,
+      entityId: user.id,
+      after: { userId: user.id, role, tenantId },
+      ip: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return res.status(201).json({ ok: true, user: { ...user, tenantId, role } });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.get('/api/platform/super-admin/overview', async (req, res) => {
+  if (!ensureSuperAdmin(req, res)) {
+    return;
+  }
+
+  try {
+    const [tenantsResult, usersByRole, dbStats, latestLogs] = await Promise.all([
+      pool.query(
+        `SELECT id, name, status, created_at AS "createdAt", approved_at AS "approvedAt"
+         FROM tenants
+         ORDER BY created_at DESC`
+      ),
+      pool.query(
+        `SELECT tu.role, COUNT(*)::int AS count
+         FROM tenant_users tu
+         GROUP BY tu.role
+         ORDER BY tu.role`
+      ),
+      pool.query(
+        `SELECT
+           pg_database_size(current_database())::bigint AS "databaseSizeBytes",
+           (SELECT COUNT(*)::int FROM employees) AS "employeesCount",
+           (SELECT COUNT(*)::int FROM schedules) AS "schedulesCount",
+           (SELECT COUNT(*)::int FROM schedule_entries) AS "scheduleEntriesCount",
+           (SELECT COUNT(*)::int FROM tenants) AS "tenantsCount",
+           (SELECT COUNT(*)::int FROM users) AS "usersCount"`
+      ),
+      pool.query(
+        `SELECT id, tenant_id AS "tenantId", actor_user_id AS "actorUserId", action, entity, entity_id AS "entityId", before_json AS "beforeJson", after_json AS "afterJson", ip, user_agent AS "userAgent", created_at AS "createdAt"
+         FROM audit_log
+         ORDER BY created_at DESC
+         LIMIT 200`
+      ),
+    ]);
+
+    return res.json({
+      ok: true,
+      tenants: tenantsResult.rows,
+      usersByRole: usersByRole.rows,
+      usage: dbStats.rows[0],
+      logs: latestLogs.rows,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.patch('/api/platform/super-admin/registrations/:id/status', async (req, res) => {
+  if (!ensureSuperAdmin(req, res)) {
+    return;
+  }
+
+  const id = cleanStr(req.params.id);
+  const status = cleanStr(req.body?.status).toLowerCase();
+
+  if (!isValidUuid(id)) {
+    return res.status(400).json({ message: 'Невалиден tenant id.' });
+  }
+  if (!['pending', 'approved', 'disabled'].includes(status)) {
+    return res.status(400).json({ message: 'Невалиден статус.' });
+  }
+
+  try {
+    const updated = await pool.query(
+      `UPDATE tenants
+       SET status = $2,
+           approved_at = CASE WHEN $2 = 'approved' THEN NOW() ELSE approved_at END
+       WHERE id = $1
+       RETURNING id, name, status, created_at AS "createdAt", approved_at AS "approvedAt"`,
+      [id, status]
+    );
+
+    if (!updated.rowCount) {
+      return res.status(404).json({ message: 'Организацията не е намерена.' });
+    }
+
+    await insertAuditLog('tenant_status_changed', 'tenant', {
+      tenantId: id,
+      entityId: id,
+      after: { status },
+      ip: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return res.json({ ok: true, tenant: updated.rows[0] });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.get('/api/platform/super-admin/tables/:tableName', async (req, res) => {
+  if (!ensureSuperAdmin(req, res)) {
+    return;
+  }
+
+  const tableName = cleanStr(req.params.tableName).toLowerCase();
+  const allowedTables = new Set(['tenants', 'users', 'tenant_users', 'audit_log', 'request_log', 'employees', 'departments', 'schedules', 'schedule_entries', 'shift_templates']);
+  if (!allowedTables.has(tableName)) {
+    return res.status(400).json({ message: 'Таблицата не е позволена за директен достъп.' });
+  }
+
+  try {
+    const result = await pool.query(`SELECT row_to_json(t) AS row FROM (SELECT * FROM ${tableName} ORDER BY 1 DESC LIMIT 200) t`);
+    return res.json({ ok: true, tableName, rows: result.rows.map((item) => item.row) });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
   }
 });
 
