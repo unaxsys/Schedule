@@ -1375,9 +1375,29 @@ app.get('/api/platform/super-admin/overview', requireSuperAdmin, async (req, res
   try {
     const [tenantsResult, usersByRole, dbStats, latestLogs] = await Promise.all([
       pool.query(
-        `SELECT id, name, status, created_at AS "createdAt", approved_at AS "approvedAt"
-         FROM tenants
-         ORDER BY created_at DESC`
+        `SELECT
+           t.id,
+           t.name,
+           t.eik,
+           t.owner_phone AS "ownerPhone",
+           t.status,
+           t.created_at AS "createdAt",
+           t.approved_at AS "approvedAt",
+           owner.owner_full_name AS "ownerFullName",
+           owner.owner_email AS "ownerEmail"
+         FROM tenants t
+         LEFT JOIN LATERAL (
+           SELECT
+             NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), '') AS owner_full_name,
+             u.email AS owner_email
+           FROM tenant_users tu
+           JOIN users u ON u.id = tu.user_id
+           WHERE tu.tenant_id = t.id
+             AND tu.role = 'owner'
+           ORDER BY tu.created_at ASC
+           LIMIT 1
+         ) owner ON TRUE
+         ORDER BY t.created_at DESC`
       ),
       pool.query(
         `SELECT tu.role, COUNT(*)::int AS count

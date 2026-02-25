@@ -5,82 +5,256 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Супер администраторски панел</title>
     <link rel="stylesheet" href="styles.css" />
+    <style>
+      body {
+        background: linear-gradient(180deg, #edf2fb 0%, #dbe7fb 100%);
+      }
+
+      .sa-shell {
+        max-width: 1280px;
+        margin: 1.2rem auto;
+        display: grid;
+        gap: 1rem;
+      }
+
+      .sa-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 1rem;
+        flex-wrap: wrap;
+      }
+
+      .sa-header h1 {
+        margin: 0;
+      }
+
+      .sa-live-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        background: #dcfce7;
+        color: #166534;
+        border: 1px solid #86efac;
+        border-radius: 999px;
+        padding: 0.2rem 0.55rem;
+        font-size: 0.85rem;
+      }
+
+      .sa-dot {
+        width: 0.55rem;
+        height: 0.55rem;
+        border-radius: 50%;
+        background: #22c55e;
+      }
+
+      .sa-toolbar {
+        display: flex;
+        gap: 0.6rem;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      .sa-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 0.6rem;
+      }
+
+      .sa-stat {
+        border: 1px solid #dbeafe;
+        background: linear-gradient(180deg, #ffffff 0%, #f5f9ff 100%);
+        border-radius: 12px;
+        padding: 0.7rem;
+      }
+
+      .sa-stat strong {
+        font-size: 1.2rem;
+        display: block;
+      }
+
+      .sa-tenants {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .sa-tenant {
+        border: 1px solid #dbeafe;
+        border-radius: 12px;
+        padding: 0.8rem;
+        background: #fff;
+        display: grid;
+        gap: 0.55rem;
+      }
+
+      .sa-tenant-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 0.8rem;
+      }
+
+      .sa-tenant-meta {
+        color: #475569;
+        font-size: 0.9rem;
+        display: grid;
+        gap: 0.12rem;
+      }
+
+      .sa-status-pill {
+        border-radius: 999px;
+        padding: 0.2rem 0.55rem;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        font-weight: 700;
+      }
+
+      .sa-status-pill--pending {
+        background: #fef9c3;
+        color: #854d0e;
+      }
+
+      .sa-status-pill--approved {
+        background: #dcfce7;
+        color: #166534;
+      }
+
+      .sa-status-pill--disabled {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+
+      .sa-actions {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+
+      .sa-btn-warn {
+        background: #d97706;
+      }
+
+      .sa-btn-danger {
+        background: #dc2626;
+      }
+
+      .sa-grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+      }
+
+      #saStatus {
+        font-weight: 600;
+      }
+
+      @media (max-width: 950px) {
+        .sa-grid-2 {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
   </head>
   <body>
-    <main class="panel" style="max-width:1200px;margin:1rem auto;">
-      <h1>Супер администраторски панел</h1>
-      <p>Тази страница е самостоятелна и е отделена от основния таб интерфейс.</p>
-      <div class="row">
-        <label for="saApiUrl">API URL:</label>
-        <input id="saApiUrl" type="text" placeholder="http://localhost:4000" />
-        <button id="saConnectBtn" type="button">Свържи</button>
-      </div>
+    <main class="sa-shell">
+      <section class="panel">
+        <div class="sa-header">
+          <div>
+            <h1>Супер администраторски панел</h1>
+            <p>Наблюдение и управление в реално време на регистрации и статуси на фирми.</p>
+            <div class="sa-live-badge"><span class="sa-dot"></span> Live обновяване на всеки 5 секунди</div>
+          </div>
 
-      <div class="row actions-row">
-        <button id="saRefreshBtn" type="button">Обнови overview</button>
-      </div>
+          <div class="sa-toolbar">
+            <label for="saApiUrl">API URL:</label>
+            <input id="saApiUrl" type="text" placeholder="http://localhost:4000" />
+            <button id="saConnectBtn" type="button">Свържи</button>
+            <button id="saRefreshBtn" type="button">Обнови сега</button>
+          </div>
+        </div>
 
-      <h3>Натоварване / използване</h3>
-      <pre id="saUsage" class="json-box">Няма данни.</pre>
+        <p id="saStatus"></p>
+      </section>
 
-      <h3>Всички организации</h3>
-      <div id="saTenants" class="employee-list"></div>
+      <section class="panel">
+        <h3>Натоварване / използване</h3>
+        <div id="saUsageCards" class="sa-stats"></div>
+      </section>
 
-      <h3>Промяна на статус</h3>
-      <form id="saReviewForm" class="employee-form">
-        <input id="saTenantId" required placeholder="Tenant ID" />
-        <select id="saTenantStatus">
-          <option value="approved">approved</option>
-          <option value="pending">pending</option>
-          <option value="disabled">disabled</option>
-        </select>
-        <button type="submit">Запиши</button>
-      </form>
+      <section class="panel">
+        <h3>Регистрации на фирми</h3>
+        <div id="saTenants" class="sa-tenants"></div>
+      </section>
 
-      <h3>Таблици (read-only)</h3>
-      <form id="saTableForm" class="employee-form">
-        <select id="saTableName">
-          <option value="tenants">tenants</option>
-          <option value="users">users</option>
-          <option value="tenant_users">tenant_users</option>
-          <option value="audit_log">audit_log</option>
-          <option value="request_log">request_log</option>
-          <option value="employees">employees</option>
-          <option value="departments">departments</option>
-          <option value="schedules">schedules</option>
-          <option value="schedule_entries">schedule_entries</option>
-          <option value="shift_templates">shift_templates</option>
-        </select>
-        <button type="submit">Преглед</button>
-      </form>
-      <pre id="saTableOutput" class="json-box">Няма данни.</pre>
+      <section class="panel sa-grid-2">
+        <div>
+          <h3>Таблици (read-only)</h3>
+          <form id="saTableForm" class="employee-form">
+            <select id="saTableName">
+              <option value="tenants">tenants</option>
+              <option value="users">users</option>
+              <option value="tenant_users">tenant_users</option>
+              <option value="audit_log">audit_log</option>
+              <option value="request_log">request_log</option>
+              <option value="employees">employees</option>
+              <option value="departments">departments</option>
+              <option value="schedules">schedules</option>
+              <option value="schedule_entries">schedule_entries</option>
+              <option value="shift_templates">shift_templates</option>
+            </select>
+            <button type="submit">Преглед</button>
+          </form>
+          <pre id="saTableOutput" class="json-box">Няма данни.</pre>
+        </div>
 
-      <h3>Audit log (последни 200)</h3>
-      <pre id="saLogs" class="json-box">Няма данни.</pre>
-      <small id="saStatus"></small>
+        <div>
+          <h3>Audit log (последни 200)</h3>
+          <pre id="saLogs" class="json-box">Няма данни.</pre>
+        </div>
+      </section>
     </main>
 
     <script>
       const apiUrlInput = document.getElementById('saApiUrl');
       const connectBtn = document.getElementById('saConnectBtn');
       const refreshBtn = document.getElementById('saRefreshBtn');
-      const usageEl = document.getElementById('saUsage');
+      const usageCards = document.getElementById('saUsageCards');
       const tenantsEl = document.getElementById('saTenants');
       const logsEl = document.getElementById('saLogs');
-      const reviewForm = document.getElementById('saReviewForm');
-      const tenantIdInput = document.getElementById('saTenantId');
-      const tenantStatusInput = document.getElementById('saTenantStatus');
       const tableForm = document.getElementById('saTableForm');
       const tableNameInput = document.getElementById('saTableName');
       const tableOutput = document.getElementById('saTableOutput');
       const statusEl = document.getElementById('saStatus');
 
+      const REFRESH_EVERY_MS = 5000;
+      let refreshTimer = null;
       let apiBaseUrl = localStorage.getItem('apiBaseUrl') || `${window.location.protocol}//${window.location.hostname}:4000`;
+      let previousTenantSnapshot = new Map();
       apiUrlInput.value = apiBaseUrl;
 
       function setStatus(text, ok = true) {
         statusEl.textContent = text;
-        statusEl.style.color = ok ? '#15803d' : '#b91c1c';
+        statusEl.style.color = ok ? '#166534' : '#b91c1c';
+      }
+
+      function fmtDate(value) {
+        if (!value) {
+          return '—';
+        }
+        try {
+          return new Date(value).toLocaleString('bg-BG');
+        } catch (_error) {
+          return String(value);
+        }
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
       }
 
       async function apiRequest(path, options = {}) {
@@ -101,46 +275,158 @@
         return payload;
       }
 
-      function renderOverview(payload) {
-        usageEl.textContent = JSON.stringify(payload.usage || {}, null, 2);
-        logsEl.textContent = JSON.stringify(payload.logs || [], null, 2);
-
-        tenantsEl.innerHTML = '';
-        (payload.tenants || []).forEach((tenant) => {
-          const item = document.createElement('div');
-          item.className = 'employee-item employee-item--top';
-          item.innerHTML = `<div><strong>${tenant.name}</strong><br><small>ID: ${tenant.id}</small><br><small>Статус: ${tenant.status}</small></div>`;
-          tenantsEl.appendChild(item);
+      async function updateTenantStatus(tenantId, status) {
+        await apiRequest(`/api/platform/super-admin/registrations/${encodeURIComponent(tenantId)}/status`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status }),
         });
+
+        const labelByStatus = {
+          approved: 'Фирмата е активирана/приета.',
+          disabled: 'Фирмата е спряна (замразена/прекратена).',
+          pending: 'Фирмата е върната в изчакване.',
+        };
+        setStatus(labelByStatus[status] || 'Статусът е обновен.');
+
+        await refreshOverview(true);
       }
 
-      connectBtn.addEventListener('click', () => {
+      function renderUsage(payload) {
+        const usage = payload.usage || {};
+        const usersByRole = payload.usersByRole || [];
+        const roleSummary = usersByRole.map((item) => `${item.role}: ${item.count}`).join(' | ') || '—';
+
+        const cards = [
+          { label: 'Организации', value: usage.tenantsCount ?? 0 },
+          { label: 'Потребители', value: usage.usersCount ?? 0 },
+          { label: 'Служители', value: usage.employeesCount ?? 0 },
+          { label: 'Графици', value: usage.schedulesCount ?? 0 },
+          { label: 'Записи в графици', value: usage.scheduleEntriesCount ?? 0 },
+          { label: 'Размер БД (bytes)', value: usage.databaseSizeBytes ?? 0 },
+          { label: 'Потребители по роли', value: roleSummary },
+        ];
+
+        usageCards.innerHTML = cards
+          .map((card) => `<div class="sa-stat"><span>${escapeHtml(card.label)}</span><strong>${escapeHtml(card.value)}</strong></div>`)
+          .join('');
+      }
+
+      function getStatusBadge(status) {
+        const normalized = String(status || '').toLowerCase();
+        const labelByStatus = {
+          pending: 'Изчаква',
+          approved: 'Активна',
+          disabled: 'Спряна',
+        };
+        const label = labelByStatus[normalized] || normalized;
+        return `<span class="sa-status-pill sa-status-pill--${escapeHtml(normalized)}">${escapeHtml(label)}</span>`;
+      }
+
+      function actionsForTenant(tenant) {
+        const id = JSON.stringify(tenant.id);
+        if (tenant.status === 'pending') {
+          return `
+            <button type="button" onclick='window.__saUpdateStatus(${id}, "approved")'>Приеми</button>
+            <button type="button" class="sa-btn-danger" onclick='window.__saUpdateStatus(${id}, "disabled")'>Отхвърли</button>
+          `;
+        }
+
+        if (tenant.status === 'disabled') {
+          return `<button type="button" class="btn-add" onclick='window.__saUpdateStatus(${id}, "approved")'>Активирай</button>`;
+        }
+
+        return `<button type="button" class="sa-btn-warn" onclick='window.__saUpdateStatus(${id}, "disabled")'>Замрази / Прекрати</button>`;
+      }
+
+      function renderTenants(payload) {
+        const tenants = payload.tenants || [];
+        if (!tenants.length) {
+          tenantsEl.innerHTML = '<div class="sa-tenant"><small>Няма регистрирани фирми.</small></div>';
+          return;
+        }
+
+        const nextSnapshot = new Map();
+
+        tenantsEl.innerHTML = tenants
+          .map((tenant) => {
+            const currentFingerprint = `${tenant.status}|${tenant.updatedAt || ''}|${tenant.approvedAt || ''}`;
+            nextSnapshot.set(tenant.id, currentFingerprint);
+            const changed = previousTenantSnapshot.get(tenant.id) && previousTenantSnapshot.get(tenant.id) !== currentFingerprint;
+
+            const ownerName = tenant.ownerFullName || '—';
+            const ownerEmail = tenant.ownerEmail || '—';
+            const ownerPhone = tenant.ownerPhone || '—';
+            const eik = tenant.eik || '—';
+
+            return `
+              <article class="sa-tenant" ${changed ? 'style="box-shadow:0 0 0 2px #bfdbfe inset;"' : ''}>
+                <div class="sa-tenant-head">
+                  <div>
+                    <strong>${escapeHtml(tenant.name || 'Без име')}</strong>
+                    <div class="sa-tenant-meta">
+                      <span><strong>Фирма ID:</strong> ${escapeHtml(tenant.id)}</span>
+                      <span><strong>ЕИК:</strong> ${escapeHtml(eik)}</span>
+                      <span><strong>Собственик:</strong> ${escapeHtml(ownerName)}</span>
+                      <span><strong>Email:</strong> ${escapeHtml(ownerEmail)}</span>
+                      <span><strong>Телефон:</strong> ${escapeHtml(ownerPhone)}</span>
+                      <span><strong>Създадена:</strong> ${escapeHtml(fmtDate(tenant.createdAt))}</span>
+                      <span><strong>Одобрена:</strong> ${escapeHtml(fmtDate(tenant.approvedAt))}</span>
+                    </div>
+                  </div>
+                  <div>${getStatusBadge(tenant.status)}</div>
+                </div>
+
+                <div class="sa-actions">${actionsForTenant(tenant)}</div>
+              </article>
+            `;
+          })
+          .join('');
+
+        previousTenantSnapshot = nextSnapshot;
+      }
+
+      function renderLogs(payload) {
+        logsEl.textContent = JSON.stringify(payload.logs || [], null, 2);
+      }
+
+      async function refreshOverview(isAuto = false) {
+        try {
+          const payload = await apiRequest('/api/platform/super-admin/overview');
+          renderUsage(payload);
+          renderTenants(payload);
+          renderLogs(payload);
+          setStatus(`${isAuto ? 'Live' : 'Ръчно'} обновяване: ${new Date().toLocaleTimeString('bg-BG')}`);
+        } catch (error) {
+          setStatus(error.message, false);
+        }
+      }
+
+      function startLiveRefresh() {
+        if (refreshTimer) {
+          clearInterval(refreshTimer);
+        }
+        refreshTimer = setInterval(() => {
+          refreshOverview(true);
+        }, REFRESH_EVERY_MS);
+      }
+
+      window.__saUpdateStatus = async (tenantId, status) => {
+        try {
+          await updateTenantStatus(tenantId, status);
+        } catch (error) {
+          setStatus(error.message, false);
+        }
+      };
+
+      connectBtn.addEventListener('click', async () => {
         apiBaseUrl = apiUrlInput.value.trim().replace(/\/$/, '');
         localStorage.setItem('apiBaseUrl', apiBaseUrl);
         setStatus(`API URL е записан: ${apiBaseUrl}`);
+        await refreshOverview();
       });
 
       refreshBtn.addEventListener('click', async () => {
-        try {
-          const payload = await apiRequest('/api/platform/super-admin/overview');
-          renderOverview(payload);
-          setStatus('Overview е обновен.');
-        } catch (error) {
-          setStatus(error.message, false);
-        }
-      });
-
-      reviewForm.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        try {
-          await apiRequest(`/api/platform/super-admin/registrations/${encodeURIComponent(tenantIdInput.value)}/status`, {
-            method: 'PATCH',
-            body: JSON.stringify({ status: tenantStatusInput.value }),
-          });
-          setStatus('Статусът е обновен.');
-        } catch (error) {
-          setStatus(error.message, false);
-        }
+        await refreshOverview();
       });
 
       tableForm.addEventListener('submit', async (event) => {
@@ -153,6 +439,9 @@
           setStatus(error.message, false);
         }
       });
+
+      refreshOverview();
+      startLiveRefresh();
     </script>
   </body>
 </html>
