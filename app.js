@@ -41,6 +41,7 @@ const state = {
   selectedScheduleIds: [],
   activeScheduleId: null,
   departments: [],
+  selectedDepartmentId: 'all',
   backendAvailable: false,
   apiBaseUrl: '',
   rates: loadRates(),
@@ -56,6 +57,7 @@ const employeeForm = document.getElementById('employeeForm');
 const nameInput = document.getElementById('nameInput');
 const departmentInput = document.getElementById('departmentInput');
 const positionInput = document.getElementById('positionInput');
+const egnInput = document.getElementById('egnInput');
 const vacationAllowanceInput = document.getElementById('vacationAllowanceInput');
 const employeeList = document.getElementById('employeeList');
 const scheduleTable = document.getElementById('scheduleTable');
@@ -65,6 +67,7 @@ const saveApiUrlBtn = document.getElementById('saveApiUrlBtn');
 const tabButtons = document.querySelectorAll('.tab-btn');
 const tabPanels = document.querySelectorAll('.tab-panel');
 const monthInfo = document.getElementById('monthInfo');
+const scheduleFilterDepartmentSelect = document.getElementById('scheduleFilterDepartmentSelect');
 const scheduleDepartmentSelect = document.getElementById('scheduleDepartmentSelect');
 const scheduleNameInput = document.getElementById('scheduleNameInput');
 const createScheduleBtn = document.getElementById('createScheduleBtn');
@@ -91,6 +94,9 @@ const exportExcelBtn = document.getElementById('exportExcelBtn');
 const exportPdfBtn = document.getElementById('exportPdfBtn');
 const lockStatus = document.getElementById('lockStatus');
 const summarySettingsList = document.getElementById('summarySettingsList');
+const departmentForm = document.getElementById('departmentForm');
+const departmentNameInput = document.getElementById('departmentNameInput');
+const departmentList = document.getElementById('departmentList');
 
 init();
 
@@ -116,6 +122,7 @@ async function init() {
   attachLockAndExport();
   attachSettingsControls();
   attachDepartmentControls();
+  attachDepartmentManagementControls();
 
   const synced = await loadFromBackend();
   if (!synced) {
@@ -156,13 +163,19 @@ function attachSettingsControls() {
 }
 
 function attachDepartmentControls() {
-  if (!scheduleDepartmentSelect) {
-    return;
+  if (scheduleFilterDepartmentSelect) {
+    scheduleFilterDepartmentSelect.addEventListener('change', async () => {
+      state.selectedDepartmentId = scheduleFilterDepartmentSelect.value || 'all';
+      await refreshMonthlyView();
+      renderAll();
+    });
   }
 
-  scheduleDepartmentSelect.addEventListener('change', () => {
-    updateScheduleNameSuggestion();
-  });
+  if (scheduleDepartmentSelect) {
+    scheduleDepartmentSelect.addEventListener('change', () => {
+      updateScheduleNameSuggestion();
+    });
+  }
 
   if (createScheduleBtn) {
     createScheduleBtn.addEventListener('click', async () => {
@@ -172,29 +185,69 @@ function attachDepartmentControls() {
 }
 
 function renderDepartmentOptions() {
-  if (!scheduleDepartmentSelect) {
+  if (scheduleDepartmentSelect) {
+    scheduleDepartmentSelect.innerHTML = '';
+    const commonOption = document.createElement('option');
+    commonOption.value = 'Общ';
+    commonOption.textContent = 'Общ';
+    scheduleDepartmentSelect.appendChild(commonOption);
+
+    state.departments.forEach((department) => {
+      const option = document.createElement('option');
+      option.value = department.name;
+      option.textContent = department.name;
+      scheduleDepartmentSelect.appendChild(option);
+    });
+
+    if (!scheduleDepartmentSelect.value) {
+      scheduleDepartmentSelect.value = 'Общ';
+    }
+  }
+
+  if (scheduleFilterDepartmentSelect) {
+    scheduleFilterDepartmentSelect.innerHTML = '';
+    const commonFilterOption = document.createElement('option');
+    commonFilterOption.value = 'all';
+    commonFilterOption.textContent = 'Общ';
+    scheduleFilterDepartmentSelect.appendChild(commonFilterOption);
+
+    state.departments.forEach((department) => {
+      const option = document.createElement('option');
+      option.value = department.id;
+      option.textContent = department.name;
+      scheduleFilterDepartmentSelect.appendChild(option);
+    });
+
+    scheduleFilterDepartmentSelect.value = state.selectedDepartmentId;
+  }
+
+  renderDepartmentList();
+  renderEmployeeDepartmentOptions();
+  updateScheduleNameSuggestion();
+}
+
+function renderEmployeeDepartmentOptions() {
+  if (!departmentInput) {
     return;
   }
 
-  scheduleDepartmentSelect.innerHTML = '';
+  const currentValue = departmentInput.value;
+  departmentInput.innerHTML = '';
 
-  const commonOption = document.createElement('option');
-  commonOption.value = 'Общ';
-  commonOption.textContent = 'Общ';
-  scheduleDepartmentSelect.appendChild(commonOption);
+  const emptyOption = document.createElement('option');
+  emptyOption.value = '';
+  emptyOption.textContent = 'Без отдел';
+  departmentInput.appendChild(emptyOption);
 
   state.departments.forEach((department) => {
     const option = document.createElement('option');
-    option.value = department;
-    option.textContent = department;
-    scheduleDepartmentSelect.appendChild(option);
+    option.value = department.id;
+    option.textContent = department.name;
+    departmentInput.appendChild(option);
   });
 
-  if (!scheduleDepartmentSelect.value) {
-    scheduleDepartmentSelect.value = 'Общ';
-  }
-
-  updateScheduleNameSuggestion();
+  const hasCurrent = state.departments.some((department) => department.id === currentValue);
+  departmentInput.value = hasCurrent ? currentValue : '';
 }
 
 function updateScheduleNameSuggestion() {
@@ -424,12 +477,14 @@ employeeForm.addEventListener('submit', async (event) => {
   const employee = {
     id: createEmployeeId(),
     name: nameInput.value.trim(),
-    department: departmentInput.value.trim(),
+    department: null,
+    departmentId: departmentInput.value || null,
     position: positionInput.value.trim(),
+    egn: (egnInput?.value || '').trim(),
     vacationAllowance: Number(vacationAllowanceInput.value)
   };
 
-  if (!employee.name || !employee.department || !employee.position) {
+  if (!employee.name || !employee.position || !/^\d{10}$/.test(employee.egn)) {
     return;
   }
 
@@ -442,9 +497,129 @@ employeeForm.addEventListener('submit', async (event) => {
   }
 
   employeeForm.reset();
+  renderEmployeeDepartmentOptions();
+  if (departmentInput) {
+    departmentInput.value = '';
+  }
   vacationAllowanceInput.value = 20;
   renderAll();
 });
+
+async function attachEmployeeToDepartment(employeeId, departmentId) {
+  if (!state.backendAvailable) {
+    return;
+  }
+
+  const response = await apiFetch(`/api/employees/${employeeId}/department`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ department_id: departmentId || null })
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.message || 'Неуспешно обновяване на отдела на служителя.');
+  }
+}
+
+function attachDepartmentManagementControls() {
+  if (!departmentForm) {
+    return;
+  }
+
+  departmentForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const name = (departmentNameInput?.value || '').trim();
+    if (!name || !state.backendAvailable) {
+      return;
+    }
+
+    const response = await apiFetch('/api/departments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      setStatus(payload.message || 'Неуспешно създаване на отдел.', false);
+      return;
+    }
+
+    departmentForm.reset();
+    await loadDepartmentsFromBackend();
+  });
+}
+
+function renderDepartmentList() {
+  if (!departmentList) {
+    return;
+  }
+
+  departmentList.innerHTML = '';
+  if (!state.departments.length) {
+    departmentList.textContent = 'Няма отдели.';
+    return;
+  }
+
+  state.departments.forEach((department) => {
+    const row = document.createElement('div');
+    row.className = 'employee-item';
+
+    const text = document.createElement('div');
+    text.innerHTML = `<b>${department.name}</b>`;
+
+    const actions = document.createElement('div');
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.textContent = 'Редактирай';
+    editBtn.addEventListener('click', async () => {
+      const nextName = window.prompt('Ново име на отдел:', department.name);
+      if (!nextName || !nextName.trim()) {
+        return;
+      }
+
+      const response = await apiFetch(`/api/departments/${department.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: nextName.trim() })
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        setStatus(payload.message || 'Неуспешна редакция на отдел.', false);
+        return;
+      }
+
+      await loadDepartmentsFromBackend();
+      await refreshMonthlyView();
+      renderAll();
+    });
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.textContent = 'Изтрий';
+    deleteBtn.addEventListener('click', async () => {
+      const response = await apiFetch(`/api/departments/${department.id}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        setStatus(payload.message || 'Неуспешно изтриване на отдел.', false);
+        return;
+      }
+
+      if (state.selectedDepartmentId === department.id) {
+        state.selectedDepartmentId = 'all';
+      }
+      await loadDepartmentsFromBackend();
+      await refreshMonthlyView();
+      renderAll();
+    });
+
+    actions.append(editBtn, deleteBtn);
+    row.append(text, actions);
+    departmentList.appendChild(row);
+  });
+}
 
 function createEmployeeId() {
   if (window.crypto && typeof window.crypto.randomUUID === 'function') {
@@ -489,7 +664,9 @@ function renderShiftList() {
     if (shift.locked) {
       actionCell.textContent = 'Системна';
     } else {
-      const removeBtn = document.createElement('button');
+      const actions = document.createElement('div');
+
+    const removeBtn = document.createElement('button');
       removeBtn.type = 'button';
       removeBtn.textContent = 'Изтрий';
       removeBtn.addEventListener('click', async () => {
@@ -529,7 +706,31 @@ function renderEmployees() {
     item.className = 'employee-item';
 
     const details = document.createElement('div');
-    details.innerHTML = `<b>${employee.name}</b><br>${employee.department} • ${employee.position}<br>Полагаем отпуск: ${employee.vacationAllowance} дни`;
+    details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Полагаем отпуск: ${employee.vacationAllowance} дни`;
+
+    const departmentSelect = document.createElement('select');
+    const emptyOption = document.createElement('option');
+    emptyOption.value = '';
+    emptyOption.textContent = 'Без отдел';
+    departmentSelect.appendChild(emptyOption);
+    state.departments.forEach((dep) => {
+      const option = document.createElement('option');
+      option.value = dep.id;
+      option.textContent = dep.name;
+      departmentSelect.appendChild(option);
+    });
+    departmentSelect.value = employee.departmentId || '';
+    departmentSelect.addEventListener('change', async () => {
+      try {
+        await attachEmployeeToDepartment(employee.id, departmentSelect.value || null);
+        await refreshMonthlyView();
+        renderAll();
+      } catch (error) {
+        setStatus(error.message, false);
+      }
+    });
+
+    const actions = document.createElement('div');
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
@@ -541,7 +742,8 @@ function renderEmployees() {
       renderAll();
     });
 
-    item.append(details, removeBtn);
+    actions.append(departmentSelect, removeBtn);
+    item.append(details, actions);
     employeeList.appendChild(item);
   });
 }
@@ -1168,8 +1370,16 @@ async function refreshMonthlyView() {
 
   await loadSchedulesForMonth();
 
+  const employeeQuery = state.selectedDepartmentId && state.selectedDepartmentId !== 'all'
+    ? `/api/employees?department_id=${encodeURIComponent(state.selectedDepartmentId)}`
+    : '/api/employees';
+  const employeeResponse = await apiFetch(employeeQuery);
+  const employeePayload = employeeResponse.ok ? await employeeResponse.json() : { employees: [] };
+  const allowedEmployees = Array.isArray(employeePayload.employees) ? employeePayload.employees : [];
+  const allowedIds = new Set(allowedEmployees.map((employee) => employee.id));
+
   if (!state.selectedScheduleIds.length) {
-    state.employees = [];
+    state.employees = allowedEmployees;
     state.scheduleEntriesById = {};
     return;
   }
@@ -1185,6 +1395,9 @@ async function refreshMonthlyView() {
     const schedule = detail.schedule || {};
     const scheduleDepartment = schedule.department || 'Общ';
     (detail.employees || []).forEach((employee) => {
+      if (!allowedIds.has(employee.id)) {
+        return;
+      }
       mergedEmployees.push({
         ...employee,
         scheduleId: schedule.id,
@@ -1193,10 +1406,14 @@ async function refreshMonthlyView() {
     });
 
     (detail.entries || []).forEach((entry) => {
+      if (!allowedIds.has(entry.employeeId)) {
+        return;
+      }
       mappedEntries[`${schedule.id}|${entry.employeeId}|${entry.day}`] = entry.shiftCode;
     });
   });
 
+  mergedEmployees.sort((a, b) => a.name.localeCompare(b.name, 'bg'));
   state.employees = mergedEmployees;
   state.scheduleEntriesById = mappedEntries;
 }
@@ -1244,7 +1461,9 @@ async function saveEmployeeBackend(employee) {
       body: JSON.stringify({
         name: employee.name,
         department: employee.department,
+        department_id: employee.departmentId || null,
         position: employee.position,
+        egn: employee.egn,
         vacationAllowance: employee.vacationAllowance
       })
     });
