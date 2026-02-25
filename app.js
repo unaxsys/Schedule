@@ -55,7 +55,8 @@ const state = {
   shiftTemplates: loadShiftTemplates(),
   lockedMonths: loadLockedMonths(),
   sirvPeriodMonths: loadSirvPeriodMonths(),
-  summaryColumnsVisibility: loadSummaryColumnsVisibility()
+  summaryColumnsVisibility: loadSummaryColumnsVisibility(),
+  superAdminOverview: null
 };
 
 const monthPicker = document.getElementById('monthPicker');
@@ -78,6 +79,7 @@ const storageStatus = document.getElementById('storageStatus');
 const apiUrlInput = document.getElementById('apiUrlInput');
 const saveApiUrlBtn = document.getElementById('saveApiUrlBtn');
 const userRoleSelect = document.getElementById('userRoleSelect');
+const superAdminPortalLink = document.getElementById('superAdminPortalLink');
 const tabButtons = document.querySelectorAll('.tab-btn');
 const tabPanels = document.querySelectorAll('.tab-panel');
 const monthInfo = document.getElementById('monthInfo');
@@ -127,6 +129,29 @@ const editVacationAllowanceInput = document.getElementById('editVacationAllowanc
 const editTelkInput = document.getElementById('editTelkInput');
 const editYoungWorkerInput = document.getElementById('editYoungWorkerInput');
 const cancelEmployeeEditBtn = document.getElementById('cancelEmployeeEditBtn');
+const registrationForm = document.getElementById('registrationForm');
+const companyNameInput = document.getElementById('companyNameInput');
+const ownerFullNameInput = document.getElementById('ownerFullNameInput');
+const ownerEmailInput = document.getElementById('ownerEmailInput');
+const ownerPhoneInput = document.getElementById('ownerPhoneInput');
+const ownerPasswordInput = document.getElementById('ownerPasswordInput');
+const createPlatformUserForm = document.getElementById('createPlatformUserForm');
+const platformUserRegistrationIdInput = document.getElementById('platformUserRegistrationIdInput');
+const platformUserFullNameInput = document.getElementById('platformUserFullNameInput');
+const platformUserEmailInput = document.getElementById('platformUserEmailInput');
+const platformUserPasswordInput = document.getElementById('platformUserPasswordInput');
+const platformUserRoleInput = document.getElementById('platformUserRoleInput');
+const refreshSuperAdminBtn = document.getElementById('refreshSuperAdminBtn');
+const superAdminUsage = document.getElementById('superAdminUsage');
+const superAdminRegistrations = document.getElementById('superAdminRegistrations');
+const superAdminLogs = document.getElementById('superAdminLogs');
+const reviewRegistrationForm = document.getElementById('reviewRegistrationForm');
+const reviewRegistrationIdInput = document.getElementById('reviewRegistrationIdInput');
+const reviewStatusInput = document.getElementById('reviewStatusInput');
+const reviewNotesInput = document.getElementById('reviewNotesInput');
+const inspectTableForm = document.getElementById('inspectTableForm');
+const inspectTableNameInput = document.getElementById('inspectTableNameInput');
+const inspectTableOutput = document.getElementById('inspectTableOutput');
 
 init();
 
@@ -146,6 +171,7 @@ async function init() {
   if (userRoleSelect) {
     userRoleSelect.value = state.userRole;
   }
+  updateSuperAdminPortalVisibility();
 
   attachApiControls();
   attachRoleControls();
@@ -159,6 +185,8 @@ async function init() {
   attachDepartmentControls();
   attachDepartmentManagementControls();
   attachEmployeeEditModalControls();
+  attachRegistrationControls();
+  attachSuperAdminControls();
 
   const synced = await loadFromBackend();
   if (!synced) {
@@ -173,7 +201,7 @@ async function init() {
 
 function normalizeUserRole(value) {
   const normalized = String(value || '').trim().toLowerCase();
-  return ['user', 'manager', 'admin'].includes(normalized) ? normalized : 'user';
+  return ['user', 'manager', 'admin', 'super_admin'].includes(normalized) ? normalized : 'user';
 }
 
 function getRoleLabel(role) {
@@ -183,11 +211,24 @@ function getRoleLabel(role) {
   if (role === 'manager') {
     return 'Мениджър';
   }
+  if (role === 'super_admin') {
+    return 'Супер администратор';
+  }
   return 'Потребител';
 }
 
 function canDeleteEmployees() {
   return state.userRole === 'admin';
+}
+
+
+function updateSuperAdminPortalVisibility() {
+  if (!superAdminPortalLink) {
+    return;
+  }
+
+  const isSuperAdmin = state.userRole === 'super_admin';
+  superAdminPortalLink.classList.toggle('hidden', !isSuperAdmin);
 }
 
 function attachRoleControls() {
@@ -199,9 +240,168 @@ function attachRoleControls() {
   userRoleSelect.addEventListener('change', () => {
     state.userRole = normalizeUserRole(userRoleSelect.value);
     saveUserRole();
+    updateSuperAdminPortalVisibility();
     renderEmployees();
     setStatus(`Активна роля: ${getRoleLabel(state.userRole)}.`, true);
   });
+}
+
+
+async function apiRequest(path, options = {}) {
+  const headers = {
+    ...(options.headers || {}),
+  };
+
+  if (options.body && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  const response = await apiFetch(path, {
+    ...options,
+    headers,
+  });
+
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_error) {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    throw new Error(payload?.message || `HTTP ${response.status}`);
+  }
+
+  return payload;
+}
+
+function attachRegistrationControls() {
+  if (registrationForm) {
+    registrationForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      try {
+        const payload = await apiRequest('/api/platform/register', {
+          method: 'POST',
+          body: JSON.stringify({
+            companyName: companyNameInput.value,
+            ownerFullName: ownerFullNameInput.value,
+            ownerEmail: ownerEmailInput.value,
+            ownerPhone: ownerPhoneInput.value,
+            password: ownerPasswordInput.value,
+          }),
+        });
+
+        registrationForm.reset();
+        setStatus(`Регистрацията е подадена успешно. Tenant ID: ${payload.tenant.id}`, true);
+      } catch (error) {
+        setStatus(`Грешка при регистрация: ${error.message}`, false);
+      }
+    });
+  }
+
+  if (createPlatformUserForm) {
+    createPlatformUserForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try {
+        await apiRequest('/api/platform/users', {
+          method: 'POST',
+          body: JSON.stringify({
+            registrationId: platformUserRegistrationIdInput.value,
+            fullName: platformUserFullNameInput.value,
+            email: platformUserEmailInput.value,
+            password: platformUserPasswordInput.value,
+            role: platformUserRoleInput.value,
+          }),
+        });
+        createPlatformUserForm.reset();
+        setStatus('Потребителят е добавен успешно.', true);
+      } catch (error) {
+        setStatus(`Грешка при добавяне на потребител: ${error.message}`, false);
+      }
+    });
+  }
+}
+
+function renderSuperAdminPanel() {
+  const overview = state.superAdminOverview;
+  if (!overview) {
+    return;
+  }
+
+  if (superAdminUsage) {
+    superAdminUsage.textContent = JSON.stringify(overview.usage || {}, null, 2);
+  }
+
+  if (superAdminRegistrations) {
+    superAdminRegistrations.innerHTML = '';
+    (overview.registrations || []).forEach((registration) => {
+      const item = document.createElement('div');
+      item.className = 'employee-item employee-item--top';
+      item.innerHTML = `
+        <div>
+          <strong>${registration.companyName}</strong><br />
+          <small>ID: ${registration.id}</small><br />
+          <small>Owner: ${registration.ownerFullName} (${registration.ownerEmail})</small><br />
+          <small>Статус: ${registration.status}</small>
+        </div>
+      `;
+      superAdminRegistrations.appendChild(item);
+    });
+  }
+
+  if (superAdminLogs) {
+    superAdminLogs.textContent = JSON.stringify(overview.logs || [], null, 2);
+  }
+}
+
+function attachSuperAdminControls() {
+  if (refreshSuperAdminBtn) {
+    refreshSuperAdminBtn.addEventListener('click', async () => {
+      try {
+        const overview = await apiRequest('/api/platform/super-admin/overview', { method: 'GET' });
+        state.superAdminOverview = overview;
+        renderSuperAdminPanel();
+        setStatus('Супер админ панелът е обновен.', true);
+      } catch (error) {
+        setStatus(`Неуспешно обновяване на супер админ панел: ${error.message}`, false);
+      }
+    });
+  }
+
+  if (reviewRegistrationForm) {
+    reviewRegistrationForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      try {
+        await apiRequest(`/api/platform/super-admin/registrations/${encodeURIComponent(reviewRegistrationIdInput.value)}/status`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            status: reviewStatusInput.value,
+            notes: reviewNotesInput.value,
+          }),
+        });
+        setStatus('Статусът на регистрацията е обновен.', true);
+      } catch (error) {
+        setStatus(`Грешка при промяна на статус: ${error.message}`, false);
+      }
+    });
+  }
+
+  if (inspectTableForm) {
+    inspectTableForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      try {
+        const response = await apiRequest(`/api/platform/super-admin/tables/${encodeURIComponent(inspectTableNameInput.value)}`, {
+          method: 'GET',
+        });
+        inspectTableOutput.textContent = JSON.stringify(response.rows || [], null, 2);
+      } catch (error) {
+        inspectTableOutput.textContent = `Грешка: ${error.message}`;
+      }
+    });
+  }
 }
 
 function attachSettingsControls() {
