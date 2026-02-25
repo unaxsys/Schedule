@@ -518,15 +518,15 @@ function renderSchedule() {
         select.appendChild(option);
       });
 
-      select.addEventListener('change', async () => {
+      select.addEventListener('change', () => {
         if (monthLocked) {
           return;
         }
         state.schedule[key] = select.value;
         saveScheduleLocal();
-        await saveScheduleEntryBackend(employee.id, month, day, select.value);
         renderSchedule();
         renderVacationLedger();
+        void saveScheduleEntryBackend(employee.id, month, day, select.value);
       });
 
       cell.appendChild(select);
@@ -535,44 +535,30 @@ function renderSchedule() {
       collectSummary(summary, currentShift, holiday, weekend);
     }
 
-    const remainingVacation = employee.vacationAllowance - getVacationUsedForYear(employee.id, year);
-    const normalizedHolidayHours = summary.holidayWorkedHours * state.rates.holiday;
-    const normalizedWeekendHours = summary.weekendWorkedHours * state.rates.weekend;
-    const payableHours =
-      summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + summary.nightConvertedHours;
-    const deviation = summary.workedHours + summary.nightConvertedHours - monthStats.normHours;
-    const sirvTotals = getSirvTotalsForEmployee(employee.id, month, state.sirvPeriodMonths);
+    const employeeTotals = calculateEmployeeTotals({
+      employee,
+      summary,
+      year,
+      month,
+      monthNormHours: monthStats.normHours
+    });
 
-    totals.workedDays += summary.workedDays;
-    totals.workedHours += summary.workedHours;
-    totals.normHours += monthStats.normHours;
-    totals.deviation += deviation;
-    totals.sirvNormHours += sirvTotals.normHours;
-    totals.sirvWorkedHours += sirvTotals.convertedWorkedHours;
-    totals.overtimeHours += sirvTotals.overtimeHours;
-    totals.holidayWorkedHours += summary.holidayWorkedHours;
-    totals.weekendWorkedHours += summary.weekendWorkedHours;
-    totals.nightWorkedHours += summary.nightWorkedHours;
-    totals.nightConvertedHours += summary.nightConvertedHours;
-    totals.payableHours += payableHours;
-    totals.vacationDays += summary.vacationDays;
-    totals.remainingVacation += remainingVacation;
-    totals.sickDays += summary.sickDays;
+    accumulateTotals(totals, employeeTotals);
 
     appendSummaryCell(row, summary.workedDays, 'summary-col');
     appendSummaryCell(row, summary.workedHours.toFixed(2), 'summary-col');
     appendSummaryCell(row, monthStats.normHours, 'summary-col');
-    appendSummaryCell(row, deviation.toFixed(2), `summary-col ${deviation < 0 ? 'negative' : 'positive'}`);
-    appendSummaryCell(row, sirvTotals.normHours.toFixed(2), 'summary-col');
-    appendSummaryCell(row, sirvTotals.convertedWorkedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(row, sirvTotals.overtimeHours.toFixed(2), `summary-col ${sirvTotals.overtimeHours > 0 ? 'negative' : 'positive'}`);
+    appendSummaryCell(row, employeeTotals.deviation.toFixed(2), `summary-col ${employeeTotals.deviation < 0 ? 'negative' : 'positive'}`);
+    appendSummaryCell(row, employeeTotals.sirvNormHours.toFixed(2), 'summary-col');
+    appendSummaryCell(row, employeeTotals.sirvWorkedHours.toFixed(2), 'summary-col');
+    appendSummaryCell(row, employeeTotals.overtimeHours.toFixed(2), `summary-col ${employeeTotals.overtimeHours > 0 ? 'negative' : 'positive'}`);
     appendSummaryCell(row, summary.holidayWorkedHours.toFixed(2), 'summary-col');
     appendSummaryCell(row, summary.weekendWorkedHours.toFixed(2), 'summary-col');
     appendSummaryCell(row, summary.nightWorkedHours.toFixed(2), 'summary-col');
     appendSummaryCell(row, summary.nightConvertedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(row, payableHours.toFixed(2), 'summary-col');
+    appendSummaryCell(row, employeeTotals.payableHours.toFixed(2), 'summary-col');
     appendSummaryCell(row, summary.vacationDays, 'summary-col');
-    appendSummaryCell(row, remainingVacation, 'summary-col');
+    appendSummaryCell(row, employeeTotals.remainingVacation, 'summary-col');
     appendSummaryCell(row, summary.sickDays, 'summary-col');
 
     scheduleTable.appendChild(row);
@@ -617,6 +603,52 @@ function appendSummaryCell(row, value, className) {
   cell.className = className;
   cell.textContent = String(value);
   row.appendChild(cell);
+}
+
+function calculateEmployeeTotals({ employee, summary, year, month, monthNormHours }) {
+  const remainingVacation = employee.vacationAllowance - getVacationUsedForYear(employee.id, year);
+  const normalizedHolidayHours = summary.holidayWorkedHours * state.rates.holiday;
+  const normalizedWeekendHours = summary.weekendWorkedHours * state.rates.weekend;
+  const payableHours =
+    summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + summary.nightConvertedHours;
+  const deviation = summary.workedHours + summary.nightConvertedHours - monthNormHours;
+  const sirvTotals = getSirvTotalsForEmployee(employee.id, month, state.sirvPeriodMonths);
+
+  return {
+    workedDays: summary.workedDays,
+    workedHours: summary.workedHours,
+    normHours: monthNormHours,
+    deviation,
+    sirvNormHours: sirvTotals.normHours,
+    sirvWorkedHours: sirvTotals.convertedWorkedHours,
+    overtimeHours: sirvTotals.overtimeHours,
+    holidayWorkedHours: summary.holidayWorkedHours,
+    weekendWorkedHours: summary.weekendWorkedHours,
+    nightWorkedHours: summary.nightWorkedHours,
+    nightConvertedHours: summary.nightConvertedHours,
+    payableHours,
+    vacationDays: summary.vacationDays,
+    remainingVacation,
+    sickDays: summary.sickDays
+  };
+}
+
+function accumulateTotals(totals, employeeTotals) {
+  totals.workedDays += employeeTotals.workedDays;
+  totals.workedHours += employeeTotals.workedHours;
+  totals.normHours += employeeTotals.normHours;
+  totals.deviation += employeeTotals.deviation;
+  totals.sirvNormHours += employeeTotals.sirvNormHours;
+  totals.sirvWorkedHours += employeeTotals.sirvWorkedHours;
+  totals.overtimeHours += employeeTotals.overtimeHours;
+  totals.holidayWorkedHours += employeeTotals.holidayWorkedHours;
+  totals.weekendWorkedHours += employeeTotals.weekendWorkedHours;
+  totals.nightWorkedHours += employeeTotals.nightWorkedHours;
+  totals.nightConvertedHours += employeeTotals.nightConvertedHours;
+  totals.payableHours += employeeTotals.payableHours;
+  totals.vacationDays += employeeTotals.vacationDays;
+  totals.remainingVacation += employeeTotals.remainingVacation;
+  totals.sickDays += employeeTotals.sickDays;
 }
 
 function collectSummary(summary, shiftCode, holiday, weekend) {
