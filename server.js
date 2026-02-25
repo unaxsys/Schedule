@@ -220,6 +220,21 @@ app.get('/api/state', async (_req, res) => {
   }
 });
 
+app.get('/api/departments', async (_req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT department
+       FROM employees
+       WHERE NULLIF(TRIM(department), '') IS NOT NULL
+       ORDER BY department`
+    );
+
+    res.json({ departments: result.rows.map((row) => row.department) });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 app.post('/api/employees', async (req, res) => {
   const validation = validateEmployeeInput(req.body);
   if (!validation.valid) {
@@ -259,36 +274,46 @@ app.delete('/api/employees/:id', async (req, res) => {
 
 app.post('/api/schedules', async (req, res) => {
   const month = cleanStr(req.body?.month_key || req.body?.month || req.body?.monthKey);
-  const departmentRaw = req.body?.department;
-  const department = cleanStr(departmentRaw);
-  const isCommon = departmentRaw === null || departmentRaw === undefined || department === '';
-  const name = cleanStr(req.body?.name) || `${isCommon ? 'Общ' : department} график ${month}`;
+  const department = cleanStr(req.body?.department);
+  const name = cleanStr(req.body?.name) || `${department} график ${month}`;
 
   if (!isValidMonthKey(month)) {
     return res.status(400).json({ message: 'Месецът трябва да е във формат YYYY-MM.' });
   }
 
+  if (!department) {
+    return res.status(400).json({ message: 'department е задължително поле.' });
+  }
+
   try {
+    const existing = await pool.query(
+      `SELECT id, name, month_key AS month, department, status, created_at AS "createdAt"
+       FROM schedules
+       WHERE month_key = $1 AND department = $2
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [month, department]
+    );
+
+    if (existing.rowCount > 0) {
+      return res.json({
+        ok: true,
+        schedule_id: existing.rows[0].id,
+        schedule: existing.rows[0],
+      });
+    }
+
     const created = await pool.query(
       `INSERT INTO schedules (name, month_key, department, status)
        VALUES ($1, $2, $3, $4)
        RETURNING id, name, month_key AS month, department, status, created_at AS "createdAt"`,
-      [name, month, isCommon ? null : department, 'draft']
-    );
-
-    const employees = await pool.query(
-      `SELECT id, name, department, position, vacation_allowance AS "vacationAllowance"
-       FROM employees
-       WHERE ($1::text IS NULL OR department = $1)
-       ORDER BY name`,
-      [isCommon ? null : department]
+      [name, month, department, 'draft']
     );
 
     res.status(201).json({
       ok: true,
       schedule_id: created.rows[0].id,
       schedule: created.rows[0],
-      employees: employees.rows,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -312,7 +337,7 @@ app.get('/api/schedules', async (req, res) => {
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const schedulesResult = await pool.query(
-      `SELECT id, name, month_key AS month, department, status, created_at AS "createdAt"
+      `SELECT id, department, name, status
        FROM schedules
        ${whereSql}
        ORDER BY month_key, COALESCE(department, ''), created_at`,
@@ -320,6 +345,62 @@ app.get('/api/schedules', async (req, res) => {
     );
 
     res.json({ schedules: schedulesResult.rows });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.get('/api/schedule-view', async (req, res) => {
+  const month = cleanStr(req.query.month);
+  const departments = cleanStr(req.query.departments)
+    .split(',')
+    .map((department) => cleanStr(department))
+    .filter(Boolean);
+
+  if (!isValidMonthKey(month)) {
+    return res.status(400).json({ message: 'month трябва да е във формат YYYY-MM.' });
+  }
+
+  if (!departments.length) {
+    return res.status(400).json({ message: 'departments е задължителен списък.' });
+  }
+
+  try {
+    const employeesResult = await pool.query(
+      `SELECT id, name, department, position, vacation_allowance AS "vacationAllowance"
+       FROM employees
+       WHERE department = ANY($1::text[])
+       ORDER BY department, name`,
+      [departments]
+    );
+
+    const schedulesResult = await pool.query(
+      `SELECT id, department, name, status
+       FROM schedules
+       WHERE month_key = $1
+         AND department = ANY($2::text[])
+       ORDER BY department, created_at DESC`,
+      [month, departments]
+    );
+
+    const scheduleIds = schedulesResult.rows.map((row) => row.id);
+    const entriesResult = scheduleIds.length
+      ? await pool.query(
+          `SELECT schedule_id, employee_id, day, shift_code
+           FROM schedule_entries
+           WHERE schedule_id = ANY($1::uuid[])
+           ORDER BY schedule_id, employee_id, day`,
+          [scheduleIds]
+        )
+      : { rows: [] };
+
+    res.json({
+      month,
+      departments,
+      employees: employeesResult.rows,
+      schedules: schedulesResult.rows,
+      entries: entriesResult.rows,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -422,9 +503,9 @@ app.get('/api/schedules/:id', async (req, res) => {
 
 app.post('/api/schedules/:id/entry', async (req, res) => {
   const scheduleId = req.params.id;
-  const employeeId = cleanStr(req.body?.employeeId);
+  const employeeId = cleanStr(req.body?.employee_id || req.body?.employeeId);
   const day = Number(req.body?.day);
-  const shiftCode = cleanStr(req.body?.shiftCode);
+  const shiftCode = cleanStr(req.body?.shift_code || req.body?.shiftCode);
 
   if (!isValidUuid(scheduleId) || !isValidUuid(employeeId)) {
     return res.status(400).json({ message: 'Невалиден scheduleId или employeeId.' });

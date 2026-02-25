@@ -36,6 +36,10 @@ const state = {
   month: todayMonth(),
   employees: [],
   schedule: {},
+  scheduleEntriesById: {},
+  schedulesByDepartment: {},
+  departments: [],
+  selectedDepartments: [],
   backendAvailable: false,
   apiBaseUrl: '',
   rates: loadRates(),
@@ -60,6 +64,8 @@ const saveApiUrlBtn = document.getElementById('saveApiUrlBtn');
 const tabButtons = document.querySelectorAll('.tab-btn');
 const tabPanels = document.querySelectorAll('.tab-panel');
 const monthInfo = document.getElementById('monthInfo');
+const departmentSelect = document.getElementById('departmentSelect');
+const showDepartmentsBtn = document.getElementById('showDepartmentsBtn');
 const vacationForm = document.getElementById('vacationForm');
 const vacationEmployeeSelect = document.getElementById('vacationEmployeeSelect');
 const vacationStartInput = document.getElementById('vacationStartInput');
@@ -106,6 +112,7 @@ async function init() {
   attachShiftForm();
   attachLockAndExport();
   attachSettingsControls();
+  attachDepartmentControls();
 
   const synced = await loadFromBackend();
   if (!synced) {
@@ -113,6 +120,7 @@ async function init() {
   }
 
   monthPicker.value = state.month;
+  await refreshMonthlyView();
   renderAll();
 }
 
@@ -141,6 +149,43 @@ function attachSettingsControls() {
     wrapper.appendChild(input);
     wrapper.appendChild(text);
     summarySettingsList.appendChild(wrapper);
+  });
+}
+
+function attachDepartmentControls() {
+  if (!departmentSelect) {
+    return;
+  }
+
+  const applySelection = async () => {
+    state.selectedDepartments = Array.from(departmentSelect.selectedOptions).map((option) => option.value);
+    await refreshMonthlyView();
+    renderAll();
+  };
+
+  departmentSelect.addEventListener('change', () => {
+    void applySelection();
+  });
+
+  if (showDepartmentsBtn) {
+    showDepartmentsBtn.addEventListener('click', () => {
+      void applySelection();
+    });
+  }
+}
+
+function renderDepartmentOptions() {
+  if (!departmentSelect) {
+    return;
+  }
+
+  departmentSelect.innerHTML = '';
+  state.departments.forEach((department) => {
+    const option = document.createElement('option');
+    option.value = department;
+    option.textContent = department;
+    option.selected = state.selectedDepartments.includes(department);
+    departmentSelect.appendChild(option);
   });
 }
 
@@ -252,9 +297,10 @@ function attachLockAndExport() {
   });
 }
 
-generateBtn.addEventListener('click', () => {
+generateBtn.addEventListener('click', async () => {
   state.month = monthPicker.value || todayMonth();
   saveScheduleLocal();
+  await refreshMonthlyView();
   renderAll();
 });
 
@@ -427,12 +473,20 @@ function attachVacationForm() {
       return;
     }
 
+    const employee = state.employees.find((entry) => entry.id === employeeId);
+    const scheduleId = employee ? getEmployeeScheduleId(employee) : null;
+
     const promises = [];
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const day = d.getDate();
       const key = scheduleKey(employeeId, state.month, day);
       state.schedule[key] = 'O';
-      promises.push(saveScheduleEntryBackend(employeeId, state.month, day, 'O'));
+      if (scheduleId) {
+        state.scheduleEntriesById[`${scheduleId}|${employeeId}|${day}`] = 'O';
+      }
+      if (employee) {
+        promises.push(saveScheduleEntryBackend(employee, day, 'O'));
+      }
     }
 
     saveScheduleLocal();
@@ -461,6 +515,27 @@ function renderVacationLedger() {
 
   vacationLedger.innerHTML = '';
   vacationLedger.appendChild(table);
+}
+
+function getEmployeesForCurrentDepartments() {
+  if (!state.selectedDepartments.length) {
+    return state.employees;
+  }
+
+  return state.employees.filter((employee) => state.selectedDepartments.includes(employee.department));
+}
+
+function getEmployeeScheduleId(employee) {
+  return state.schedulesByDepartment[employee.department] || null;
+}
+
+function getShiftCodeForCell(employee, month, day) {
+  const scheduleId = getEmployeeScheduleId(employee);
+  if (scheduleId) {
+    return state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] || 'P';
+  }
+
+  return state.schedule[scheduleKey(employee.id, month, day)] || 'P';
 }
 
 function renderSchedule() {
@@ -525,95 +600,116 @@ function renderSchedule() {
     sickDays: 0
   };
 
-  state.employees.forEach((employee) => {
-    const row = document.createElement('tr');
-    const nameCell = document.createElement('td');
-    nameCell.className = 'sticky';
-    nameCell.innerHTML = `<b>${employee.name}</b><br><small>${employee.department} • ${employee.position}</small>`;
-    row.appendChild(nameCell);
+  const employeesToRender = getEmployeesForCurrentDepartments();
+  const groupedEmployees = employeesToRender.reduce((acc, employee) => {
+    if (!acc[employee.department]) {
+      acc[employee.department] = [];
+    }
+    acc[employee.department].push(employee);
+    return acc;
+  }, {});
 
-    const summary = {
-      workedDays: 0,
-      workedHours: 0,
-      holidayWorkedHours: 0,
-      weekendWorkedHours: 0,
-      nightWorkedHours: 0,
-      nightConvertedHours: 0,
-      vacationDays: 0,
-      sickDays: 0
-    };
+  const departmentOrder = state.selectedDepartments.length
+    ? state.selectedDepartments.filter((department) => groupedEmployees[department]?.length)
+    : Object.keys(groupedEmployees).sort((a, b) => a.localeCompare(b, 'bg'));
 
-    for (let day = 1; day <= totalDays; day += 1) {
-      const key = scheduleKey(employee.id, month, day);
-      const currentShift = state.schedule[key] || 'P';
+  departmentOrder.forEach((department) => {
+    const employeesInDepartment = groupedEmployees[department] || [];
 
-      const date = new Date(year, monthIndex - 1, day);
-      const holiday = isOfficialHoliday(date);
-      const weekend = isWeekend(date);
-
-      const cell = document.createElement('td');
-      if (holiday) {
-        cell.classList.add('day-holiday');
-      } else if (weekend) {
-        cell.classList.add('day-weekend');
-      }
-
-      const select = document.createElement('select');
-      select.className = 'shift-select';
-      select.disabled = monthLocked;
-
-      state.shiftTemplates.forEach((shift) => {
-        const option = document.createElement('option');
-        option.value = shift.code;
-        option.textContent = shift.label;
-        if (shift.code === currentShift) {
-          option.selected = true;
-        }
-        select.appendChild(option);
-      });
-
-      select.addEventListener('change', () => {
-        if (monthLocked) {
-          return;
-        }
-        const fromShift = currentShift;
-        const toShift = select.value;
-        const changedShift = getShiftByCode(toShift) || getShiftByCode('P');
-        const hours = getWorkShiftHours(changedShift);
-
-        console.log('changed', employee.id, month, day, fromShift, toShift);
-        console.log('shiftTemplate', changedShift);
-        console.log('computedHours', hours);
-
-        state.schedule[key] = toShift;
-        saveScheduleLocal();
-        renderSchedule();
-        renderVacationLedger();
-        void saveScheduleEntryBackend(employee.id, month, day, toShift);
-      });
-
-      cell.appendChild(select);
-      row.appendChild(cell);
-
-      collectSummary(summary, currentShift, holiday, weekend);
+    if (departmentOrder.length > 1) {
+      const sectionRow = document.createElement('tr');
+      const sectionCell = document.createElement('td');
+      sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length;
+      sectionCell.innerHTML = `<b>Отдел: ${department}</b>`;
+      sectionRow.appendChild(sectionCell);
+      scheduleTable.appendChild(sectionRow);
     }
 
-    const employeeTotals = calculateEmployeeTotals({
-      employee,
-      summary,
-      year,
-      month,
-      monthNormHours: monthStats.normHours
+    employeesInDepartment.forEach((employee) => {
+      const row = document.createElement('tr');
+      const nameCell = document.createElement('td');
+      nameCell.className = 'sticky';
+      nameCell.innerHTML = `<b>${employee.name}</b><br><small>${employee.department} • ${employee.position}</small>`;
+      row.appendChild(nameCell);
+
+      const summary = {
+        workedDays: 0,
+        workedHours: 0,
+        holidayWorkedHours: 0,
+        weekendWorkedHours: 0,
+        nightWorkedHours: 0,
+        nightConvertedHours: 0,
+        vacationDays: 0,
+        sickDays: 0
+      };
+
+      for (let day = 1; day <= totalDays; day += 1) {
+        const currentShift = getShiftCodeForCell(employee, month, day);
+
+        const date = new Date(year, monthIndex - 1, day);
+        const holiday = isOfficialHoliday(date);
+        const weekend = isWeekend(date);
+
+        const cell = document.createElement('td');
+        if (holiday) {
+          cell.classList.add('day-holiday');
+        } else if (weekend) {
+          cell.classList.add('day-weekend');
+        }
+
+        const select = document.createElement('select');
+        select.className = 'shift-select';
+        select.disabled = monthLocked;
+
+        state.shiftTemplates.forEach((shift) => {
+          const option = document.createElement('option');
+          option.value = shift.code;
+          option.textContent = shift.label;
+          if (shift.code === currentShift) {
+            option.selected = true;
+          }
+          select.appendChild(option);
+        });
+
+        select.addEventListener('change', () => {
+          if (monthLocked) {
+            return;
+          }
+          const toShift = select.value;
+          const scheduleId = getEmployeeScheduleId(employee);
+          if (scheduleId) {
+            state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = toShift;
+          }
+          state.schedule[scheduleKey(employee.id, month, day)] = toShift;
+          saveScheduleLocal();
+          renderSchedule();
+          renderVacationLedger();
+          void saveScheduleEntryBackend(employee, day, toShift);
+        });
+
+        cell.appendChild(select);
+        row.appendChild(cell);
+
+        collectSummary(summary, currentShift, holiday, weekend);
+      }
+
+      const employeeTotals = calculateEmployeeTotals({
+        employee,
+        summary,
+        year,
+        month,
+        monthNormHours: monthStats.normHours
+      });
+
+      accumulateTotals(totals, employeeTotals);
+
+      appendSummaryColumns(row, employeeTotals, visibleSummaryColumns);
+
+      scheduleTable.appendChild(row);
     });
-
-    accumulateTotals(totals, employeeTotals);
-
-    appendSummaryColumns(row, employeeTotals, visibleSummaryColumns);
-
-    scheduleTable.appendChild(row);
   });
 
-  if (state.employees.length) {
+  if (employeesToRender.length) {
     const totalsRow = document.createElement('tr');
     const totalsLabel = document.createElement('td');
     totalsLabel.className = 'sticky';
@@ -904,6 +1000,101 @@ async function apiFetch(path, options = {}) {
   return response;
 }
 
+async function loadDepartmentsFromBackend() {
+  const response = await apiFetch('/api/departments');
+  if (!response.ok) {
+    throw new Error('Departments unavailable');
+  }
+
+  const payload = await response.json();
+  state.departments = Array.isArray(payload.departments) ? payload.departments : [];
+  if (!state.selectedDepartments.length && state.departments.length) {
+    state.selectedDepartments = [state.departments[0]];
+  }
+  renderDepartmentOptions();
+}
+
+async function ensureScheduleForDepartment(month, department) {
+  if (!department) {
+    return;
+  }
+
+  if (state.schedulesByDepartment[department]) {
+    return;
+  }
+
+  const response = await apiFetch('/api/schedules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ month_key: month, department, name: `${department} график ${month}` })
+  });
+
+  if (!response.ok) {
+    throw new Error('Schedule create failed');
+  }
+
+  const payload = await response.json();
+  state.schedulesByDepartment[department] = payload.schedule_id;
+}
+
+async function refreshMonthlyView() {
+  if (!state.backendAvailable) {
+    return;
+  }
+
+  const month = state.month || todayMonth();
+  const departments = state.selectedDepartments.length ? state.selectedDepartments : state.departments.slice(0, 1);
+
+  if (!departments.length) {
+    state.employees = [];
+    state.scheduleEntriesById = {};
+    state.schedulesByDepartment = {};
+    return;
+  }
+
+  for (const department of departments) {
+    await ensureScheduleForDepartment(month, department);
+  }
+
+  const query = new URLSearchParams({ month, departments: departments.join(',') });
+  const response = await apiFetch(`/api/schedule-view?${query.toString()}`);
+  if (!response.ok) {
+    throw new Error('Schedule view unavailable');
+  }
+
+  const payload = await response.json();
+  state.employees = payload.employees || [];
+
+  const schedules = Array.isArray(payload.schedules) ? payload.schedules : [];
+  const byDepartment = {};
+  schedules.forEach((schedule) => {
+    if (!byDepartment[schedule.department]) {
+      byDepartment[schedule.department] = schedule.id;
+    }
+  });
+
+  for (const department of departments) {
+    if (!byDepartment[department]) {
+      await ensureScheduleForDepartment(month, department);
+      byDepartment[department] = state.schedulesByDepartment[department];
+    }
+  }
+
+  state.schedulesByDepartment = byDepartment;
+
+  const visibleScheduleIds = new Set(Object.values(byDepartment));
+  const entries = Array.isArray(payload.entries) ? payload.entries : [];
+  const mappedEntries = {};
+  entries.forEach((entry) => {
+    if (!visibleScheduleIds.has(entry.schedule_id)) {
+      return;
+    }
+    mappedEntries[`${entry.schedule_id}|${entry.employee_id}|${entry.day}`] = entry.shift_code;
+  });
+
+  state.scheduleEntriesById = mappedEntries;
+}
+
 async function loadFromBackend() {
   try {
     const healthResponse = await apiFetch('/api/health');
@@ -911,20 +1102,20 @@ async function loadFromBackend() {
       throw new Error('Health check failed');
     }
 
+    state.backendAvailable = true;
+    await loadDepartmentsFromBackend();
+    await refreshMonthlyView();
+
     const response = await apiFetch('/api/state');
-    if (!response.ok) {
-      throw new Error('Backend state unavailable');
+    if (response.ok) {
+      const payload = await response.json();
+      const backendShiftTemplates = Array.isArray(payload.shiftTemplates) ? payload.shiftTemplates : [];
+      if (backendShiftTemplates.length) {
+        state.shiftTemplates = mergeShiftTemplates(backendShiftTemplates);
+        saveShiftTemplates();
+      }
     }
 
-    const payload = await response.json();
-    state.employees = payload.employees || [];
-    state.schedule = payload.schedule || {};
-    const backendShiftTemplates = Array.isArray(payload.shiftTemplates) ? payload.shiftTemplates : [];
-    if (backendShiftTemplates.length) {
-      state.shiftTemplates = mergeShiftTemplates(backendShiftTemplates);
-      saveShiftTemplates();
-    }
-    state.backendAvailable = true;
     setStatus(`Свързан с PostgreSQL бекенд (${state.apiBaseUrl}).`, true);
     persistEmployeesLocal();
     saveScheduleLocal();
@@ -981,16 +1172,21 @@ async function deleteEmployeeBackend(employeeId) {
   }
 }
 
-async function saveScheduleEntryBackend(employeeId, month, day, shiftCode) {
+async function saveScheduleEntryBackend(employee, day, shiftCode) {
   if (!state.backendAvailable) {
     return;
   }
 
   try {
-    const response = await apiFetch('/api/schedule-entry', {
+    const scheduleId = getEmployeeScheduleId(employee);
+    if (!scheduleId) {
+      throw new Error('Липсва график за отдела.');
+    }
+
+    const response = await apiFetch(`/api/schedules/${scheduleId}/entry`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ employeeId, month, day, shiftCode })
+      body: JSON.stringify({ employee_id: employee.id, day, shift_code: shiftCode })
     });
 
     if (!response.ok) {
