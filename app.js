@@ -778,6 +778,14 @@ function renderEmployees() {
       if (middleName === null) return;
       const lastName = window.prompt('Фамилия:', names.lastName);
       if (lastName === null) return;
+      const departmentHint = state.departments.length
+        ? `Въведете име на отдел (налични: ${state.departments.map((dep) => dep.name).join(', ')})`
+        : 'Име на отдел (или празно за "Без отдел")';
+      const currentDepartmentName = employee.departmentId
+        ? state.departments.find((dep) => dep.id === employee.departmentId)?.name || employee.department || ''
+        : employee.department === 'Без отдел' ? '' : (employee.department || '');
+      const departmentName = window.prompt(departmentHint, currentDepartmentName);
+      if (departmentName === null) return;
       const position = window.prompt('Длъжност:', employee.position || '');
       if (position === null) return;
       const egn = window.prompt('ЕГН (10 цифри):', employee.egn || '');
@@ -786,9 +794,17 @@ function renderEmployees() {
       if (vacationAllowanceRaw === null) return;
 
       const fullName = `${firstName.trim()} ${middleName.trim()} ${lastName.trim()}`.trim();
+      const normalizedDepartmentName = departmentName.trim();
+      const selectedDepartment = normalizedDepartmentName
+        ? state.departments.find((dep) => dep.name.toLowerCase() === normalizedDepartmentName.toLowerCase())
+        : null;
       const vacationAllowance = Number(vacationAllowanceRaw);
       if (!firstName.trim() || !middleName.trim() || !lastName.trim() || !position.trim() || !/^\d{10}$/.test(egn.trim()) || !Number.isFinite(vacationAllowance) || vacationAllowance < 0) {
         setStatus('Невалидни данни за редакция на служител.', false);
+        return;
+      }
+      if (normalizedDepartmentName && !selectedDepartment) {
+        setStatus('Невалиден отдел. Изберете съществуващ отдел или оставете празно за "Без отдел".', false);
         return;
       }
 
@@ -801,7 +817,17 @@ function renderEmployees() {
         });
 
         if (updatedEmployee) {
-          state.employees = state.employees.map((entry) => (entry.id === employee.id ? { ...entry, ...updatedEmployee } : entry));
+          const nextDepartment = selectedDepartment || null;
+          state.employees = state.employees.map((entry) => (entry.id === employee.id
+            ? {
+              ...entry,
+              ...updatedEmployee,
+              departmentId: nextDepartment ? nextDepartment.id : null,
+              department: nextDepartment ? nextDepartment.name : 'Без отдел'
+            }
+            : entry));
+
+          await attachEmployeeToDepartment(employee.id, nextDepartment ? nextDepartment.id : null);
           persistEmployeesLocal();
           renderAll();
         }
