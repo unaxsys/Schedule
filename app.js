@@ -99,6 +99,16 @@ const summarySettingsList = document.getElementById('summarySettingsList');
 const departmentForm = document.getElementById('departmentForm');
 const departmentNameInput = document.getElementById('departmentNameInput');
 const departmentList = document.getElementById('departmentList');
+const employeeEditModal = document.getElementById('employeeEditModal');
+const employeeEditForm = document.getElementById('employeeEditForm');
+const editFirstNameInput = document.getElementById('editFirstNameInput');
+const editMiddleNameInput = document.getElementById('editMiddleNameInput');
+const editLastNameInput = document.getElementById('editLastNameInput');
+const editDepartmentInput = document.getElementById('editDepartmentInput');
+const editPositionInput = document.getElementById('editPositionInput');
+const editEgnInput = document.getElementById('editEgnInput');
+const editVacationAllowanceInput = document.getElementById('editVacationAllowanceInput');
+const cancelEmployeeEditBtn = document.getElementById('cancelEmployeeEditBtn');
 
 init();
 
@@ -125,6 +135,7 @@ async function init() {
   attachSettingsControls();
   attachDepartmentControls();
   attachDepartmentManagementControls();
+  attachEmployeeEditModalControls();
 
   const synced = await loadFromBackend();
   if (!synced) {
@@ -729,6 +740,115 @@ function replaceDeletedShiftCodes(deletedCode) {
   saveScheduleLocal();
 }
 
+function attachEmployeeEditModalControls() {
+  if (!employeeEditForm || !employeeEditModal) {
+    return;
+  }
+
+  employeeEditForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+
+    const employeeId = employeeEditForm.dataset.employeeId;
+    if (!employeeId) {
+      closeEmployeeEditModal();
+      return;
+    }
+
+    const firstName = editFirstNameInput.value.trim();
+    const middleName = editMiddleNameInput.value.trim();
+    const lastName = editLastNameInput.value.trim();
+    const position = editPositionInput.value.trim();
+    const egn = editEgnInput.value.trim();
+    const vacationAllowance = Number(editVacationAllowanceInput.value);
+    const departmentId = editDepartmentInput.value || null;
+    const selectedDepartment = departmentId ? state.departments.find((dep) => dep.id === departmentId) : null;
+
+    if (!firstName || !middleName || !lastName || !position || !/^\d{10}$/.test(egn) || !Number.isFinite(vacationAllowance) || vacationAllowance < 0) {
+      setStatus('Невалидни данни за редакция на служител.', false);
+      return;
+    }
+
+    try {
+      const updatedEmployee = await updateEmployeeBackend(employeeId, {
+        name: `${firstName} ${middleName} ${lastName}`.trim(),
+        position,
+        egn,
+        vacationAllowance
+      });
+
+      if (updatedEmployee) {
+        state.employees = state.employees.map((entry) => (entry.id === employeeId
+          ? {
+            ...entry,
+            ...updatedEmployee,
+            departmentId,
+            department: selectedDepartment ? selectedDepartment.name : 'Без отдел'
+          }
+          : entry));
+
+        await attachEmployeeToDepartment(employeeId, departmentId);
+        persistEmployeesLocal();
+        closeEmployeeEditModal();
+        await refreshMonthlyView();
+        renderAll();
+      }
+    } catch (error) {
+      setStatus(error.message, false);
+    }
+  });
+
+  cancelEmployeeEditBtn?.addEventListener('click', () => {
+    closeEmployeeEditModal();
+  });
+
+  employeeEditModal.addEventListener('click', (event) => {
+    if (event.target === employeeEditModal) {
+      closeEmployeeEditModal();
+    }
+  });
+}
+
+function openEmployeeEditModal(employee) {
+  if (!employeeEditForm || !employeeEditModal) {
+    return;
+  }
+
+  const names = splitEmployeeNameParts(employee.name);
+  employeeEditForm.dataset.employeeId = employee.id;
+  editFirstNameInput.value = names.firstName || '';
+  editMiddleNameInput.value = names.middleName || '';
+  editLastNameInput.value = names.lastName || '';
+  editPositionInput.value = employee.position || '';
+  editEgnInput.value = employee.egn || '';
+  editVacationAllowanceInput.value = String(employee.vacationAllowance ?? 20);
+
+  editDepartmentInput.innerHTML = '';
+  const emptyOption = document.createElement('option');
+  emptyOption.value = '';
+  emptyOption.textContent = 'Без отдел';
+  editDepartmentInput.appendChild(emptyOption);
+
+  state.departments.forEach((department) => {
+    const option = document.createElement('option');
+    option.value = department.id;
+    option.textContent = department.name;
+    editDepartmentInput.appendChild(option);
+  });
+
+  editDepartmentInput.value = employee.departmentId || '';
+  employeeEditModal.classList.remove('hidden');
+}
+
+function closeEmployeeEditModal() {
+  if (!employeeEditModal || !employeeEditForm) {
+    return;
+  }
+
+  employeeEditForm.reset();
+  delete employeeEditForm.dataset.employeeId;
+  employeeEditModal.classList.add('hidden');
+}
+
 function renderEmployees() {
   employeeList.innerHTML = '';
   if (!state.employees.length) {
@@ -770,44 +890,8 @@ function renderEmployees() {
     const editBtn = document.createElement('button');
     editBtn.type = 'button';
     editBtn.textContent = 'Редакция';
-    editBtn.addEventListener('click', async () => {
-      const names = splitEmployeeNameParts(employee.name);
-      const firstName = window.prompt('Собствено име:', names.firstName);
-      if (firstName === null) return;
-      const middleName = window.prompt('Бащино име:', names.middleName);
-      if (middleName === null) return;
-      const lastName = window.prompt('Фамилия:', names.lastName);
-      if (lastName === null) return;
-      const position = window.prompt('Длъжност:', employee.position || '');
-      if (position === null) return;
-      const egn = window.prompt('ЕГН (10 цифри):', employee.egn || '');
-      if (egn === null) return;
-      const vacationAllowanceRaw = window.prompt('Полагаем отпуск:', String(employee.vacationAllowance ?? 20));
-      if (vacationAllowanceRaw === null) return;
-
-      const fullName = `${firstName.trim()} ${middleName.trim()} ${lastName.trim()}`.trim();
-      const vacationAllowance = Number(vacationAllowanceRaw);
-      if (!firstName.trim() || !middleName.trim() || !lastName.trim() || !position.trim() || !/^\d{10}$/.test(egn.trim()) || !Number.isFinite(vacationAllowance) || vacationAllowance < 0) {
-        setStatus('Невалидни данни за редакция на служител.', false);
-        return;
-      }
-
-      try {
-        const updatedEmployee = await updateEmployeeBackend(employee.id, {
-          name: fullName,
-          position: position.trim(),
-          egn: egn.trim(),
-          vacationAllowance
-        });
-
-        if (updatedEmployee) {
-          state.employees = state.employees.map((entry) => (entry.id === employee.id ? { ...entry, ...updatedEmployee } : entry));
-          persistEmployeesLocal();
-          renderAll();
-        }
-      } catch (error) {
-        setStatus(error.message, false);
-      }
+    editBtn.addEventListener('click', () => {
+      openEmployeeEditModal(employee);
     });
 
     const removeBtn = document.createElement('button');

@@ -291,3 +291,55 @@ select.shift-select {
     grid-template-columns: 1fr;
   }
 }
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 999;
+}
+
+.modal-overlay.hidden {
+  display: none;
+}
+
+.modal-card {
+  width: min(560px, 100%);
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.28);
+  padding: 1rem;
+}
+
+.modal-card h3 {
+  margin: 0 0 0.8rem 0;
+}
+
+.employee-edit-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.employee-edit-form input,
+.employee-edit-form select {
+  width: 100%;
+}
+
+.employee-edit-form .modal-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+
+@media (max-width: 720px) {
+  .employee-edit-form {
+    grid-template-columns: 1fr;
+  }
+}
