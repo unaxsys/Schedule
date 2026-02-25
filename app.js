@@ -522,11 +522,20 @@ function renderSchedule() {
         if (monthLocked) {
           return;
         }
-        state.schedule[key] = select.value;
+        const fromShift = currentShift;
+        const toShift = select.value;
+        const changedShift = getShiftByCode(toShift) || getShiftByCode('P');
+        const hours = getWorkShiftHours(changedShift);
+
+        console.log('changed', employee.id, month, day, fromShift, toShift);
+        console.log('shiftTemplate', changedShift);
+        console.log('computedHours', hours);
+
+        state.schedule[key] = toShift;
         saveScheduleLocal();
         renderSchedule();
         renderVacationLedger();
-        void saveScheduleEntryBackend(employee.id, month, day, select.value);
+        void saveScheduleEntryBackend(employee.id, month, day, toShift);
       });
 
       cell.appendChild(select);
@@ -651,11 +660,26 @@ function accumulateTotals(totals, employeeTotals) {
   totals.sickDays += employeeTotals.sickDays;
 }
 
+function getStoredShiftHours(shift) {
+  const configuredHours = Number(shift.hours);
+  if (Number.isFinite(configuredHours) && configuredHours > 0) {
+    return configuredHours;
+  }
+  return calcShiftHours(String(shift.start || ''), String(shift.end || ''));
+}
+
+function getWorkShiftHours(shift) {
+  if (!shift || shift.type !== 'work') {
+    return 0;
+  }
+  return getStoredShiftHours(shift);
+}
+
 function collectSummary(summary, shiftCode, holiday, weekend) {
   const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
 
   if (shift.type === 'work') {
-    const shiftHours = Number(shift.hours) || 0;
+    const shiftHours = getWorkShiftHours(shift);
     const nightHours = calcNightHours(shift.start, shift.end);
 
     summary.workedDays += 1;
@@ -762,7 +786,7 @@ function getSirvTotalsForEmployee(employeeId, endMonth, periodMonths) {
       if (shift.type !== 'work') {
         continue;
       }
-      const workedHours = Number(shift.hours) || 0;
+      const workedHours = getWorkShiftHours(shift);
       const nightHours = calcNightHours(shift.start, shift.end);
       totals.convertedWorkedHours += workedHours + nightHours * (NIGHT_HOURS_COEFFICIENT - 1);
     }
@@ -1062,7 +1086,7 @@ function mergeShiftTemplates(backendShiftTemplates) {
       type: 'work',
       start: String(shift.start || ''),
       end: String(shift.end || ''),
-      hours: Number(shift.hours) || calcShiftHours(String(shift.start || ''), String(shift.end || '')),
+      hours: getStoredShiftHours(shift),
       locked: false
     });
   });
@@ -1131,8 +1155,16 @@ function calcNightHours(start, end) {
 }
 
 function calcShiftHours(start, end) {
+  if (!start || !end) {
+    return 0;
+  }
+
   const [startHour, startMinute] = start.split(':').map(Number);
   const [endHour, endMinute] = end.split(':').map(Number);
+
+  if ([startHour, startMinute, endHour, endMinute].some((value) => Number.isNaN(value))) {
+    return 0;
+  }
 
   const startMinutes = startHour * 60 + startMinute;
   let endMinutes = endHour * 60 + endMinute;
