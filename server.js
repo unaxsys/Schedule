@@ -1,9 +1,10 @@
 require('dotenv').config();
 
 const path = require('path');
-const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 
 const app = express();
@@ -41,31 +42,70 @@ function cleanStr(v) {
   return String(v ?? '').trim();
 }
 
-function getRequestUserRole(req) {
-  const role = cleanStr(req.get('x-user-role')).toLowerCase();
-  return ['user', 'manager', 'admin', 'super_admin'].includes(role) ? role : 'user';
-}
-
 function ensureAdmin(req, res) {
-  if (!['admin', 'super_admin'].includes(getRequestUserRole(req))) {
+  const role = cleanStr(req.get('x-user-role')).toLowerCase();
+  if (!['admin', 'super_admin'].includes(role)) {
     res.status(403).json({ message: 'Само администратор може да изтрива служители.' });
     return false;
   }
   return true;
 }
 
-function ensureSuperAdmin(req, res) {
-  if (getRequestUserRole(req) !== 'super_admin') {
-    res.status(403).json({ message: 'Само супер администратор има достъп.' });
-    return false;
-  }
-  return true;
+const JWT_SECRET = cleanStr(process.env.JWT_SECRET);
+const JWT_EXPIRES_IN = cleanStr(process.env.JWT_EXPIRES_IN || '12h');
+
+function createHttpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
 }
 
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
-  return `${salt}:${derived}`;
+function requireAuth(req, res, next) {
+  try {
+    const authHeader = cleanStr(req.get('authorization'));
+    if (!authHeader.toLowerCase().startsWith('bearer ')) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+
+    const token = authHeader.slice(7).trim();
+    if (!token) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+
+    if (!JWT_SECRET) {
+      return next(createHttpError(500, 'JWT secret is not configured.'));
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = {
+      id: decoded.id,
+      email: decoded.email,
+      first_name: decoded.first_name,
+      last_name: decoded.last_name,
+      is_super_admin: decoded.is_super_admin === true,
+    };
+
+    return next();
+  } catch (error) {
+    if (error.name === 'TokenExpiredError' || error.name === 'JsonWebTokenError') {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+    return next(error);
+  }
+}
+
+function requireSuperAdmin(req, res, next) {
+  return requireAuth(req, res, (authError) => {
+    if (authError) {
+      return next(authError);
+    }
+
+    if (!req.user || req.user.is_super_admin !== true) {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+
+    return next();
+  });
 }
 
 async function insertAuditLog(action, entity, payload = {}) {
@@ -1130,7 +1170,71 @@ app.delete('/api/shift-template/:code', async (req, res) => {
   }
 });
 
-app.post('/api/platform/register', async (req, res) => {
+app.post('/api/auth/login', async (req, res, next) => {
+  const email = cleanStr(req.body?.email).toLowerCase();
+  const password = cleanStr(req.body?.password);
+
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Email and password are required.' });
+  }
+
+  try {
+    if (!JWT_SECRET) {
+      throw createHttpError(500, 'JWT secret is not configured.');
+    }
+
+    const userResult = await pool.query(
+      `SELECT id, email, password_hash, first_name, last_name, is_super_admin, is_active
+       FROM users
+       WHERE email = $1
+       LIMIT 1`,
+      [email]
+    );
+
+    if (!userResult.rowCount) {
+      return res.status(401).json({ message: 'Invalid email or password.' });
+    }
+
+    const user = userResult.rows[0];
+    if (!user.is_active) {
+      return res.status(401).json({ message: 'Invalid email or password.' });
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: 'Invalid email or password.' });
+    }
+
+    await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+
+    const token = jwt.sign(
+      {
+        id: user.id,
+        email: user.email,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        is_super_admin: user.is_super_admin === true,
+      },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+
+    return res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        is_super_admin: user.is_super_admin === true,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/platform/register', requireSuperAdmin, async (req, res, next) => {
   const companyName = cleanStr(req.body?.companyName);
   const ownerFullName = cleanStr(req.body?.ownerFullName);
   const ownerEmail = cleanStr(req.body?.ownerEmail).toLowerCase();
@@ -1152,6 +1256,8 @@ app.post('/api/platform/register', async (req, res) => {
 
     const tenant = tenantResult.rows[0];
 
+    const passwordHash = await bcrypt.hash(password, 12);
+
     const ownerUserResult = await pool.query(
       `INSERT INTO users (email, password_hash, first_name, last_name)
        VALUES ($1, $2, $3, $4)
@@ -1159,7 +1265,7 @@ app.post('/api/platform/register', async (req, res) => {
          SET first_name = EXCLUDED.first_name,
              last_name = EXCLUDED.last_name
        RETURNING id, email, first_name AS "firstName", last_name AS "lastName", is_active AS "isActive"`,
-      [ownerEmail, hashPassword(password), firstName, lastName]
+      [ownerEmail, passwordHash, firstName, lastName]
     );
 
     const ownerUser = ownerUserResult.rows[0];
@@ -1182,15 +1288,11 @@ app.post('/api/platform/register', async (req, res) => {
 
     return res.status(201).json({ ok: true, tenant, ownerUser });
   } catch (error) {
-    return res.status(500).json({ message: error.message });
+    return next(error);
   }
 });
 
-app.post('/api/platform/users', async (req, res) => {
-  const requestRole = getRequestUserRole(req);
-  if (!['admin', 'super_admin'].includes(requestRole)) {
-    return res.status(403).json({ message: 'Само администратор може да добавя потребители.' });
-  }
+app.post('/api/platform/users', requireSuperAdmin, async (req, res, next) => {
 
   const tenantId = cleanStr(req.body?.tenantId || req.body?.registrationId);
   const fullName = cleanStr(req.body?.fullName);
@@ -1213,6 +1315,8 @@ app.post('/api/platform/users', async (req, res) => {
 
     const { firstName, lastName } = splitFullName(fullName);
 
+    const passwordHash = await bcrypt.hash(password, 12);
+
     const userResult = await pool.query(
       `INSERT INTO users (email, password_hash, first_name, last_name)
        VALUES ($1, $2, $3, $4)
@@ -1220,7 +1324,7 @@ app.post('/api/platform/users', async (req, res) => {
          SET first_name = EXCLUDED.first_name,
              last_name = EXCLUDED.last_name
        RETURNING id, email, first_name AS "firstName", last_name AS "lastName", is_active AS "isActive", created_at AS "createdAt"`,
-      [email, hashPassword(password), firstName, lastName]
+      [email, passwordHash, firstName, lastName]
     );
 
     const user = userResult.rows[0];
@@ -1243,14 +1347,11 @@ app.post('/api/platform/users', async (req, res) => {
 
     return res.status(201).json({ ok: true, user: { ...user, tenantId, role } });
   } catch (error) {
-    return res.status(500).json({ message: error.message });
+    return next(error);
   }
 });
 
-app.get('/api/platform/super-admin/overview', async (req, res) => {
-  if (!ensureSuperAdmin(req, res)) {
-    return;
-  }
+app.get('/api/platform/super-admin/overview', requireSuperAdmin, async (req, res, next) => {
 
   try {
     const [tenantsResult, usersByRole, dbStats, latestLogs] = await Promise.all([
@@ -1290,14 +1391,11 @@ app.get('/api/platform/super-admin/overview', async (req, res) => {
       logs: latestLogs.rows,
     });
   } catch (error) {
-    return res.status(500).json({ message: error.message });
+    return next(error);
   }
 });
 
-app.patch('/api/platform/super-admin/registrations/:id/status', async (req, res) => {
-  if (!ensureSuperAdmin(req, res)) {
-    return;
-  }
+app.patch('/api/platform/super-admin/registrations/:id/status', requireSuperAdmin, async (req, res, next) => {
 
   const id = cleanStr(req.params.id);
   const status = cleanStr(req.body?.status).toLowerCase();
@@ -1333,14 +1431,11 @@ app.patch('/api/platform/super-admin/registrations/:id/status', async (req, res)
 
     return res.json({ ok: true, tenant: updated.rows[0] });
   } catch (error) {
-    return res.status(500).json({ message: error.message });
+    return next(error);
   }
 });
 
-app.get('/api/platform/super-admin/tables/:tableName', async (req, res) => {
-  if (!ensureSuperAdmin(req, res)) {
-    return;
-  }
+app.get('/api/platform/super-admin/tables/:tableName', requireSuperAdmin, async (req, res, next) => {
 
   const tableName = cleanStr(req.params.tableName).toLowerCase();
   const allowedTables = new Set(['tenants', 'users', 'tenant_users', 'audit_log', 'request_log', 'employees', 'departments', 'schedules', 'schedule_entries', 'shift_templates']);
@@ -1352,11 +1447,26 @@ app.get('/api/platform/super-admin/tables/:tableName', async (req, res) => {
     const result = await pool.query(`SELECT row_to_json(t) AS row FROM (SELECT * FROM ${tableName} ORDER BY 1 DESC LIMIT 200) t`);
     return res.json({ ok: true, tableName, rows: result.rows.map((item) => item.row) });
   } catch (error) {
-    return res.status(500).json({ message: error.message });
+    return next(error);
   }
 });
 
 app.use(express.static(path.join(__dirname)));
+
+app.use((error, req, res, next) => {
+  const status = Number(error?.status) || 500;
+  const message = status >= 500 ? 'Internal server error' : error.message || 'Request failed';
+
+  if (status >= 500) {
+    console.error('Unhandled error:', error);
+  }
+
+  if (res.headersSent) {
+    return next(error);
+  }
+
+  return res.status(status).json({ message });
+});
 
 initDatabase()
   .then(() => {
