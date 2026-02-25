@@ -1097,3 +1097,28 @@ html.welcome-lock, html.welcome-lock body { height: 100%; overflow: hidden; }
   .ws-right{ order: 2; }
   .ws-h1{ font-size: 36px; }
 }
+
+.ws-toast{
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  z-index: 100000;
+  max-width: min(720px, calc(100vw - 40px));
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(15,23,42,0.12);
+  background: rgba(255,255,255,0.86);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 18px 60px rgba(15,23,42,0.14);
+  color: rgba(15,23,42,0.82);
+  font-weight: 700;
+  font-size: 12px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease, transform .18s ease;
+}
+.ws-toast.show{
+  opacity: 1;
+  transform: translateX(-50%) translateY(-6px);
+}
