@@ -22,7 +22,7 @@ const pool =
 app.use(
   cors({
     origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
@@ -63,6 +63,51 @@ function isValidEmploymentRange(startDate, endDate) {
     return true;
   }
   return endDate >= startDate;
+}
+
+
+function getMonthBounds(monthKey) {
+  if (!isValidMonthKey(monthKey)) {
+    return null;
+  }
+
+  const [year, month] = monthKey.split('-').map(Number);
+  const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const monthEnd = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+  return { monthStart, monthEnd };
+}
+
+function buildEmploymentOverlapClause(monthStartParam, monthEndParam) {
+  return `e.start_date <= ${monthEndParam}::date AND (e.end_date IS NULL OR e.end_date >= ${monthStartParam}::date)`;
+}
+
+const EMPLOYEE_SELECT_FIELDS = `e.id,
+              e.name,
+              e.department_id AS "departmentId",
+              COALESCE(d.name, e.department, 'Без отдел') AS department,
+              e.position,
+              e.egn,
+              e.base_vacation_allowance AS "baseVacationAllowance",
+              e.telk,
+              e.young_worker_benefit AS "youngWorkerBenefit",
+              e.start_date::text AS "startDate",
+              e.end_date::text AS "endDate",
+              (e.base_vacation_allowance + CASE WHEN e.telk THEN 5 ELSE 0 END + CASE WHEN e.young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
+              (e.base_vacation_allowance + CASE WHEN e.telk THEN 5 ELSE 0 END + CASE WHEN e.young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`;
+
+function getReleaseDateFromRequest(req) {
+  const requestedEndDate = normalizeDateOnly(req.body?.end_date || req.body?.endDate || req.query.end_date);
+  if (requestedEndDate) {
+    return requestedEndDate;
+  }
+
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 function validateEmployeeInput(data = {}) {
@@ -237,12 +282,49 @@ async function initDatabase() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schedule_entries (
       schedule_id UUID NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
-      employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+      employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
       day INTEGER NOT NULL CHECK (day >= 1 AND day <= 31),
       shift_code VARCHAR(16) NOT NULL,
       PRIMARY KEY (schedule_id, employee_id, day)
     )
   `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'schedule_entries_employee_id_fkey'
+      ) THEN
+        ALTER TABLE schedule_entries DROP CONSTRAINT schedule_entries_employee_id_fkey;
+      END IF;
+
+      ALTER TABLE schedule_entries
+        ADD CONSTRAINT schedule_entries_employee_id_fkey
+        FOREIGN KEY (employee_id)
+        REFERENCES employees(id)
+        ON DELETE RESTRICT;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'employees_employment_period_check'
+      ) THEN
+        ALTER TABLE employees
+          ADD CONSTRAINT employees_employment_period_check
+          CHECK (end_date IS NULL OR end_date >= start_date);
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_start_date ON employees(start_date)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_end_date ON employees(end_date)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_young_worker_benefit ON employees(young_worker_benefit)`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS shift_templates (
@@ -272,7 +354,7 @@ async function initDatabase() {
 
   await pool.query(`
     UPDATE employees
-    SET base_vacation_allowance = GREATEST(vacation_allowance - 6, 0)
+    SET base_vacation_allowance = GREATEST(vacation_allowance - (CASE WHEN telk THEN 6 ELSE 0 END) - (CASE WHEN young_worker_benefit THEN 6 ELSE 0 END), 0)
     WHERE (telk = TRUE OR young_worker_benefit = TRUE)
       AND base_vacation_allowance = 20
       AND vacation_allowance >= 26
@@ -292,18 +374,7 @@ app.get('/api/state', async (_req, res) => {
   try {
     const [employees, schedules, scheduleEntries, shiftTemplates, departments] = await Promise.all([
       pool.query(
-        `SELECT e.id,
-                e.name,
-                e.department_id AS "departmentId",
-                COALESCE(d.name, e.department, 'Без отдел') AS department,
-                e.position,
-                e.egn,
-                e.vacation_allowance AS "vacationAllowance",
-                e.base_vacation_allowance AS "baseVacationAllowance",
-                e.telk,
-                e.young_worker_benefit AS "youngWorkerBenefit",
-                e.start_date::text AS "startDate",
-                e.end_date::text AS "endDate"
+        `SELECT ${EMPLOYEE_SELECT_FIELDS}
          FROM employees e
          LEFT JOIN departments d ON d.id = e.department_id
          ORDER BY e.name ASC`
@@ -445,35 +516,39 @@ app.delete('/api/departments/:id', async (req, res) => {
 
 app.get('/api/employees', async (req, res) => {
   const departmentId = cleanStr(req.query.department_id);
+  const monthKey = cleanStr(req.query.month_key || req.query.month);
 
   if (departmentId && !isValidUuid(departmentId)) {
     return res.status(400).json({ message: 'Невалиден department_id.' });
   }
+  if (monthKey && !isValidMonthKey(monthKey)) {
+    return res.status(400).json({ message: 'Невалиден month_key. Използвайте YYYY-MM.' });
+  }
 
   try {
     const params = [];
-    let where = '';
+    const where = [];
+
     if (departmentId) {
       params.push(departmentId);
-      where = `WHERE e.department_id = $${params.length}`;
+      where.push(`e.department_id = $${params.length}`);
     }
 
+    if (monthKey) {
+      const bounds = getMonthBounds(monthKey);
+      params.push(bounds.monthStart);
+      const monthStartParam = `$${params.length}`;
+      params.push(bounds.monthEnd);
+      const monthEndParam = `$${params.length}`;
+      where.push(buildEmploymentOverlapClause(monthStartParam, monthEndParam));
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await pool.query(
-      `SELECT e.id,
-              e.name,
-              e.department_id AS "departmentId",
-              COALESCE(d.name, e.department, 'Без отдел') AS department,
-              e.position,
-              e.egn,
-              e.vacation_allowance AS "vacationAllowance",
-                e.base_vacation_allowance AS "baseVacationAllowance",
-                e.telk,
-                e.young_worker_benefit AS "youngWorkerBenefit",
-                e.start_date::text AS "startDate",
-                e.end_date::text AS "endDate"
+      `SELECT ${EMPLOYEE_SELECT_FIELDS}
        FROM employees e
        LEFT JOIN departments d ON d.id = e.department_id
-       ${where}
+       ${whereSql}
        ORDER BY e.name ASC`,
       params
     );
@@ -517,9 +592,11 @@ app.post('/api/employees', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO employees (name, department, department_id, position, egn, vacation_allowance, base_vacation_allowance, telk, young_worker_benefit, start_date, end_date)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING id, name, department_id AS "departmentId", department, position, egn, vacation_allowance AS "vacationAllowance",
+       RETURNING id, name, department_id AS "departmentId", department, position, egn,
                  base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
-                 start_date::text AS "startDate", end_date::text AS "endDate"`,
+                 start_date::text AS "startDate", end_date::text AS "endDate",
+                 (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
+                 (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
       [name, departmentName, resolvedDepartmentId, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, startDate, endDate]
     );
 
@@ -561,9 +638,10 @@ app.put('/api/employees/:id', async (req, res) => {
            end_date = $10
        WHERE id = $1
        RETURNING id, name, department_id AS "departmentId", COALESCE(department, 'Без отдел') AS department,
-                 position, egn, vacation_allowance AS "vacationAllowance",
-                 base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
-                 start_date::text AS "startDate", end_date::text AS "endDate"`,
+                 position, egn, base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
+                 start_date::text AS "startDate", end_date::text AS "endDate",
+                 (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
+                 (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
       [id, name, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, startDate, endDate]
     );
 
@@ -607,9 +685,10 @@ app.put('/api/employees/:id/department', async (req, res) => {
            department = $3
        WHERE id = $1
        RETURNING id, name, department_id AS "departmentId", COALESCE($3, 'Без отдел') AS department, position,
-                 egn, vacation_allowance AS "vacationAllowance",
-                 base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
-                 start_date::text AS "startDate", end_date::text AS "endDate"`,
+                 egn, base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
+                 start_date::text AS "startDate", end_date::text AS "endDate",
+                 (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
+                 (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
       [id, departmentId, departmentName]
     );
 
@@ -623,35 +702,47 @@ app.put('/api/employees/:id/department', async (req, res) => {
   }
 });
 
-app.delete('/api/employees/:id', async (req, res) => {
-  const id = req.params.id;
+async function releaseEmployee(req, res) {
+  const id = cleanStr(req.params.id);
   if (!isValidUuid(id)) {
     return res.status(400).json({ message: 'Невалиден employee id.' });
   }
 
-  const requestedEndDate = normalizeDateOnly(req.query.end_date || req.body?.end_date || req.body?.endDate);
-  if (!requestedEndDate) {
-    return res.status(400).json({ message: 'Изисква се end_date във формат YYYY-MM-DD.' });
-  }
+  const requestedEndDate = getReleaseDateFromRequest(req);
 
   try {
+    const employeeResult = await pool.query(
+      'SELECT id, start_date::text AS "startDate" FROM employees WHERE id = $1',
+      [id]
+    );
+
+    if (!employeeResult.rowCount) {
+      return res.status(404).json({ message: 'Служителят не е намерен.' });
+    }
+
+    const startDate = employeeResult.rows[0].startDate;
+    if (!isValidEmploymentRange(startDate, requestedEndDate)) {
+      return res.status(400).json({
+        message: 'Последният работен ден не може да е преди началната дата на служителя.',
+      });
+    }
+
     const updated = await pool.query(
       `UPDATE employees
        SET end_date = $2
        WHERE id = $1
-       RETURNING id`,
+       RETURNING id, end_date::text AS "endDate"`,
       [id, requestedEndDate]
     );
 
-    if (!updated.rowCount) {
-      return res.status(404).json({ message: 'Служителят не е намерен.' });
-    }
-
-    res.json({ ok: true });
+    return res.json({ ok: true, employee: updated.rows[0] });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    return res.status(500).json({ message: error.message });
   }
-});
+}
+
+app.patch('/api/employees/:id/release', releaseEmployee);
+app.delete('/api/employees/:id', releaseEmployee);
 
 app.post('/api/schedules', async (req, res) => {
   const monthKey = cleanStr(req.body?.month_key || req.body?.month || req.body?.monthKey);
@@ -698,32 +789,27 @@ app.get('/api/schedules', async (req, res) => {
   try {
     if (month && Object.prototype.hasOwnProperty.call(req.query, 'department_id')) {
       const filterAll = !departmentId || departmentId === 'all';
+      const bounds = getMonthBounds(month);
+      const employeesParams = [bounds.monthStart, bounds.monthEnd];
+      const overlapClause = buildEmploymentOverlapClause('$1', '$2');
+
       const employeesQuery = filterAll
         ? pool.query(
-            `SELECT e.id, e.name, e.department_id AS "departmentId", COALESCE(d.name, e.department, 'Без отдел') AS department,
-                    e.position, e.egn, e.vacation_allowance AS "vacationAllowance",
-                e.base_vacation_allowance AS "baseVacationAllowance",
-                e.telk,
-                e.young_worker_benefit AS "youngWorkerBenefit",
-                e.start_date::text AS "startDate",
-                e.end_date::text AS "endDate"
+            `SELECT ${EMPLOYEE_SELECT_FIELDS}
              FROM employees e
              LEFT JOIN departments d ON d.id = e.department_id
-             ORDER BY e.name ASC`
+             WHERE ${overlapClause}
+             ORDER BY e.name ASC`,
+            employeesParams
           )
         : pool.query(
-            `SELECT e.id, e.name, e.department_id AS "departmentId", COALESCE(d.name, e.department, 'Без отдел') AS department,
-                    e.position, e.egn, e.vacation_allowance AS "vacationAllowance",
-                e.base_vacation_allowance AS "baseVacationAllowance",
-                e.telk,
-                e.young_worker_benefit AS "youngWorkerBenefit",
-                e.start_date::text AS "startDate",
-                e.end_date::text AS "endDate"
+            `SELECT ${EMPLOYEE_SELECT_FIELDS}
              FROM employees e
              LEFT JOIN departments d ON d.id = e.department_id
-             WHERE e.department_id = $1
+             WHERE e.department_id = $3
+               AND ${overlapClause}
              ORDER BY e.name ASC`,
-            [departmentId]
+            [...employeesParams, departmentId]
           );
 
       const entriesQuery = filterAll
@@ -731,9 +817,12 @@ app.get('/api/schedules', async (req, res) => {
             `SELECT se.schedule_id AS "scheduleId", se.employee_id AS "employeeId", se.day, se.shift_code AS "shiftCode"
              FROM schedule_entries se
              JOIN schedules s ON s.id = se.schedule_id
+             JOIN employees e ON e.id = se.employee_id
              WHERE s.month_key = $1
+               AND e.start_date <= $3::date
+               AND (e.end_date IS NULL OR e.end_date >= $2::date)
              ORDER BY se.schedule_id, se.employee_id, se.day`,
-            [month]
+            [month, bounds.monthStart, bounds.monthEnd]
           )
         : pool.query(
             `SELECT se.schedule_id AS "scheduleId", se.employee_id AS "employeeId", se.day, se.shift_code AS "shiftCode"
@@ -742,8 +831,10 @@ app.get('/api/schedules', async (req, res) => {
              JOIN employees e ON e.id = se.employee_id
              WHERE s.month_key = $1
                AND e.department_id = $2
+               AND e.start_date <= $4::date
+               AND (e.end_date IS NULL OR e.end_date >= $3::date)
              ORDER BY se.schedule_id, se.employee_id, se.day`,
-            [month, departmentId]
+            [month, departmentId, bounds.monthStart, bounds.monthEnd]
           );
 
       const [employeesResult, entriesResult] = await Promise.all([employeesQuery, entriesQuery]);
@@ -798,19 +889,16 @@ app.get('/api/schedules/:id', async (req, res) => {
 
     const schedule = scheduleResult.rows[0];
 
+    const bounds = getMonthBounds(schedule.month_key);
     const employeesResult = await pool.query(
-      `SELECT e.id, e.name, e.department_id AS "departmentId", COALESCE(d.name, e.department, 'Без отдел') AS department,
-              e.position, e.egn, e.vacation_allowance AS "vacationAllowance",
-                e.base_vacation_allowance AS "baseVacationAllowance",
-                e.telk,
-                e.young_worker_benefit AS "youngWorkerBenefit",
-                e.start_date::text AS "startDate",
-                e.end_date::text AS "endDate"
+      `SELECT ${EMPLOYEE_SELECT_FIELDS}
        FROM employees e
        LEFT JOIN departments d ON d.id = e.department_id
        WHERE ($1::text IS NULL OR COALESCE(d.name, e.department) = $1)
+         AND e.start_date <= $3::date
+         AND (e.end_date IS NULL OR e.end_date >= $2::date)
        ORDER BY e.name`,
-      [schedule.department]
+      [schedule.department, bounds.monthStart, bounds.monthEnd]
     );
 
     const entriesResult = await pool.query(
@@ -844,7 +932,7 @@ app.post('/api/schedules/:id/entry', async (req, res) => {
 
   try {
     const scheduleResult = await pool.query(
-      `SELECT id, department, status FROM schedules WHERE id = $1`,
+      `SELECT id, department, status, month_key FROM schedules WHERE id = $1`,
       [scheduleId]
     );
 
@@ -858,7 +946,8 @@ app.post('/api/schedules/:id/entry', async (req, res) => {
     }
 
     const employeeResult = await pool.query(
-      `SELECT e.id, COALESCE(d.name, e.department) AS department
+      `SELECT e.id, COALESCE(d.name, e.department) AS department,
+              e.start_date::text AS "startDate", e.end_date::text AS "endDate"
        FROM employees e
        LEFT JOIN departments d ON d.id = e.department_id
        WHERE e.id = $1`,
@@ -874,6 +963,15 @@ app.post('/api/schedules/:id/entry', async (req, res) => {
       return res.status(400).json({
         message: `Служителят не е от отдел ${schedule.department}.`,
       });
+    }
+
+    const effectiveMonth = monthKey || schedule.month_key;
+    const entryDate = normalizeDateOnly(`${effectiveMonth}-${String(day).padStart(2, '0')}`);
+    if (!entryDate || !isValidEmploymentRange(employee.startDate, employee.endDate || entryDate)) {
+      return res.status(400).json({ message: 'Невалиден период на заетост за служителя.' });
+    }
+    if (entryDate < employee.startDate || (employee.endDate && entryDate > employee.endDate)) {
+      return res.status(409).json({ message: 'Денят е извън периода на заетост на служителя.' });
     }
 
     await pool.query(
