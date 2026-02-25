@@ -38,6 +38,7 @@ const SUMMARY_COLUMNS = [
 const state = {
   month: todayMonth(),
   employees: [],
+  scheduleEmployees: [],
   schedule: {},
   scheduleEntriesById: {},
   schedules: [],
@@ -1196,7 +1197,7 @@ function getEmployeesForSelectedSchedules() {
 
   const selectedSet = new Set(state.selectedScheduleIds);
   const monthKey = state.month || todayMonth();
-  return state.employees.filter((employee) => {
+  return state.scheduleEmployees.filter((employee) => {
     const scheduleId = employee.scheduleId;
     return selectedSet.has(scheduleId) && isEmployeeVisibleInMonth(employee, monthKey);
   });
@@ -1869,9 +1870,10 @@ async function refreshMonthlyView() {
   const employeePayload = employeeResponse.ok ? await employeeResponse.json() : { employees: [] };
   const allowedEmployees = Array.isArray(employeePayload.employees) ? employeePayload.employees : [];
   const allowedIds = new Set(allowedEmployees.map((employee) => employee.id));
+  state.employees = allowedEmployees.map(normalizeEmployeeVacationData);
 
   if (!state.selectedScheduleIds.length) {
-    state.employees = allowedEmployees.map(normalizeEmployeeVacationData);
+    state.scheduleEmployees = [];
     state.scheduleEntriesById = {};
     return;
   }
@@ -1906,7 +1908,7 @@ async function refreshMonthlyView() {
   });
 
   mergedEmployees.sort((a, b) => a.name.localeCompare(b.name, 'bg'));
-  state.employees = mergedEmployees.map(normalizeEmployeeVacationData);
+  state.scheduleEmployees = mergedEmployees.map(normalizeEmployeeVacationData);
   state.scheduleEntriesById = mappedEntries;
 }
 
