@@ -65,6 +65,7 @@ const startDateInput = document.getElementById('startDateInput');
 const endDateInput = document.getElementById('endDateInput');
 const vacationAllowanceInput = document.getElementById('vacationAllowanceInput');
 const telkInput = document.getElementById('telkInput');
+const youngWorkerInput = document.getElementById('youngWorkerInput');
 const employeeList = document.getElementById('employeeList');
 const scheduleTable = document.getElementById('scheduleTable');
 const storageStatus = document.getElementById('storageStatus');
@@ -117,6 +118,7 @@ const editStartDateInput = document.getElementById('editStartDateInput');
 const editEndDateInput = document.getElementById('editEndDateInput');
 const editVacationAllowanceInput = document.getElementById('editVacationAllowanceInput');
 const editTelkInput = document.getElementById('editTelkInput');
+const editYoungWorkerInput = document.getElementById('editYoungWorkerInput');
 const cancelEmployeeEditBtn = document.getElementById('cancelEmployeeEditBtn');
 
 init();
@@ -518,6 +520,7 @@ employeeForm.addEventListener('submit', async (event) => {
 
   const baseVacationAllowance = Number(vacationAllowanceInput.value);
   const hasTelk = Boolean(telkInput?.checked);
+  const hasYoungWorkerBenefit = Boolean(youngWorkerInput?.checked);
 
   const employee = {
     id: createEmployeeId(),
@@ -528,8 +531,9 @@ employeeForm.addEventListener('submit', async (event) => {
     egn: (egnInput?.value || '').trim(),
     startDate: (startDateInput?.value || '').trim(),
     endDate: (endDateInput?.value || '').trim() || null,
-    vacationAllowance: calculateVacationAllowance(baseVacationAllowance, hasTelk),
+    vacationAllowance: calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit),
     telk: hasTelk,
+    youngWorkerBenefit: hasYoungWorkerBenefit,
     baseVacationAllowance
   };
 
@@ -553,6 +557,9 @@ employeeForm.addEventListener('submit', async (event) => {
   vacationAllowanceInput.value = 20;
   if (telkInput) {
     telkInput.checked = false;
+  }
+  if (youngWorkerInput) {
+    youngWorkerInput.checked = false;
   }
   if (startDateInput) {
     startDateInput.value = '';
@@ -780,14 +787,18 @@ function createEmployeeId() {
   return `emp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-const TELK_EXTRA_VACATION_DAYS = 6;
+const EXTRA_VACATION_DAYS_PER_BENEFIT = 6;
 
-function calculateVacationAllowance(baseVacationAllowance, hasTelk) {
+function getExtraVacationDays(hasTelk, hasYoungWorkerBenefit) {
+  return (hasTelk ? EXTRA_VACATION_DAYS_PER_BENEFIT : 0) + (hasYoungWorkerBenefit ? EXTRA_VACATION_DAYS_PER_BENEFIT : 0);
+}
+
+function calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit) {
   const normalizedBase = Number(baseVacationAllowance);
   if (!Number.isFinite(normalizedBase)) {
     return 0;
   }
-  return normalizedBase + (hasTelk ? TELK_EXTRA_VACATION_DAYS : 0);
+  return normalizedBase + getExtraVacationDays(hasTelk, hasYoungWorkerBenefit);
 }
 
 function resolveBaseVacationAllowance(employee) {
@@ -801,11 +812,7 @@ function resolveBaseVacationAllowance(employee) {
     return 20;
   }
 
-  if (employee?.telk) {
-    return Math.max(0, total - TELK_EXTRA_VACATION_DAYS);
-  }
-
-  return total;
+  return Math.max(0, total - getExtraVacationDays(Boolean(employee?.telk), Boolean(employee?.youngWorkerBenefit)));
 }
 
 function renderAll() {
@@ -893,7 +900,8 @@ function attachEmployeeEditModalControls() {
     const egn = editEgnInput.value.trim();
     const baseVacationAllowance = Number(editVacationAllowanceInput.value);
     const hasTelk = Boolean(editTelkInput?.checked);
-    const vacationAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk);
+    const hasYoungWorkerBenefit = Boolean(editYoungWorkerInput?.checked);
+    const vacationAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit);
     const startDate = (editStartDateInput?.value || '').trim();
     const endDate = (editEndDateInput?.value || '').trim() || null;
     const departmentId = editDepartmentInput.value || null;
@@ -911,6 +919,7 @@ function attachEmployeeEditModalControls() {
         egn,
         vacationAllowance,
         telk: hasTelk,
+        youngWorkerBenefit: hasYoungWorkerBenefit,
         baseVacationAllowance,
         startDate,
         endDate
@@ -926,6 +935,7 @@ function attachEmployeeEditModalControls() {
             startDate,
             endDate,
             telk: hasTelk,
+            youngWorkerBenefit: hasYoungWorkerBenefit,
             baseVacationAllowance
           }
           : entry));
@@ -970,6 +980,9 @@ function openEmployeeEditModal(employee) {
   if (editTelkInput) {
     editTelkInput.checked = Boolean(employee.telk);
   }
+  if (editYoungWorkerInput) {
+    editYoungWorkerInput.checked = Boolean(employee.youngWorkerBenefit);
+  }
 
   editDepartmentInput.innerHTML = '';
   const emptyOption = document.createElement('option');
@@ -1011,7 +1024,7 @@ function renderEmployees() {
 
     const details = document.createElement('div');
     const employmentRange = formatEmploymentRange(employee);
-    details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Период: ${employmentRange}<br>Полагаем отпуск: ${employee.vacationAllowance} дни${employee.telk ? ' (ТЕЛК)' : ''}`;
+    details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Период: ${employmentRange}<br>Полагаем отпуск: ${employee.vacationAllowance} дни${employee.telk ? ' (ТЕЛК)' : ''}${employee.youngWorkerBenefit ? ' (16-18 с разрешение)' : ''}`;
 
     const employeeDepartmentSelect = document.createElement('select');
     const emptyOption = document.createElement('option');
@@ -1063,6 +1076,7 @@ function renderEmployees() {
         egn: employee.egn,
         vacationAllowance: employee.vacationAllowance,
         telk: Boolean(employee.telk),
+        youngWorkerBenefit: Boolean(employee.youngWorkerBenefit),
         baseVacationAllowance: resolveBaseVacationAllowance(employee),
         startDate: employee.startDate || getMonthStartDate(state.month || todayMonth()),
         endDate: releaseDate
@@ -1935,6 +1949,7 @@ async function saveEmployeeBackend(employee) {
         endDate: employee.endDate,
         vacationAllowance: employee.vacationAllowance,
         telk: Boolean(employee.telk),
+        youngWorkerBenefit: Boolean(employee.youngWorkerBenefit),
         baseVacationAllowance: resolveBaseVacationAllowance(employee)
       })
     });
@@ -2105,8 +2120,9 @@ function getVacationUsedForYear(employeeId, year) {
 function normalizeEmployeeVacationData(employee) {
   const normalized = employee ? { ...employee } : {};
   normalized.telk = Boolean(normalized.telk);
+  normalized.youngWorkerBenefit = Boolean(normalized.youngWorkerBenefit);
   normalized.baseVacationAllowance = resolveBaseVacationAllowance(normalized);
-  normalized.vacationAllowance = calculateVacationAllowance(normalized.baseVacationAllowance, normalized.telk);
+  normalized.vacationAllowance = calculateVacationAllowance(normalized.baseVacationAllowance, normalized.telk, normalized.youngWorkerBenefit);
   return normalized;
 }
 

@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS employees (
   vacation_allowance INTEGER NOT NULL DEFAULT 20,
   base_vacation_allowance INTEGER NOT NULL DEFAULT 20,
   telk BOOLEAN NOT NULL DEFAULT FALSE,
+  young_worker_benefit BOOLEAN NOT NULL DEFAULT FALSE,
   start_date DATE NOT NULL DEFAULT CURRENT_DATE,
   end_date DATE NULL,
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
