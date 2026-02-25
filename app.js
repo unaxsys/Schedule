@@ -97,6 +97,8 @@ const exportExcelBtn = document.getElementById('exportExcelBtn');
 const exportPdfBtn = document.getElementById('exportPdfBtn');
 const lockStatus = document.getElementById('lockStatus');
 const summarySettingsList = document.getElementById('summarySettingsList');
+const settingsSubtabButtons = document.querySelectorAll('.settings-subtab-btn');
+const settingsSubtabPanels = document.querySelectorAll('.settings-subtab-panel');
 const departmentForm = document.getElementById('departmentForm');
 const departmentNameInput = document.getElementById('departmentNameInput');
 const departmentList = document.getElementById('departmentList');
@@ -134,6 +136,7 @@ async function init() {
   attachShiftForm();
   attachLockAndExport();
   attachSettingsControls();
+  attachSettingsSubtabs();
   attachDepartmentControls();
   attachDepartmentManagementControls();
   attachEmployeeEditModalControls();
@@ -369,6 +372,21 @@ function attachTabs() {
       const target = btn.dataset.tab;
       tabButtons.forEach((other) => other.classList.toggle('active', other === btn));
       tabPanels.forEach((panel) => panel.classList.toggle('active', panel.id === target));
+    });
+  });
+}
+
+
+function attachSettingsSubtabs() {
+  if (!settingsSubtabButtons.length || !settingsSubtabPanels.length) {
+    return;
+  }
+
+  settingsSubtabButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = btn.dataset.settingsTab;
+      settingsSubtabButtons.forEach((other) => other.classList.toggle('active', other === btn));
+      settingsSubtabPanels.forEach((panel) => panel.classList.toggle('active', panel.id === target));
     });
   });
 }
