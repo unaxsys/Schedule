@@ -140,6 +140,24 @@ button {
 button:hover {
   background: #1e40af;
 }
+.btn-add {
+  background: #16a34a;
+}
+.btn-add:hover {
+  background: #15803d;
+}
+.btn-edit {
+  background: #f59e0b;
+}
+.btn-edit:hover {
+  background: #d97706;
+}
+.btn-delete {
+  background: #dc2626;
+}
+.btn-delete:hover {
+  background: #b91c1c;
+}
 .employee-list {
   margin-top: 0.8rem;
   display: grid;
@@ -153,11 +171,25 @@ button:hover {
   justify-content: space-between;
   align-items: center;
 }
+.employee-item--top {
+  align-items: flex-start;
+}
+.department-item {
+  align-items: flex-start;
+}
 .department-row-content {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   flex: 1;
+}
+.item-actions,
+.department-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-self: flex-start;
+  margin-left: 0.75rem;
+  flex-wrap: wrap;
 }
 .department-header {
   cursor: pointer;
