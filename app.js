@@ -221,7 +221,32 @@ function renderDepartmentOptions() {
   }
 
   renderDepartmentList();
+  renderEmployeeDepartmentOptions();
   updateScheduleNameSuggestion();
+}
+
+function renderEmployeeDepartmentOptions() {
+  if (!departmentInput) {
+    return;
+  }
+
+  const currentValue = departmentInput.value;
+  departmentInput.innerHTML = '';
+
+  const emptyOption = document.createElement('option');
+  emptyOption.value = '';
+  emptyOption.textContent = 'Без отдел';
+  departmentInput.appendChild(emptyOption);
+
+  state.departments.forEach((department) => {
+    const option = document.createElement('option');
+    option.value = department.id;
+    option.textContent = department.name;
+    departmentInput.appendChild(option);
+  });
+
+  const hasCurrent = state.departments.some((department) => department.id === currentValue);
+  departmentInput.value = hasCurrent ? currentValue : '';
 }
 
 function updateScheduleNameSuggestion() {
@@ -451,7 +476,8 @@ employeeForm.addEventListener('submit', async (event) => {
   const employee = {
     id: createEmployeeId(),
     name: nameInput.value.trim(),
-    department: departmentInput.value.trim() || 'Без отдел',
+    department: null,
+    departmentId: departmentInput.value || null,
     position: positionInput.value.trim(),
     vacationAllowance: Number(vacationAllowanceInput.value)
   };
@@ -469,6 +495,10 @@ employeeForm.addEventListener('submit', async (event) => {
   }
 
   employeeForm.reset();
+  renderEmployeeDepartmentOptions();
+  if (departmentInput) {
+    departmentInput.value = '';
+  }
   vacationAllowanceInput.value = 20;
   renderAll();
 });
@@ -1424,6 +1454,7 @@ async function saveEmployeeBackend(employee) {
       body: JSON.stringify({
         name: employee.name,
         department: employee.department,
+        department_id: employee.departmentId || null,
         position: employee.position,
         vacationAllowance: employee.vacationAllowance
       })

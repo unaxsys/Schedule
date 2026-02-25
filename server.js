@@ -110,6 +110,7 @@ function validateEmployeeInput(data = {}) {
     value: {
       name,
       department: normalizeDepartmentName(data.department),
+      departmentId: cleanStr(data.department_id || data.departmentId) || null,
       position,
       vacationAllowance,
     },
@@ -404,16 +405,27 @@ app.post('/api/employees', async (req, res) => {
     return res.status(400).json(validation.error);
   }
 
-  const { name, department, position, vacationAllowance } = validation.value;
+  const { name, department, departmentId, position, vacationAllowance } = validation.value;
 
   try {
-    let departmentId = null;
+    let resolvedDepartmentId = null;
     let departmentName = department;
-    if (department) {
-      const dep = await pool.query('SELECT id, name FROM departments WHERE name = $1', [department]);
-      if (dep.rowCount) {
-        departmentId = dep.rows[0].id;
-        departmentName = dep.rows[0].name;
+
+    if (departmentId) {
+      if (!isValidUuid(departmentId)) {
+        return res.status(400).json({ message: 'Невалиден department_id.' });
+      }
+      const depById = await pool.query('SELECT id, name FROM departments WHERE id = $1', [departmentId]);
+      if (!depById.rowCount) {
+        return res.status(404).json({ message: 'Отделът не е намерен.' });
+      }
+      resolvedDepartmentId = depById.rows[0].id;
+      departmentName = depById.rows[0].name;
+    } else if (department) {
+      const depByName = await pool.query('SELECT id, name FROM departments WHERE name = $1', [department]);
+      if (depByName.rowCount) {
+        resolvedDepartmentId = depByName.rows[0].id;
+        departmentName = depByName.rows[0].name;
       }
     }
 
@@ -421,7 +433,7 @@ app.post('/api/employees', async (req, res) => {
       `INSERT INTO employees (name, department, department_id, position, vacation_allowance)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id, name, department_id AS "departmentId", department, position, vacation_allowance AS "vacationAllowance"`,
-      [name, departmentName, departmentId, position, vacationAllowance]
+      [name, departmentName, resolvedDepartmentId, position, vacationAllowance]
     );
 
     res.status(201).json({ ok: true, employee: result.rows[0] });
