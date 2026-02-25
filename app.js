@@ -617,7 +617,7 @@ function renderDepartmentList() {
     rowContent.append(text, membersList);
 
     const actions = document.createElement('div');
-    actions.className = 'department-actions';
+    actions.className = 'item-actions';
     const editBtn = document.createElement('button');
     editBtn.type = 'button';
     editBtn.textContent = 'Редактирай';
@@ -755,11 +755,10 @@ function renderShiftList() {
     if (shift.locked) {
       actionCell.textContent = 'Системна';
     } else {
-      const actions = document.createElement('div');
-
-    const removeBtn = document.createElement('button');
+      const removeBtn = document.createElement('button');
       removeBtn.type = 'button';
       removeBtn.textContent = 'Изтрий';
+      removeBtn.className = 'btn-delete';
       removeBtn.addEventListener('click', async () => {
         state.shiftTemplates = state.shiftTemplates.filter((entry) => entry.code !== shift.code);
         saveShiftTemplates();
@@ -903,7 +902,7 @@ function renderEmployees() {
 
   state.employees.forEach((employee) => {
     const item = document.createElement('div');
-    item.className = 'employee-item';
+    item.className = 'employee-item employee-item--top';
 
     const details = document.createElement('div');
     details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Полагаем отпуск: ${employee.vacationAllowance} дни`;
@@ -931,10 +930,12 @@ function renderEmployees() {
     });
 
     const actions = document.createElement('div');
+    actions.className = 'item-actions';
 
     const editBtn = document.createElement('button');
     editBtn.type = 'button';
     editBtn.textContent = 'Редакция';
+    editBtn.className = 'btn-edit';
     editBtn.addEventListener('click', () => {
       openEmployeeEditModal(employee);
     });
@@ -942,6 +943,7 @@ function renderEmployees() {
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.textContent = 'Изтрий';
+    removeBtn.className = 'btn-delete';
     removeBtn.addEventListener('click', async () => {
       state.employees = state.employees.filter((e) => e.id !== employee.id);
       persistEmployeesLocal();

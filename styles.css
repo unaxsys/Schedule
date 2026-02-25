@@ -171,6 +171,9 @@ button:hover {
   justify-content: space-between;
   align-items: center;
 }
+.employee-item--top {
+  align-items: flex-start;
+}
 .department-item {
   align-items: flex-start;
 }
@@ -180,11 +183,13 @@ button:hover {
   gap: 0.5rem;
   flex: 1;
 }
+.item-actions,
 .department-actions {
   display: flex;
   gap: 0.5rem;
   align-self: flex-start;
   margin-left: 0.75rem;
+  flex-wrap: wrap;
 }
 .department-header {
   cursor: pointer;
