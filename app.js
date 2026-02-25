@@ -1119,14 +1119,34 @@ function renderEmployees() {
       openEmployeeEditModal(employee);
     });
 
-    actions.append(employeeDepartmentSelect, editBtn);
+    const releaseBtn = document.createElement('button');
+    releaseBtn.type = 'button';
+    releaseBtn.textContent = 'Освободи';
+    releaseBtn.className = 'btn-delete';
+    releaseBtn.addEventListener('click', async () => {
+      const monthEnd = getMonthEndDate(state.month || todayMonth());
+      const releaseDate = promptLastWorkingDate(employee, monthEnd);
+      if (!releaseDate) {
+        return;
+      }
+
+      try {
+        await releaseEmployeeBackend(employee.id, releaseDate);
+        await refreshMonthlyView();
+        renderAll();
+      } catch (error) {
+        setStatus(error.message, false);
+      }
+    });
+
+    actions.append(employeeDepartmentSelect, editBtn, releaseBtn);
 
     if (canDeleteEmployees()) {
-      const removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.textContent = 'Изтрий';
-      removeBtn.className = 'btn-delete';
-      removeBtn.addEventListener('click', async () => {
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.textContent = 'Изтрий';
+      deleteBtn.className = 'btn-delete';
+      deleteBtn.addEventListener('click', async () => {
         const confirmed = window.confirm(`Сигурни ли сте, че искате да изтриете служителя ${employee.name}?`);
         if (!confirmed) {
           return;
@@ -1140,7 +1160,7 @@ function renderEmployees() {
           setStatus(error.message, false);
         }
       });
-      actions.append(removeBtn);
+      actions.append(deleteBtn);
     }
 
     item.append(details, actions);
@@ -2037,6 +2057,26 @@ async function saveEmployeeBackend(employee) {
     setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
     state.backendAvailable = false;
     return null;
+  }
+}
+
+async function deleteEmployeeBackend(employeeId) {
+  if (!state.backendAvailable) {
+    throw new Error('Освобождаването е достъпно само с активен API бекенд.');
+  }
+
+  try {
+    const response = await apiFetch(`/api/employees/${employeeId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    if (!response.ok) {
+      const errPayload = await response.json().catch(() => ({}));
+      throw new Error(errPayload.message || 'Release employee failed');
+    }
+  } catch (error) {
+    throw new Error(error.message || 'Неуспешно освобождаване на служител.');
   }
 }
 
