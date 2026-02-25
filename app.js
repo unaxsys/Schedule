@@ -41,6 +41,7 @@ const state = {
   selectedScheduleIds: [],
   activeScheduleId: null,
   departments: [],
+  expandedDepartmentId: null,
   selectedDepartmentId: 'all',
   backendAvailable: false,
   apiBaseUrl: '',
@@ -583,8 +584,37 @@ function renderDepartmentList() {
     const row = document.createElement('div');
     row.className = 'employee-item';
 
+    const rowContent = document.createElement('div');
+    rowContent.className = 'department-row-content';
+
+    const members = getDepartmentMembers(department.id);
+    const isExpanded = state.expandedDepartmentId === department.id;
+
     const text = document.createElement('div');
-    text.innerHTML = `<b>${department.name}</b>`;
+    text.className = 'department-header';
+    text.innerHTML = `<b>${department.name}</b><br><small>${members.length} служител(и)</small>`;
+    text.addEventListener('click', () => {
+      state.expandedDepartmentId = isExpanded ? null : department.id;
+      renderDepartmentList();
+    });
+
+    const membersList = document.createElement('div');
+    membersList.className = `department-members${isExpanded ? ' expanded' : ''}`;
+    if (members.length) {
+      members.forEach((member) => {
+        const memberRow = document.createElement('div');
+        memberRow.className = 'department-member-item';
+        memberRow.textContent = `${member.name} (${member.position || 'Без длъжност'})`;
+        membersList.appendChild(memberRow);
+      });
+    } else {
+      const emptyText = document.createElement('div');
+      emptyText.className = 'department-member-item';
+      emptyText.textContent = 'Няма служители в този отдел.';
+      membersList.appendChild(emptyText);
+    }
+
+    rowContent.append(text, membersList);
 
     const actions = document.createElement('div');
     const editBtn = document.createElement('button');
@@ -633,8 +663,20 @@ function renderDepartmentList() {
     });
 
     actions.append(editBtn, deleteBtn);
-    row.append(text, actions);
+    row.append(rowContent, actions);
     departmentList.appendChild(row);
+  });
+}
+
+function getDepartmentMembers(departmentId) {
+  const seen = new Set();
+  return state.employees.filter((employee) => {
+    const sameDepartment = String(employee.departmentId || '') === String(departmentId || '');
+    if (!sameDepartment || seen.has(employee.id)) {
+      return false;
+    }
+    seen.add(employee.id);
+    return true;
   });
 }
 
