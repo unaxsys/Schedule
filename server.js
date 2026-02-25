@@ -107,7 +107,7 @@ function validateEmployeeInput(data = {}) {
     };
   }
 
-  const rawVacationAllowance = data.vacationAllowance;
+  const rawVacationAllowance = data.baseVacationAllowance ?? data.vacationAllowance;
   if (
     rawVacationAllowance === undefined ||
     rawVacationAllowance === null ||
@@ -123,8 +123,11 @@ function validateEmployeeInput(data = {}) {
     };
   }
 
-  const vacationAllowance = Number(rawVacationAllowance);
-  if (!Number.isFinite(vacationAllowance) || vacationAllowance < 0) {
+  const telk = Boolean(data.telk);
+  const youngWorkerBenefit = Boolean(data.youngWorkerBenefit ?? data.young_worker_benefit);
+  const baseVacationAllowance = Number(rawVacationAllowance);
+  const vacationAllowance = baseVacationAllowance + (telk ? 6 : 0) + (youngWorkerBenefit ? 6 : 0);
+  if (!Number.isFinite(baseVacationAllowance) || baseVacationAllowance < 0) {
     return {
       valid: false,
       error: {
@@ -159,6 +162,9 @@ function validateEmployeeInput(data = {}) {
       startDate,
       endDate,
       vacationAllowance,
+      baseVacationAllowance,
+      telk,
+      youngWorkerBenefit,
     },
   };
 }
@@ -182,6 +188,9 @@ async function initDatabase() {
       position TEXT NOT NULL,
       egn CHAR(10) NULL,
       vacation_allowance INTEGER NOT NULL DEFAULT 20,
+      base_vacation_allowance INTEGER NOT NULL DEFAULT 20,
+      telk BOOLEAN NOT NULL DEFAULT FALSE,
+      young_worker_benefit BOOLEAN NOT NULL DEFAULT FALSE,
       start_date DATE NOT NULL DEFAULT CURRENT_DATE,
       end_date DATE NULL,
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -191,6 +200,9 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS department_id UUID NULL`);
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS egn CHAR(10) NULL`);
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS start_date DATE NOT NULL DEFAULT CURRENT_DATE`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS base_vacation_allowance INTEGER NOT NULL DEFAULT 20`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS telk BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS young_worker_benefit BOOLEAN NOT NULL DEFAULT FALSE`);
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS end_date DATE NULL`);
   await pool.query(`
     DO $$
@@ -257,6 +269,14 @@ async function initDatabase() {
       AND NULLIF(TRIM(e.department), '') IS NOT NULL
       AND d.name = TRIM(e.department)
   `);
+
+  await pool.query(`
+    UPDATE employees
+    SET base_vacation_allowance = GREATEST(vacation_allowance - 6, 0)
+    WHERE (telk = TRUE OR young_worker_benefit = TRUE)
+      AND base_vacation_allowance = 20
+      AND vacation_allowance >= 26
+  `);
 }
 
 app.get('/api/health', async (_req, res) => {
@@ -279,6 +299,9 @@ app.get('/api/state', async (_req, res) => {
                 e.position,
                 e.egn,
                 e.vacation_allowance AS "vacationAllowance",
+                e.base_vacation_allowance AS "baseVacationAllowance",
+                e.telk,
+                e.young_worker_benefit AS "youngWorkerBenefit",
                 e.start_date::text AS "startDate",
                 e.end_date::text AS "endDate"
          FROM employees e
@@ -443,6 +466,9 @@ app.get('/api/employees', async (req, res) => {
               e.position,
               e.egn,
               e.vacation_allowance AS "vacationAllowance",
+                e.base_vacation_allowance AS "baseVacationAllowance",
+                e.telk,
+                e.young_worker_benefit AS "youngWorkerBenefit",
                 e.start_date::text AS "startDate",
                 e.end_date::text AS "endDate"
        FROM employees e
@@ -464,7 +490,7 @@ app.post('/api/employees', async (req, res) => {
     return res.status(400).json(validation.error);
   }
 
-  const { name, department, departmentId, position, egn, startDate, endDate, vacationAllowance } = validation.value;
+  const { name, department, departmentId, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit } = validation.value;
 
   try {
     let resolvedDepartmentId = null;
@@ -489,11 +515,12 @@ app.post('/api/employees', async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO employees (name, department, department_id, position, egn, vacation_allowance, start_date, end_date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO employees (name, department, department_id, position, egn, vacation_allowance, base_vacation_allowance, telk, young_worker_benefit, start_date, end_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING id, name, department_id AS "departmentId", department, position, egn, vacation_allowance AS "vacationAllowance",
+                 base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  start_date::text AS "startDate", end_date::text AS "endDate"`,
-      [name, departmentName, resolvedDepartmentId, position, egn, vacationAllowance, startDate, endDate]
+      [name, departmentName, resolvedDepartmentId, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, startDate, endDate]
     );
 
     res.status(201).json({ ok: true, employee: result.rows[0] });
@@ -518,7 +545,7 @@ app.put('/api/employees/:id', async (req, res) => {
     return res.status(400).json(validation.error);
   }
 
-  const { name, position, egn, startDate, endDate, vacationAllowance } = validation.value;
+  const { name, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit } = validation.value;
 
   try {
     const updated = await pool.query(
@@ -527,13 +554,17 @@ app.put('/api/employees/:id', async (req, res) => {
            position = $3,
            egn = $4,
            vacation_allowance = $5,
-           start_date = $6,
-           end_date = $7
+           base_vacation_allowance = $6,
+           telk = $7,
+           young_worker_benefit = $8,
+           start_date = $9,
+           end_date = $10
        WHERE id = $1
        RETURNING id, name, department_id AS "departmentId", COALESCE(department, 'Без отдел') AS department,
                  position, egn, vacation_allowance AS "vacationAllowance",
+                 base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  start_date::text AS "startDate", end_date::text AS "endDate"`,
-      [id, name, position, egn, vacationAllowance, startDate, endDate]
+      [id, name, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, startDate, endDate]
     );
 
     if (!updated.rowCount) {
@@ -577,6 +608,7 @@ app.put('/api/employees/:id/department', async (req, res) => {
        WHERE id = $1
        RETURNING id, name, department_id AS "departmentId", COALESCE($3, 'Без отдел') AS department, position,
                  egn, vacation_allowance AS "vacationAllowance",
+                 base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  start_date::text AS "startDate", end_date::text AS "endDate"`,
       [id, departmentId, departmentName]
     );
@@ -670,6 +702,9 @@ app.get('/api/schedules', async (req, res) => {
         ? pool.query(
             `SELECT e.id, e.name, e.department_id AS "departmentId", COALESCE(d.name, e.department, 'Без отдел') AS department,
                     e.position, e.egn, e.vacation_allowance AS "vacationAllowance",
+                e.base_vacation_allowance AS "baseVacationAllowance",
+                e.telk,
+                e.young_worker_benefit AS "youngWorkerBenefit",
                 e.start_date::text AS "startDate",
                 e.end_date::text AS "endDate"
              FROM employees e
@@ -679,6 +714,9 @@ app.get('/api/schedules', async (req, res) => {
         : pool.query(
             `SELECT e.id, e.name, e.department_id AS "departmentId", COALESCE(d.name, e.department, 'Без отдел') AS department,
                     e.position, e.egn, e.vacation_allowance AS "vacationAllowance",
+                e.base_vacation_allowance AS "baseVacationAllowance",
+                e.telk,
+                e.young_worker_benefit AS "youngWorkerBenefit",
                 e.start_date::text AS "startDate",
                 e.end_date::text AS "endDate"
              FROM employees e
@@ -763,6 +801,9 @@ app.get('/api/schedules/:id', async (req, res) => {
     const employeesResult = await pool.query(
       `SELECT e.id, e.name, e.department_id AS "departmentId", COALESCE(d.name, e.department, 'Без отдел') AS department,
               e.position, e.egn, e.vacation_allowance AS "vacationAllowance",
+                e.base_vacation_allowance AS "baseVacationAllowance",
+                e.telk,
+                e.young_worker_benefit AS "youngWorkerBenefit",
                 e.start_date::text AS "startDate",
                 e.end_date::text AS "endDate"
        FROM employees e
