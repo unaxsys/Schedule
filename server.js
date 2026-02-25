@@ -973,6 +973,15 @@ app.post('/api/schedules', async (req, res) => {
   }
 
   try {
+    const existing = await pool.query(
+      `SELECT id FROM schedules WHERE month_key = $1 AND COALESCE(department, '') = COALESCE($2, '') LIMIT 1`,
+      [monthKey, department]
+    );
+
+    if (existing.rowCount) {
+      return res.status(409).json({ message: `Вече има създаден график за ${departmentLabel} (${monthKey}).` });
+    }
+
     const created = await pool.query(
       `INSERT INTO schedules (name, month_key, department, status)
        VALUES ($1, $2, $3, $4)
@@ -986,6 +995,9 @@ app.post('/api/schedules', async (req, res) => {
       schedule: created.rows[0],
     });
   } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ message: `Вече има създаден график за ${departmentLabel} (${monthKey}).` });
+    }
     res.status(500).json({ message: error.message });
   }
 });

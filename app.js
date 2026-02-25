@@ -589,6 +589,7 @@ function attachDepartmentControls() {
   if (scheduleDepartmentSelect) {
     scheduleDepartmentSelect.addEventListener('change', () => {
       updateScheduleNameSuggestion();
+      updateCreateScheduleButtonState();
     });
   }
 
@@ -729,6 +730,31 @@ function renderScheduleList() {
     label.appendChild(text);
     scheduleList.appendChild(label);
   });
+
+  updateCreateScheduleButtonState();
+}
+
+function findScheduleByMonthAndDepartment(month, department) {
+  const normalizedDepartment = !department || department === 'Общ' ? null : department;
+  return state.schedules.find((schedule) => {
+    const scheduleDepartment = schedule.department || null;
+    return schedule.month_key === month && scheduleDepartment === normalizedDepartment;
+  });
+}
+
+function updateCreateScheduleButtonState() {
+  if (!createScheduleBtn) {
+    return;
+  }
+
+  const month = state.month || monthPicker.value || todayMonth();
+  const department = scheduleDepartmentSelect?.value || 'Общ';
+  const existing = findScheduleByMonthAndDepartment(month, department);
+
+  createScheduleBtn.disabled = Boolean(existing);
+  createScheduleBtn.title = existing
+    ? 'За този месец и отдел вече има създаден график.'
+    : '';
 }
 
 async function createScheduleForCurrentMonth() {
@@ -741,6 +767,13 @@ async function createScheduleForCurrentMonth() {
   const department = scheduleDepartmentSelect?.value || 'Общ';
   const name = (scheduleNameInput?.value || '').trim() || `График ${department} – ${month}`;
 
+  const existing = findScheduleByMonthAndDepartment(month, department);
+  if (existing) {
+    setStatus('За този месец и отдел вече има създаден график.', false);
+    updateCreateScheduleButtonState();
+    return;
+  }
+
   const response = await apiFetch('/api/schedules', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -748,7 +781,17 @@ async function createScheduleForCurrentMonth() {
   });
 
   if (!response.ok) {
-    setStatus('Неуспешно създаване на график.', false);
+    let message = 'Неуспешно създаване на график.';
+    try {
+      const payload = await response.json();
+      if (payload?.message) {
+        message = payload.message;
+      }
+    } catch {
+      // ignore non-JSON responses
+    }
+    setStatus(message, false);
+    updateCreateScheduleButtonState();
     return;
   }
 
@@ -1220,6 +1263,7 @@ function renderAll() {
   renderVacationEmployeeOptions();
   renderShiftList();
   renderLegend();
+  updateCreateScheduleButtonState();
 }
 
 function renderLegend() {
