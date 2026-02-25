@@ -217,6 +217,27 @@
       </div>
     </main>
 
+    <div id="employeeEditModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="employeeEditTitle">
+      <div class="modal-card">
+        <h3 id="employeeEditTitle">Редакция на служител</h3>
+        <form id="employeeEditForm" class="employee-edit-form">
+          <input id="editFirstNameInput" required placeholder="Собствено име" />
+          <input id="editMiddleNameInput" required placeholder="Бащино име" />
+          <input id="editLastNameInput" required placeholder="Фамилия" />
+          <select id="editDepartmentInput">
+            <option value="">Без отдел</option>
+          </select>
+          <input id="editPositionInput" required placeholder="Длъжност" />
+          <input id="editEgnInput" required maxlength="10" pattern="\d{10}" placeholder="ЕГН (10 цифри)" />
+          <input id="editVacationAllowanceInput" type="number" min="0" required placeholder="Годишен отпуск" />
+          <div class="modal-actions">
+            <button type="submit">Запази</button>
+            <button id="cancelEmployeeEditBtn" type="button">Отказ</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <script src="app.js"></script>
   </body>
 </html>
