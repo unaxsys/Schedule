@@ -77,6 +77,19 @@ function validateEmployeeInput(data = {}) {
     };
   }
 
+
+  const egn = normalizeString(data.egn);
+  if (!/^\d{10}$/.test(egn)) {
+    return {
+      valid: false,
+      error: {
+        error: 'VALIDATION_ERROR',
+        field: 'egn',
+        message: 'ЕГН е задължително и трябва да съдържа точно 10 цифри.',
+      },
+    };
+  }
+
   const rawVacationAllowance = data.vacationAllowance;
   if (
     rawVacationAllowance === undefined ||
@@ -112,6 +125,7 @@ function validateEmployeeInput(data = {}) {
       department: normalizeDepartmentName(data.department),
       departmentId: cleanStr(data.department_id || data.departmentId) || null,
       position,
+      egn,
       vacationAllowance,
     },
   };
@@ -134,12 +148,14 @@ async function initDatabase() {
       name TEXT NOT NULL,
       department TEXT NULL,
       position TEXT NOT NULL,
+      egn CHAR(10) NULL,
       vacation_allowance INTEGER NOT NULL DEFAULT 20,
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `);
 
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS department_id UUID NULL`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS egn CHAR(10) NULL`);
   await pool.query(`
     DO $$
     BEGIN
@@ -157,6 +173,7 @@ async function initDatabase() {
     END $$;
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_department_id ON employees(department_id)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_egn_unique ON employees(egn) WHERE egn IS NOT NULL`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schedules (
@@ -224,6 +241,7 @@ app.get('/api/state', async (_req, res) => {
                 e.department_id AS "departmentId",
                 COALESCE(d.name, e.department, 'Без отдел') AS department,
                 e.position,
+                e.egn,
                 e.vacation_allowance AS "vacationAllowance"
          FROM employees e
          LEFT JOIN departments d ON d.id = e.department_id
@@ -385,6 +403,7 @@ app.get('/api/employees', async (req, res) => {
               e.department_id AS "departmentId",
               COALESCE(d.name, e.department, 'Без отдел') AS department,
               e.position,
+              e.egn,
               e.vacation_allowance AS "vacationAllowance"
        FROM employees e
        LEFT JOIN departments d ON d.id = e.department_id
@@ -405,7 +424,7 @@ app.post('/api/employees', async (req, res) => {
     return res.status(400).json(validation.error);
   }
 
-  const { name, department, departmentId, position, vacationAllowance } = validation.value;
+  const { name, department, departmentId, position, egn, vacationAllowance } = validation.value;
 
   try {
     let resolvedDepartmentId = null;
@@ -430,14 +449,17 @@ app.post('/api/employees', async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO employees (name, department, department_id, position, vacation_allowance)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, name, department_id AS "departmentId", department, position, vacation_allowance AS "vacationAllowance"`,
-      [name, departmentName, resolvedDepartmentId, position, vacationAllowance]
+      `INSERT INTO employees (name, department, department_id, position, egn, vacation_allowance)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, name, department_id AS "departmentId", department, position, egn, vacation_allowance AS "vacationAllowance"`,
+      [name, departmentName, resolvedDepartmentId, position, egn, vacationAllowance]
     );
 
     res.status(201).json({ ok: true, employee: result.rows[0] });
   } catch (error) {
+    if (error.code === '23505' && String(error.constraint || '').includes('idx_employees_egn_unique')) {
+      return res.status(409).json({ message: 'Служител с това ЕГН вече съществува.' });
+    }
     console.error('EMPLOYEE POST ERROR:', error);
     res.status(500).json({ message: error.message });
   }
@@ -470,7 +492,7 @@ app.put('/api/employees/:id/department', async (req, res) => {
            department = $3
        WHERE id = $1
        RETURNING id, name, department_id AS "departmentId", COALESCE($3, 'Без отдел') AS department, position,
-                 vacation_allowance AS "vacationAllowance"`,
+                 egn, vacation_allowance AS "vacationAllowance"`,
       [id, departmentId, departmentName]
     );
 
@@ -546,14 +568,14 @@ app.get('/api/schedules', async (req, res) => {
       const employeesQuery = filterAll
         ? pool.query(
             `SELECT e.id, e.name, e.department_id AS "departmentId", COALESCE(d.name, e.department, 'Без отдел') AS department,
-                    e.position, e.vacation_allowance AS "vacationAllowance"
+                    e.position, e.egn, e.vacation_allowance AS "vacationAllowance"
              FROM employees e
              LEFT JOIN departments d ON d.id = e.department_id
              ORDER BY e.name ASC`
           )
         : pool.query(
             `SELECT e.id, e.name, e.department_id AS "departmentId", COALESCE(d.name, e.department, 'Без отдел') AS department,
-                    e.position, e.vacation_allowance AS "vacationAllowance"
+                    e.position, e.egn, e.vacation_allowance AS "vacationAllowance"
              FROM employees e
              LEFT JOIN departments d ON d.id = e.department_id
              WHERE e.department_id = $1
@@ -635,7 +657,7 @@ app.get('/api/schedules/:id', async (req, res) => {
 
     const employeesResult = await pool.query(
       `SELECT e.id, e.name, e.department_id AS "departmentId", COALESCE(d.name, e.department, 'Без отдел') AS department,
-              e.position, e.vacation_allowance AS "vacationAllowance"
+              e.position, e.egn, e.vacation_allowance AS "vacationAllowance"
        FROM employees e
        LEFT JOIN departments d ON d.id = e.department_id
        WHERE ($1::text IS NULL OR COALESCE(d.name, e.department) = $1)

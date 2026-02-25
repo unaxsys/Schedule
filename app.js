@@ -57,6 +57,7 @@ const employeeForm = document.getElementById('employeeForm');
 const nameInput = document.getElementById('nameInput');
 const departmentInput = document.getElementById('departmentInput');
 const positionInput = document.getElementById('positionInput');
+const egnInput = document.getElementById('egnInput');
 const vacationAllowanceInput = document.getElementById('vacationAllowanceInput');
 const employeeList = document.getElementById('employeeList');
 const scheduleTable = document.getElementById('scheduleTable');
@@ -479,10 +480,11 @@ employeeForm.addEventListener('submit', async (event) => {
     department: null,
     departmentId: departmentInput.value || null,
     position: positionInput.value.trim(),
+    egn: (egnInput?.value || '').trim(),
     vacationAllowance: Number(vacationAllowanceInput.value)
   };
 
-  if (!employee.name || !employee.position) {
+  if (!employee.name || !employee.position || !/^\d{10}$/.test(employee.egn)) {
     return;
   }
 
@@ -662,7 +664,9 @@ function renderShiftList() {
     if (shift.locked) {
       actionCell.textContent = 'Системна';
     } else {
-      const removeBtn = document.createElement('button');
+      const actions = document.createElement('div');
+
+    const removeBtn = document.createElement('button');
       removeBtn.type = 'button';
       removeBtn.textContent = 'Изтрий';
       removeBtn.addEventListener('click', async () => {
@@ -702,7 +706,31 @@ function renderEmployees() {
     item.className = 'employee-item';
 
     const details = document.createElement('div');
-    details.innerHTML = `<b>${employee.name}</b><br>${employee.department} • ${employee.position}<br>Полагаем отпуск: ${employee.vacationAllowance} дни`;
+    details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Полагаем отпуск: ${employee.vacationAllowance} дни`;
+
+    const departmentSelect = document.createElement('select');
+    const emptyOption = document.createElement('option');
+    emptyOption.value = '';
+    emptyOption.textContent = 'Без отдел';
+    departmentSelect.appendChild(emptyOption);
+    state.departments.forEach((dep) => {
+      const option = document.createElement('option');
+      option.value = dep.id;
+      option.textContent = dep.name;
+      departmentSelect.appendChild(option);
+    });
+    departmentSelect.value = employee.departmentId || '';
+    departmentSelect.addEventListener('change', async () => {
+      try {
+        await attachEmployeeToDepartment(employee.id, departmentSelect.value || null);
+        await refreshMonthlyView();
+        renderAll();
+      } catch (error) {
+        setStatus(error.message, false);
+      }
+    });
+
+    const actions = document.createElement('div');
 
     const departmentSelect = document.createElement('select');
     const emptyOption = document.createElement('option');
@@ -736,7 +764,8 @@ function renderEmployees() {
       renderAll();
     });
 
-    item.append(details, departmentSelect, removeBtn);
+    actions.append(departmentSelect, removeBtn);
+    item.append(details, actions);
     employeeList.appendChild(item);
   });
 }
@@ -1456,6 +1485,7 @@ async function saveEmployeeBackend(employee) {
         department: employee.department,
         department_id: employee.departmentId || null,
         position: employee.position,
+        egn: employee.egn,
         vacationAllowance: employee.vacationAllowance
       })
     });
