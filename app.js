@@ -56,7 +56,9 @@ const state = {
   lockedMonths: loadLockedMonths(),
   sirvPeriodMonths: loadSirvPeriodMonths(),
   summaryColumnsVisibility: loadSummaryColumnsVisibility(),
-  superAdminOverview: null
+  superAdminOverview: null,
+  authToken: loadAuthToken(),
+  currentUser: loadCurrentUser()
 };
 
 const monthPicker = document.getElementById('monthPicker');
@@ -135,6 +137,14 @@ const ownerFullNameInput = document.getElementById('ownerFullNameInput');
 const ownerEmailInput = document.getElementById('ownerEmailInput');
 const ownerPhoneInput = document.getElementById('ownerPhoneInput');
 const ownerPasswordInput = document.getElementById('ownerPasswordInput');
+const ownerPasswordConfirmInput = document.getElementById('ownerPasswordConfirmInput');
+const companyEikInput = document.getElementById('companyEikInput');
+const showSignInBtn = document.getElementById('showSignInBtn');
+const showSignUpBtn = document.getElementById('showSignUpBtn');
+const signInForm = document.getElementById('signInForm');
+const loginEmailInput = document.getElementById('loginEmailInput');
+const loginPasswordInput = document.getElementById('loginPasswordInput');
+const authSignedInInfo = document.getElementById('authSignedInInfo');
 const createPlatformUserForm = document.getElementById('createPlatformUserForm');
 const platformUserRegistrationIdInput = document.getElementById('platformUserRegistrationIdInput');
 const platformUserFullNameInput = document.getElementById('platformUserFullNameInput');
@@ -187,6 +197,7 @@ async function init() {
   attachEmployeeEditModalControls();
   attachRegistrationControls();
   attachSuperAdminControls();
+  updateAuthUi();
 
   const synced = await loadFromBackend();
   if (!synced) {
@@ -276,15 +287,66 @@ async function apiRequest(path, options = {}) {
 }
 
 function attachRegistrationControls() {
+  const setAuthMode = (mode) => {
+    if (signInForm) {
+      signInForm.classList.toggle('hidden', mode !== 'signin');
+    }
+    if (registrationForm) {
+      registrationForm.classList.toggle('hidden', mode !== 'signup');
+    }
+  };
+
+  if (showSignInBtn) {
+    showSignInBtn.addEventListener('click', () => setAuthMode('signin'));
+  }
+
+  if (showSignUpBtn) {
+    showSignUpBtn.addEventListener('click', () => setAuthMode('signup'));
+  }
+
+  if (signInForm) {
+    signInForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      try {
+        const payload = await apiRequest('/api/auth/login', {
+          method: 'POST',
+          body: JSON.stringify({
+            email: loginEmailInput.value,
+            password: loginPasswordInput.value,
+          }),
+        });
+
+        state.authToken = payload.token;
+        state.currentUser = payload.user;
+        persistAuthSession();
+
+        signInForm.reset();
+        updateAuthUi();
+        setStatus(`Успешен вход: ${payload.user.email}`, true);
+      } catch (error) {
+        clearAuthSession();
+        updateAuthUi();
+        setStatus(`Грешка при вход: ${error.message}`, false);
+      }
+    });
+  }
+
   if (registrationForm) {
     registrationForm.addEventListener('submit', async (event) => {
       event.preventDefault();
+
+      if (ownerPasswordInput.value !== ownerPasswordConfirmInput.value) {
+        setStatus('Паролите не съвпадат.', false);
+        return;
+      }
 
       try {
         const payload = await apiRequest('/api/platform/register', {
           method: 'POST',
           body: JSON.stringify({
             companyName: companyNameInput.value,
+            companyEik: companyEikInput.value,
             ownerFullName: ownerFullNameInput.value,
             ownerEmail: ownerEmailInput.value,
             ownerPhone: ownerPhoneInput.value,
@@ -321,6 +383,57 @@ function attachRegistrationControls() {
       }
     });
   }
+}
+
+function updateAuthUi() {
+  if (!authSignedInInfo) {
+    return;
+  }
+
+  if (state.currentUser && state.authToken) {
+    authSignedInInfo.textContent = `Вписан потребител: ${state.currentUser.email}`;
+    authSignedInInfo.classList.remove('hidden');
+  } else {
+    authSignedInInfo.textContent = '';
+    authSignedInInfo.classList.add('hidden');
+  }
+}
+
+function loadAuthToken() {
+  return cleanStoredValue(localStorage.getItem('authToken'));
+}
+
+function loadCurrentUser() {
+  try {
+    const raw = localStorage.getItem('currentUser');
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function persistAuthSession() {
+  if (state.authToken) {
+    localStorage.setItem('authToken', state.authToken);
+  }
+  if (state.currentUser) {
+    localStorage.setItem('currentUser', JSON.stringify(state.currentUser));
+  }
+}
+
+function clearAuthSession() {
+  state.authToken = '';
+  state.currentUser = null;
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('currentUser');
+}
+
+function cleanStoredValue(value) {
+  return String(value || '').trim();
 }
 
 function renderSuperAdminPanel() {
@@ -2062,6 +2175,9 @@ function normalizeApiBaseUrl(url) {
 async function apiFetch(path, options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set('X-User-Role', state.userRole);
+  if (state.authToken) {
+    headers.set('Authorization', `Bearer ${state.authToken}`);
+  }
 
   const response = await fetch(`${state.apiBaseUrl}${path}`, {
     ...options,

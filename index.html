@@ -36,7 +36,7 @@
           <button type="button" class="tab-btn" data-tab="vacationTab">Отпуски</button>
           <button type="button" class="tab-btn" data-tab="settingsTab">Настройки</button>
           <button type="button" class="tab-btn" data-tab="helpTab">FAQ / Help</button>
-          <button type="button" class="tab-btn" data-tab="authTab">Регистрация</button>
+          <button type="button" class="tab-btn" data-tab="authTab">Вход / Регистрация</button>
         </div>
       </aside>
 
@@ -186,14 +186,37 @@
 
 
         <section id="authTab" class="panel tab-panel">
-          <h2>Регистрация на организация</h2>
-          <p>Всеки новорегистриран профил получава роля <strong>Owner/Администратор</strong> и чака одобрение от супер администратор.</p>
-          <form id="registrationForm" class="employee-form">
+          <div class="welcome-auth-header">
+            <h2>Добре дошли в платформата за графици</h2>
+            <p>
+              Системата е създадена за фирми, които искат бързо да управляват смени, служители, отпуски и натоварване.
+              Изберете дали да влезете в съществуващ профил или да създадете нова организация.
+            </p>
+            <div class="welcome-auth-actions">
+              <button id="showSignInBtn" type="button">Sign In</button>
+              <button id="showSignUpBtn" type="button" class="btn-add">Sign Up</button>
+            </div>
+          </div>
+
+          <div id="authSignedInInfo" class="role-permission-note hidden"></div>
+
+          <form id="signInForm" class="employee-form auth-form-card hidden">
+            <h3>Вход в профила</h3>
+            <input id="loginEmailInput" type="email" required placeholder="Email" />
+            <input id="loginPasswordInput" type="password" required placeholder="Парола" />
+            <button id="submitSignInBtn" type="submit">Вход</button>
+          </form>
+
+          <form id="registrationForm" class="employee-form auth-form-card hidden">
+            <h3>Регистрация на организация</h3>
+            <p>След регистрация профилът получава роля <strong>Owner/Администратор</strong>.</p>
             <input id="companyNameInput" required placeholder="Име на фирма/организация" />
+            <input id="companyEikInput" required pattern="\d{9,13}" placeholder="ЕИК (9 до 13 цифри)" />
             <input id="ownerFullNameInput" required placeholder="Имена на собственик" />
             <input id="ownerEmailInput" type="email" required placeholder="Email на собственика" />
-            <input id="ownerPhoneInput" placeholder="Телефон (по желание)" />
+            <input id="ownerPhoneInput" placeholder="Телефон" />
             <input id="ownerPasswordInput" type="password" minlength="8" required placeholder="Парола (мин. 8 символа)" />
+            <input id="ownerPasswordConfirmInput" type="password" minlength="8" required placeholder="Повтори парола" />
             <button id="submitRegistrationBtn" class="btn-add" type="submit">Подай регистрация</button>
           </form>
 

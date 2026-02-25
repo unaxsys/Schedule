@@ -621,3 +621,36 @@ select.shift-select {
 .super-admin-link:hover {
   background: #6d28d9;
 }
+
+.welcome-auth-header {
+  border: 1px solid #dbeafe;
+  background: linear-gradient(180deg, #f8fbff 0%, #eef5ff 100%);
+  border-radius: 12px;
+  padding: 0.9rem;
+  margin-bottom: 0.85rem;
+}
+
+.welcome-auth-header h2 {
+  margin-top: 0;
+}
+
+.welcome-auth-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.65rem;
+}
+
+.auth-form-card {
+  display: grid;
+  gap: 0.55rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 0.85rem;
+  margin-top: 0.7rem;
+}
+
+.auth-form-card h3,
+.auth-form-card p {
+  margin: 0;
+}
