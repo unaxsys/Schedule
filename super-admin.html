@@ -647,6 +647,101 @@
           .join('');
       }
 
+      function prettifyColumnName(column) {
+        const labels = {
+          tenant_id: 'Фирма',
+          tenantid: 'Фирма',
+          company_id: 'Фирма',
+          companyid: 'Фирма',
+          created_at: 'Създадена',
+          updated_at: 'Обновена',
+          approved_at: 'Одобрена',
+          deleted_at: 'Изтрита',
+          full_name: 'Име',
+          first_name: 'Име',
+          last_name: 'Фамилия',
+          phone_number: 'Телефон',
+          email_address: 'Имейл',
+          user_id: 'Потребител',
+          role_id: 'Роля',
+          schedule_id: 'График',
+          department_id: 'Отдел',
+          shift_template_id: 'Шаблон смяна',
+        };
+
+        const key = String(column || '')
+          .replace(/([a-z])([A-Z])/g, '$1_$2')
+          .toLowerCase();
+        if (labels[key]) {
+          return labels[key];
+        }
+
+        const normalized = key.replaceAll('_', ' ').trim();
+        return normalized ? normalized[0].toUpperCase() + normalized.slice(1) : String(column || '');
+      }
+
+      function isTenantKey(key) {
+        const normalized = String(key || '')
+          .replace(/([a-z])([A-Z])/g, '$1_$2')
+          .toLowerCase();
+        return normalized === 'tenant_id' || normalized === 'tenantid' || normalized === 'company_id' || normalized === 'companyid';
+      }
+
+      function formatTableValue(key, value) {
+        if (value === null || value === undefined || value === '') {
+          return '—';
+        }
+
+        if (isTenantKey(key)) {
+          return tenantNameById.get(String(value)) || `Непозната фирма (${value})`;
+        }
+
+        if (typeof value === 'boolean') {
+          return value ? 'Да' : 'Не';
+        }
+
+        if (typeof value === 'object') {
+          return JSON.stringify(value);
+        }
+
+        const keyName = String(key || '').toLowerCase();
+        if (keyName.includes('date') || keyName.endsWith('at')) {
+          return fmtDate(value);
+        }
+
+        return String(value);
+      }
+
+      function renderTableRows(tableName, rows) {
+        if (!rows.length) {
+          tableOutput.innerHTML = '<p class="sa-empty">Няма данни в избраната таблица.</p>';
+          return;
+        }
+
+        const allColumns = Array.from(
+          rows.reduce((set, row) => {
+            Object.keys(row || {}).forEach((key) => {
+              if (!(tableName === 'tenants' && key === 'id')) {
+                set.add(key);
+              }
+            });
+            return set;
+          }, new Set()),
+        );
+
+        const tableHeader = allColumns.map((column) => `<th>${escapeHtml(prettifyColumnName(column))}</th>`).join('');
+        const tableBody = rows
+          .map((row) => {
+            const cells = allColumns
+              .map((column) => `<td>${escapeHtml(formatTableValue(column, row[column]))}</td>`)
+              .join('');
+            return `<tr>${cells}</tr>`;
+          })
+          .join('');
+
+        tableOutput.innerHTML = `<table class="sa-table"><thead><tr>${tableHeader}</tr></thead><tbody>${tableBody}</tbody></table>`;
+      }
+
       async function refreshOverview(isAuto = false) {
         try {
           const payload = await apiRequest('/api/platform/super-admin/overview');
