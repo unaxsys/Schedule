@@ -1373,22 +1373,131 @@ app.post('/api/platform/users', requireSuperAdmin, async (req, res, next) => {
 app.get('/api/platform/super-admin/overview', requireSuperAdmin, async (req, res, next) => {
 
   try {
-    const [tenantsResult, usersByRole, dbStats, tenantUsageStats, latestLogs] = await Promise.all([
-      pool.query(
+    const tableExists = async (tableName) => {
+      const check = await pool.query('SELECT to_regclass($1) IS NOT NULL AS exists', [`public.${tableName}`]);
+      return Boolean(check.rows[0]?.exists);
+    };
+
+    const tableHasColumn = async (tableName, columnName) => {
+      const check = await pool.query(
+        `SELECT 1
+         FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = $1
+           AND column_name = $2
+         LIMIT 1`,
+        [tableName, columnName]
+      );
+      return Boolean(check.rowCount);
+    };
+
+    const countAllRows = async (tableName) => {
+      if (!(await tableExists(tableName))) {
+        return 0;
+      }
+      const countResult = await pool.query(`SELECT COUNT(*)::int AS count FROM ${tableName}`);
+      return countResult.rows[0]?.count || 0;
+    };
+
+    const countRowsByTenant = async (tableName) => {
+      const hasTable = await tableExists(tableName);
+      if (!hasTable || !(await tableHasColumn(tableName, 'tenant_id'))) {
+        return new Map();
+      }
+
+      const rows = await pool.query(
+        `SELECT tenant_id AS "tenantId", COUNT(*)::int AS count
+         FROM ${tableName}
+         WHERE tenant_id IS NOT NULL
+         GROUP BY tenant_id`
+      );
+
+      return new Map(rows.rows.map((row) => [String(row.tenantId), row.count]));
+    };
+
+    const countEmployeesByTenant = async () => {
+      const hasEmployees = await tableExists('employees');
+      const hasDepartments = await tableExists('departments');
+      if (!hasEmployees || !hasDepartments) {
+        return new Map();
+      }
+
+      const [hasDepartmentIdOnEmployees, hasTenantIdOnDepartments] = await Promise.all([
+        tableHasColumn('employees', 'department_id'),
+        tableHasColumn('departments', 'tenant_id'),
+      ]);
+
+      if (!hasDepartmentIdOnEmployees || !hasTenantIdOnDepartments) {
+        return new Map();
+      }
+
+      const rows = await pool.query(
+        `SELECT d.tenant_id AS "tenantId", COUNT(*)::int AS count
+         FROM employees e
+         JOIN departments d ON d.id = e.department_id
+         WHERE d.tenant_id IS NOT NULL
+         GROUP BY d.tenant_id`
+      );
+
+      return new Map(rows.rows.map((row) => [String(row.tenantId), row.count]));
+    };
+
+    const [
+      hasTenants,
+      hasTenantUsers,
+      hasUsers,
+      hasAuditLog,
+      hasRequestLog,
+      hasTenantsEik,
+      hasTenantsOwnerPhone,
+      hasTenantsApprovedAt,
+      hasUsersFirstName,
+      hasUsersLastName,
+      hasAuditBeforeJson,
+      hasAuditAfterJson,
+      hasAuditIp,
+      hasAuditUserAgent,
+    ] = await Promise.all([
+      tableExists('tenants'),
+      tableExists('tenant_users'),
+      tableExists('users'),
+      tableExists('audit_log'),
+      tableExists('request_log'),
+      tableHasColumn('tenants', 'eik'),
+      tableHasColumn('tenants', 'owner_phone'),
+      tableHasColumn('tenants', 'approved_at'),
+      tableHasColumn('users', 'first_name'),
+      tableHasColumn('users', 'last_name'),
+      tableHasColumn('audit_log', 'before_json'),
+      tableHasColumn('audit_log', 'after_json'),
+      tableHasColumn('audit_log', 'ip'),
+      tableHasColumn('audit_log', 'user_agent'),
+    ]);
+
+    const tenantsSelect = [
+      't.id',
+      't.name',
+      hasTenantsEik ? 't.eik' : "''::text AS eik",
+      hasTenantsOwnerPhone ? 't.owner_phone AS "ownerPhone"' : "''::text AS \"ownerPhone\"",
+      't.status',
+      't.created_at AS "createdAt"',
+      hasTenantsApprovedAt ? 't.approved_at AS "approvedAt"' : 'NULL::timestamptz AS "approvedAt"',
+    ];
+
+    const ownerNameExpr = hasUsersFirstName || hasUsersLastName
+      ? "NULLIF(TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))), '')"
+      : 'u.email';
+
+    const tenantsResult = hasTenants
+      ? await pool.query(
         `SELECT
-           t.id,
-           t.name,
-           t.eik,
-           t.owner_phone AS "ownerPhone",
-           t.status,
-           t.created_at AS "createdAt",
-           t.approved_at AS "approvedAt",
+           ${tenantsSelect.join(',\n           ')},
            owner.owner_full_name AS "ownerFullName",
            owner.owner_email AS "ownerEmail"
          FROM tenants t
          LEFT JOIN LATERAL (
            SELECT
-             NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), '') AS owner_full_name,
+             ${ownerNameExpr} AS owner_full_name,
              u.email AS owner_email
            FROM tenant_users tu
            JOIN users u ON u.id = tu.user_id
@@ -1396,50 +1505,98 @@ app.get('/api/platform/super-admin/overview', requireSuperAdmin, async (req, res
              AND tu.role = 'owner'
            ORDER BY tu.created_at ASC
            LIMIT 1
-         ) owner ON TRUE
+         ) owner ON ${hasTenantUsers && hasUsers ? 'TRUE' : 'FALSE'}
          ORDER BY t.created_at DESC`
-      ),
-      pool.query(
+      )
+      : { rows: [] };
+
+    const usersByRoleResult = hasTenantUsers
+      ? await pool.query(
         `SELECT tu.role, COUNT(*)::int AS count
          FROM tenant_users tu
          GROUP BY tu.role
          ORDER BY tu.role`
-      ),
-      pool.query(
+      )
+      : { rows: [] };
+
+    const [employeesCount, schedulesCount, scheduleEntriesCount, tenantsCount, usersCount, databaseSizeBytes] = await Promise.all([
+      countAllRows('employees'),
+      countAllRows('schedules'),
+      countAllRows('schedule_entries'),
+      countAllRows('tenants'),
+      countAllRows('users'),
+      pool.query('SELECT pg_database_size(current_database())::bigint AS "databaseSizeBytes"').then((r) => r.rows[0]?.databaseSizeBytes || 0),
+    ]);
+
+    const usage = {
+      databaseSizeBytes,
+      employeesCount,
+      schedulesCount,
+      scheduleEntriesCount,
+      tenantsCount,
+      usersCount,
+    };
+
+    const [employeesByTenant, departmentsByTenant, schedulesByTenant, scheduleEntriesByTenant, auditByTenant, requestsByTenant] = await Promise.all([
+      countEmployeesByTenant(),
+      countRowsByTenant('departments'),
+      countRowsByTenant('schedules'),
+      countRowsByTenant('schedule_entries'),
+      countRowsByTenant('audit_log'),
+      countRowsByTenant('request_log'),
+    ]);
+
+    const usersByTenant = new Map();
+    tenantsResult.rows.forEach((tenant) => {
+      usersByTenant.set(String(tenant.id), 0);
+    });
+
+    if (hasTenantUsers) {
+      const tenantUserCounts = await pool.query(
+        `SELECT tenant_id AS "tenantId", COUNT(*)::int AS count
+         FROM tenant_users
+         GROUP BY tenant_id`
+      );
+      tenantUserCounts.rows.forEach((row) => {
+        usersByTenant.set(String(row.tenantId), row.count);
+      });
+    }
+
+    const latestLogs = hasAuditLog
+      ? await pool.query(
         `SELECT
-           pg_database_size(current_database())::bigint AS "databaseSizeBytes",
-           (SELECT COUNT(*)::int FROM employees) AS "employeesCount",
-           (SELECT COUNT(*)::int FROM schedules) AS "schedulesCount",
-           (SELECT COUNT(*)::int FROM schedule_entries) AS "scheduleEntriesCount",
-           (SELECT COUNT(*)::int FROM tenants) AS "tenantsCount",
-           (SELECT COUNT(*)::int FROM users) AS "usersCount"`
-      ),
-      pool.query(
-        `SELECT
-           t.id,
-           t.name,
-           t.status,
-           COUNT(DISTINCT tu.user_id)::int AS "usersCount",
-           COUNT(DISTINCT e.id)::int AS "employeesCount",
-           COUNT(DISTINCT d.id)::int AS "departmentsCount",
-           COUNT(DISTINCT s.id)::int AS "schedulesCount",
-           COUNT(DISTINCT se.id)::int AS "scheduleEntriesCount"
-         FROM tenants t
-         LEFT JOIN tenant_users tu ON tu.tenant_id = t.id
-         LEFT JOIN employees e ON e.tenant_id = t.id
-         LEFT JOIN departments d ON d.tenant_id = t.id
-         LEFT JOIN schedules s ON s.tenant_id = t.id
-         LEFT JOIN schedule_entries se ON se.tenant_id = t.id
-         GROUP BY t.id, t.name, t.status, t.created_at
-         ORDER BY t.created_at DESC`
-      ),
-      pool.query(
-        `SELECT id, tenant_id AS "tenantId", actor_user_id AS "actorUserId", action, entity, entity_id AS "entityId", before_json AS "beforeJson", after_json AS "afterJson", ip, user_agent AS "userAgent", created_at AS "createdAt"
+           id,
+           tenant_id AS "tenantId",
+           actor_user_id AS "actorUserId",
+           action,
+           entity,
+           entity_id AS "entityId",
+           ${hasAuditBeforeJson ? 'before_json AS "beforeJson"' : 'NULL::jsonb AS "beforeJson"'},
+           ${hasAuditAfterJson ? 'after_json AS "afterJson"' : 'NULL::jsonb AS "afterJson"'},
+           ${hasAuditIp ? 'ip' : "NULL::text AS ip"},
+           ${hasAuditUserAgent ? 'user_agent AS "userAgent"' : 'NULL::text AS "userAgent"'},
+           created_at AS "createdAt"
          FROM audit_log
          ORDER BY created_at DESC
          LIMIT 200`
-      ),
-    ]);
+      )
+      : { rows: [] };
+
+    const tenantUsage = tenantsResult.rows.map((tenant) => {
+      const tenantId = String(tenant.id);
+      return {
+        id: tenant.id,
+        name: tenant.name,
+        status: tenant.status,
+        usersCount: usersByTenant.get(tenantId) ?? 0,
+        employeesCount: employeesByTenant.get(tenantId) ?? 0,
+        departmentsCount: departmentsByTenant.get(tenantId) ?? 0,
+        schedulesCount: schedulesByTenant.get(tenantId) ?? 0,
+        scheduleEntriesCount: scheduleEntriesByTenant.get(tenantId) ?? 0,
+        auditEventsCount: auditByTenant.get(tenantId) ?? 0,
+        requestsCount: requestsByTenant.get(tenantId) ?? 0,
+      };
+    });
 
     const tableHasTenantColumn = async (tableName) => {
       const check = await pool.query(
@@ -1510,8 +1667,8 @@ app.get('/api/platform/super-admin/overview', requireSuperAdmin, async (req, res
     return res.json({
       ok: true,
       tenants: tenantsResult.rows,
-      usersByRole: usersByRole.rows,
-      usage: dbStats.rows[0],
+      usersByRole: usersByRoleResult.rows,
+      usage,
       tenantUsage,
       logs: latestLogs.rows,
     });
