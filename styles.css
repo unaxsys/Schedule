@@ -318,6 +318,32 @@ select.shift-select {
   margin-top: 0.7rem;
 }
 
+
+.settings-subtabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.settings-subtab-btn {
+  background: #dbeafe;
+  color: #1e3a8a;
+}
+
+.settings-subtab-btn.active {
+  background: #1e40af;
+  color: white;
+}
+
+.settings-subtab-panel {
+  display: none;
+}
+
+.settings-subtab-panel.active {
+  display: block;
+}
+
 .settings-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

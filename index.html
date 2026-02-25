@@ -26,7 +26,6 @@
           <button type="button" class="tab-btn" data-tab="employeesTab">Служители</button>
           <button type="button" class="tab-btn" data-tab="departmentsTab">Отдели</button>
           <button type="button" class="tab-btn" data-tab="vacationTab">Отпуски</button>
-          <button type="button" class="tab-btn" data-tab="rulesTab">Изчисления</button>
           <button type="button" class="tab-btn" data-tab="settingsTab">Настройки</button>
           <button type="button" class="tab-btn" data-tab="helpTab">FAQ / Help</button>
         </div>
@@ -114,38 +113,48 @@
           <div id="vacationLedger"></div>
         </section>
 
-        <section id="rulesTab" class="panel tab-panel">
-          <h2>Сумирано работно време и положен труд</h2>
-          <p>
-            Нормата за месеца = (работни дни без официални празници) × 8 ч. При СИРВ може да изберете период 1–6 месеца;
-            нощните часове (22:00–06:00) се приравняват с коефициент 1.14286. Отчетът показва извънредния труд за периода.
-          </p>
-          <form id="ratesForm" class="row">
-            <label for="weekendRateInput">Коефициент почивен ден:</label>
-            <input id="weekendRateInput" type="number" min="1" step="0.05" value="1.75" />
-            <label for="holidayRateInput">Коефициент официален празник:</label>
-            <input id="holidayRateInput" type="number" min="1" step="0.05" value="2" />
-            <label for="sirvPeriodInput">Период СИРВ (месеци):</label>
-            <input id="sirvPeriodInput" type="number" min="1" max="6" step="1" value="1" />
-            <button type="submit">Запази коефициенти</button>
-          </form>
-
-          <h3>Смени (начало/край)</h3>
-          <form id="shiftForm" class="row">
-            <input id="shiftCodeInput" maxlength="4" required placeholder="Код (напр. D1)" />
-            <input id="shiftNameInput" required placeholder="Име на смяна" />
-            <input id="shiftStartInput" type="time" required />
-            <input id="shiftEndInput" type="time" required />
-            <button type="submit">Добави смяна</button>
-          </form>
-          <div id="shiftList" class="shift-list"></div>
-          <small>Смените „Почивка“, „Отпуск“ и „Болничен“ са системни и не се трият.</small>
-        </section>
-
         <section id="settingsTab" class="panel tab-panel">
           <h2>Настройки</h2>
-          <p>Изберете кои обобщени полета да се показват в графика:</p>
-          <div id="summarySettingsList" class="settings-list"></div>
+          <div class="settings-subtabs">
+            <button type="button" class="settings-subtab-btn active" data-settings-tab="summarySettingsPanel">Обобщения</button>
+            <button type="button" class="settings-subtab-btn" data-settings-tab="calculationsSettingsPanel">Изчисления</button>
+            <button type="button" class="settings-subtab-btn" data-settings-tab="shiftsSettingsPanel">Смени</button>
+          </div>
+
+          <div id="summarySettingsPanel" class="settings-subtab-panel active">
+            <p>Изберете кои обобщени полета да се показват в графика:</p>
+            <div id="summarySettingsList" class="settings-list"></div>
+          </div>
+
+          <div id="calculationsSettingsPanel" class="settings-subtab-panel">
+            <h3>Сумирано работно време и положен труд</h3>
+            <p>
+              Нормата за месеца = (работни дни без официални празници) × 8 ч. При СИРВ може да изберете период 1–6 месеца;
+              нощните часове (22:00–06:00) се приравняват с коефициент 1.14286. Отчетът показва извънредния труд за периода.
+            </p>
+            <form id="ratesForm" class="row">
+              <label for="weekendRateInput">Коефициент почивен ден:</label>
+              <input id="weekendRateInput" type="number" min="1" step="0.05" value="1.75" />
+              <label for="holidayRateInput">Коефициент официален празник:</label>
+              <input id="holidayRateInput" type="number" min="1" step="0.05" value="2" />
+              <label for="sirvPeriodInput">Период СИРВ (месеци):</label>
+              <input id="sirvPeriodInput" type="number" min="1" max="6" step="1" value="1" />
+              <button type="submit">Запази коефициенти</button>
+            </form>
+          </div>
+
+          <div id="shiftsSettingsPanel" class="settings-subtab-panel">
+            <h3>Смени (начало/край)</h3>
+            <form id="shiftForm" class="row">
+              <input id="shiftCodeInput" maxlength="4" required placeholder="Код (напр. D1)" />
+              <input id="shiftNameInput" required placeholder="Име на смяна" />
+              <input id="shiftStartInput" type="time" required />
+              <input id="shiftEndInput" type="time" required />
+              <button type="submit">Добави смяна</button>
+            </form>
+            <div id="shiftList" class="shift-list"></div>
+            <small>Смените „Почивка“, „Отпуск“ и „Болничен“ са системни и не се трият.</small>
+          </div>
         </section>
 
         <section id="helpTab" class="panel tab-panel marketing-panel">
