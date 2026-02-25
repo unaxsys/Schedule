@@ -30,7 +30,10 @@
   - `GET /api/state`
   - `POST /api/employees`
   - `DELETE /api/employees/:id`
-  - `POST /api/schedule-entry`
+  - `POST /api/schedules`
+  - `GET /api/schedules?month=YYYY-MM`
+  - `GET /api/schedules/:id`
+  - `POST /api/schedules/:id/entry`
   - `POST /api/shift-template`
   - `DELETE /api/shift-template/:code`
-- PostgreSQL съхранение за служители, смени и дневни записи по месеци (данните остават след рестарт/обновяване на приложението).
+- PostgreSQL съхранение за служители, смени и графици като документи по отдели (данните остават след рестарт/обновяване на приложението).
