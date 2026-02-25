@@ -582,7 +582,7 @@ function renderDepartmentList() {
 
   state.departments.forEach((department) => {
     const row = document.createElement('div');
-    row.className = 'employee-item';
+    row.className = 'employee-item department-item';
 
     const rowContent = document.createElement('div');
     rowContent.className = 'department-row-content';
@@ -617,9 +617,11 @@ function renderDepartmentList() {
     rowContent.append(text, membersList);
 
     const actions = document.createElement('div');
+    actions.className = 'department-actions';
     const editBtn = document.createElement('button');
     editBtn.type = 'button';
     editBtn.textContent = 'Редактирай';
+    editBtn.className = 'btn-edit';
     editBtn.addEventListener('click', async () => {
       const nextName = window.prompt('Ново име на отдел:', department.name);
       if (!nextName || !nextName.trim()) {
@@ -646,6 +648,7 @@ function renderDepartmentList() {
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.textContent = 'Изтрий';
+    deleteBtn.className = 'btn-delete';
     deleteBtn.addEventListener('click', async () => {
       const response = await apiFetch(`/api/departments/${department.id}`, { method: 'DELETE' });
       if (!response.ok) {
