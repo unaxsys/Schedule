@@ -354,7 +354,7 @@ async function initDatabase() {
 
   await pool.query(`
     UPDATE employees
-    SET base_vacation_allowance = GREATEST(vacation_allowance - (CASE WHEN telk THEN 5 ELSE 0 END) - (CASE WHEN young_worker_benefit THEN 6 ELSE 0 END), 0)
+    SET base_vacation_allowance = GREATEST(vacation_allowance - (CASE WHEN telk THEN 6 ELSE 0 END) - (CASE WHEN young_worker_benefit THEN 6 ELSE 0 END), 0)
     WHERE (telk = TRUE OR young_worker_benefit = TRUE)
       AND base_vacation_allowance = 20
       AND vacation_allowance >= 26
@@ -595,8 +595,8 @@ app.post('/api/employees', async (req, res) => {
        RETURNING id, name, department_id AS "departmentId", department, position, egn,
                  base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  start_date::text AS "startDate", end_date::text AS "endDate",
-                 (base_vacation_allowance + CASE WHEN telk THEN 5 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
-                 (base_vacation_allowance + CASE WHEN telk THEN 5 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
+                 (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
+                 (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
       [name, departmentName, resolvedDepartmentId, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, startDate, endDate]
     );
 
@@ -640,8 +640,8 @@ app.put('/api/employees/:id', async (req, res) => {
        RETURNING id, name, department_id AS "departmentId", COALESCE(department, 'Без отдел') AS department,
                  position, egn, base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  start_date::text AS "startDate", end_date::text AS "endDate",
-                 (base_vacation_allowance + CASE WHEN telk THEN 5 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
-                 (base_vacation_allowance + CASE WHEN telk THEN 5 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
+                 (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
+                 (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
       [id, name, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, startDate, endDate]
     );
 
@@ -687,8 +687,8 @@ app.put('/api/employees/:id/department', async (req, res) => {
        RETURNING id, name, department_id AS "departmentId", COALESCE($3, 'Без отдел') AS department, position,
                  egn, base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  start_date::text AS "startDate", end_date::text AS "endDate",
-                 (base_vacation_allowance + CASE WHEN telk THEN 5 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
-                 (base_vacation_allowance + CASE WHEN telk THEN 5 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
+                 (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
+                 (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
       [id, departmentId, departmentName]
     );
 
