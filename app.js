@@ -14,6 +14,24 @@ const SYSTEM_SHIFTS = [
 
 const DEFAULT_WORK_SHIFT = { code: 'R', label: 'Р', name: 'Редовна', type: 'work', start: '09:00', end: '17:00', hours: 8, locked: true };
 
+const SUMMARY_COLUMNS = [
+  { key: 'workedDays', label: 'Отр. дни' },
+  { key: 'workedHours', label: 'Часове' },
+  { key: 'normHours', label: 'Норма' },
+  { key: 'deviation', label: 'Отклонение' },
+  { key: 'sirvNormHours', label: 'СИРВ норма' },
+  { key: 'sirvWorkedHours', label: 'СИРВ отраб.' },
+  { key: 'overtimeHours', label: 'Извънреден' },
+  { key: 'holidayWorkedHours', label: 'Труд празник (ч)' },
+  { key: 'weekendWorkedHours', label: 'Труд почивен (ч)' },
+  { key: 'nightWorkedHours', label: 'Нощен труд (ч)' },
+  { key: 'nightConvertedHours', label: 'Нощен коеф. (ч)' },
+  { key: 'payableHours', label: 'Платими часове' },
+  { key: 'vacationDays', label: 'Отпуск' },
+  { key: 'remainingVacation', label: 'Ост. отпуск' },
+  { key: 'sickDays', label: 'Болничен' }
+];
+
 const state = {
   month: todayMonth(),
   employees: [],
@@ -23,7 +41,8 @@ const state = {
   rates: loadRates(),
   shiftTemplates: loadShiftTemplates(),
   lockedMonths: loadLockedMonths(),
-  sirvPeriodMonths: loadSirvPeriodMonths()
+  sirvPeriodMonths: loadSirvPeriodMonths(),
+  summaryColumnsVisibility: loadSummaryColumnsVisibility()
 };
 
 const monthPicker = document.getElementById('monthPicker');
@@ -62,6 +81,7 @@ const unlockScheduleBtn = document.getElementById('unlockScheduleBtn');
 const exportExcelBtn = document.getElementById('exportExcelBtn');
 const exportPdfBtn = document.getElementById('exportPdfBtn');
 const lockStatus = document.getElementById('lockStatus');
+const summarySettingsList = document.getElementById('summarySettingsList');
 
 init();
 
@@ -85,6 +105,7 @@ async function init() {
   attachVacationForm();
   attachShiftForm();
   attachLockAndExport();
+  attachSettingsControls();
 
   const synced = await loadFromBackend();
   if (!synced) {
@@ -93,6 +114,34 @@ async function init() {
 
   monthPicker.value = state.month;
   renderAll();
+}
+
+function attachSettingsControls() {
+  if (!summarySettingsList) {
+    return;
+  }
+
+  summarySettingsList.innerHTML = '';
+  SUMMARY_COLUMNS.forEach((column) => {
+    const wrapper = document.createElement('label');
+    wrapper.className = 'settings-checkbox';
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = state.summaryColumnsVisibility[column.key] !== false;
+    input.addEventListener('change', () => {
+      state.summaryColumnsVisibility[column.key] = input.checked;
+      saveSummaryColumnsVisibility();
+      renderSchedule();
+    });
+
+    const text = document.createElement('span');
+    text.textContent = column.label;
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(text);
+    summarySettingsList.appendChild(wrapper);
+  });
 }
 
 function attachTabs() {
@@ -447,8 +496,13 @@ function renderSchedule() {
     header.appendChild(th);
   }
 
-  header.innerHTML +=
-    '<th class="summary-col">Отр. дни</th><th class="summary-col">Часове</th><th class="summary-col">Норма</th><th class="summary-col">Отклонение</th><th class="summary-col">СИРВ норма</th><th class="summary-col">СИРВ отраб.</th><th class="summary-col">Извънреден</th><th class="summary-col">Труд празник (ч)</th><th class="summary-col">Труд почивен (ч)</th><th class="summary-col">Нощен труд (ч)</th><th class="summary-col">Нощен коеф. (ч)</th><th class="summary-col">Платими часове</th><th class="summary-col">Отпуск</th><th class="summary-col">Ост. отпуск</th><th class="summary-col">Болничен</th>';
+  const visibleSummaryColumns = getVisibleSummaryColumns();
+  visibleSummaryColumns.forEach((column) => {
+    const cell = document.createElement('th');
+    cell.className = 'summary-col';
+    cell.textContent = column.label;
+    header.appendChild(cell);
+  });
 
   scheduleTable.innerHTML = '';
   scheduleTable.appendChild(header);
@@ -554,21 +608,7 @@ function renderSchedule() {
 
     accumulateTotals(totals, employeeTotals);
 
-    appendSummaryCell(row, summary.workedDays, 'summary-col');
-    appendSummaryCell(row, summary.workedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(row, monthStats.normHours, 'summary-col');
-    appendSummaryCell(row, employeeTotals.deviation.toFixed(2), `summary-col ${employeeTotals.deviation < 0 ? 'negative' : 'positive'}`);
-    appendSummaryCell(row, employeeTotals.sirvNormHours.toFixed(2), 'summary-col');
-    appendSummaryCell(row, employeeTotals.sirvWorkedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(row, employeeTotals.overtimeHours.toFixed(2), `summary-col ${employeeTotals.overtimeHours > 0 ? 'negative' : 'positive'}`);
-    appendSummaryCell(row, summary.holidayWorkedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(row, summary.weekendWorkedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(row, summary.nightWorkedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(row, summary.nightConvertedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(row, employeeTotals.payableHours.toFixed(2), 'summary-col');
-    appendSummaryCell(row, summary.vacationDays, 'summary-col');
-    appendSummaryCell(row, employeeTotals.remainingVacation, 'summary-col');
-    appendSummaryCell(row, summary.sickDays, 'summary-col');
+    appendSummaryColumns(row, employeeTotals, visibleSummaryColumns);
 
     scheduleTable.appendChild(row);
   });
@@ -587,21 +627,7 @@ function renderSchedule() {
       totalsRow.appendChild(filler);
     }
 
-    appendSummaryCell(totalsRow, totals.workedDays, 'summary-col');
-    appendSummaryCell(totalsRow, totals.workedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(totalsRow, totals.normHours.toFixed(2), 'summary-col');
-    appendSummaryCell(totalsRow, totals.deviation.toFixed(2), `summary-col ${totals.deviation < 0 ? 'negative' : 'positive'}`);
-    appendSummaryCell(totalsRow, totals.sirvNormHours.toFixed(2), 'summary-col');
-    appendSummaryCell(totalsRow, totals.sirvWorkedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(totalsRow, totals.overtimeHours.toFixed(2), `summary-col ${totals.overtimeHours > 0 ? 'negative' : 'positive'}`);
-    appendSummaryCell(totalsRow, totals.holidayWorkedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(totalsRow, totals.weekendWorkedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(totalsRow, totals.nightWorkedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(totalsRow, totals.nightConvertedHours.toFixed(2), 'summary-col');
-    appendSummaryCell(totalsRow, totals.payableHours.toFixed(2), 'summary-col');
-    appendSummaryCell(totalsRow, totals.vacationDays, 'summary-col');
-    appendSummaryCell(totalsRow, totals.remainingVacation, 'summary-col');
-    appendSummaryCell(totalsRow, totals.sickDays, 'summary-col');
+    appendSummaryColumns(totalsRow, totals, visibleSummaryColumns, true);
 
     scheduleTable.appendChild(totalsRow);
   }
@@ -612,6 +638,41 @@ function appendSummaryCell(row, value, className) {
   cell.className = className;
   cell.textContent = String(value);
   row.appendChild(cell);
+}
+
+function appendSummaryColumns(row, data, visibleColumns, isTotals = false) {
+  visibleColumns.forEach((column) => {
+    const value = formatSummaryColumnValue(column.key, data, isTotals);
+    const className = getSummaryColumnClassName(column.key, data);
+    appendSummaryCell(row, value, className);
+  });
+}
+
+function formatSummaryColumnValue(columnKey, data, isTotals) {
+  const value = data[columnKey];
+  if (typeof value !== 'number') {
+    return value ?? '0';
+  }
+
+  if (['workedDays', 'vacationDays', 'remainingVacation', 'sickDays'].includes(columnKey)) {
+    return isTotals ? Math.round(value) : String(value);
+  }
+
+  return value.toFixed(2);
+}
+
+function getSummaryColumnClassName(columnKey, data) {
+  if (columnKey === 'deviation') {
+    return `summary-col ${data.deviation < 0 ? 'negative' : 'positive'}`;
+  }
+  if (columnKey === 'overtimeHours') {
+    return `summary-col ${data.overtimeHours > 0 ? 'negative' : 'positive'}`;
+  }
+  return 'summary-col';
+}
+
+function getVisibleSummaryColumns() {
+  return SUMMARY_COLUMNS.filter((column) => state.summaryColumnsVisibility[column.key] !== false);
 }
 
 function calculateEmployeeTotals({ employee, summary, year, month, monthNormHours }) {
@@ -750,6 +811,25 @@ function saveSirvPeriodMonths() {
 
 function loadSirvPeriodMonths() {
   return normalizeSirvPeriod(localStorage.getItem('sirvPeriodMonths') || '1');
+}
+
+function saveSummaryColumnsVisibility() {
+  localStorage.setItem('summaryColumnsVisibility', JSON.stringify(state.summaryColumnsVisibility));
+}
+
+function loadSummaryColumnsVisibility() {
+  let stored = {};
+  try {
+    stored = JSON.parse(localStorage.getItem('summaryColumnsVisibility') || '{}') || {};
+  } catch {
+    stored = {};
+  }
+
+  const visibility = {};
+  SUMMARY_COLUMNS.forEach((column) => {
+    visibility[column.key] = stored[column.key] !== false;
+  });
+  return visibility;
 }
 
 function addMonths(monthKey, delta) {
