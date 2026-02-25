@@ -184,22 +184,6 @@
         color: #64748b;
       }
 
-
-      .sa-tenant-usage-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-        gap: 0.7rem;
-      }
-
-      .sa-usage-card {
-        border: 1px solid #dbeafe;
-        border-radius: 12px;
-        background: #fff;
-        padding: 0.75rem;
-        display: grid;
-        gap: 0.55rem;
-      }
-
       .sa-usage-stats {
         display: grid;
         grid-template-columns: repeat(2, minmax(110px, 1fr));
@@ -295,11 +279,6 @@
         <div id="saTenants" class="sa-tenants"></div>
       </section>
 
-      <section class="panel">
-        <h3>Натоварване по фирми</h3>
-        <div id="saTenantUsage" class="sa-tenant-usage-grid"></div>
-      </section>
-
       <section class="panel sa-grid-2">
         <div>
           <h3>Таблици (read-only)</h3>
@@ -336,7 +315,6 @@
       const refreshBtn = document.getElementById('saRefreshBtn');
       const usageCards = document.getElementById('saUsageCards');
       const tenantsEl = document.getElementById('saTenants');
-      const tenantUsageEl = document.getElementById('saTenantUsage');
       const logsEl = document.getElementById('saLogs');
       const tableForm = document.getElementById('saTableForm');
       const tableNameInput = document.getElementById('saTableName');
@@ -458,6 +436,7 @@
 
       function renderTenants(payload) {
         const tenants = payload.tenants || [];
+        const usageByTenantId = new Map((payload.tenantUsage || []).map((item) => [String(item.id), item]));
         tenantNameById = new Map(tenants.map((tenant) => [String(tenant.id), tenant.name || '—']));
         if (!tenants.length) {
           tenantsEl.innerHTML = '<div class="sa-tenant"><small>Няма регистрирани фирми.</small></div>';
@@ -476,6 +455,7 @@
             const ownerEmail = tenant.ownerEmail || '—';
             const ownerPhone = tenant.ownerPhone || '—';
             const eik = tenant.eik || '—';
+            const tenantUsage = usageByTenantId.get(String(tenant.id)) || {};
 
             return `
               <article class="sa-tenant" ${changed ? 'style="box-shadow:0 0 0 2px #bfdbfe inset;"' : ''}>
@@ -494,6 +474,16 @@
                   <div>${getStatusBadge(tenant.status)}</div>
                 </div>
 
+                <div class="sa-usage-stats">
+                  <span class="sa-usage-pill"><span>Потребители</span><strong>${escapeHtml(tenantUsage.usersCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Служители</span><strong>${escapeHtml(tenantUsage.employeesCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Отдели</span><strong>${escapeHtml(tenantUsage.departmentsCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Графици</span><strong>${escapeHtml(tenantUsage.schedulesCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Записи</span><strong>${escapeHtml(tenantUsage.scheduleEntriesCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Audit</span><strong>${escapeHtml(tenantUsage.auditEventsCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Заявки</span><strong>${escapeHtml(tenantUsage.requestsCount ?? 0)}</strong></span>
+                </div>
+
                 <div class="sa-actions">${actionsForTenant(tenant)}</div>
               </article>
             `;
@@ -501,34 +491,6 @@
           .join('');
 
         previousTenantSnapshot = nextSnapshot;
-      }
-
-      function renderTenantUsage(payload) {
-        const stats = payload.tenantUsage || [];
-        if (!stats.length) {
-          tenantUsageEl.innerHTML = '<p class="sa-empty">Няма данни за фирми.</p>';
-          return;
-        }
-
-        tenantUsageEl.innerHTML = stats
-          .map(
-            (item) => `
-              <article class="sa-usage-card">
-                <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:flex-start;">
-                  <strong>${escapeHtml(item.name || 'Без име')}</strong>
-                  ${getStatusBadge(item.status)}
-                </div>
-                <div class="sa-usage-stats">
-                  <span class="sa-usage-pill"><span>Потребители</span><strong>${escapeHtml(item.usersCount ?? 0)}</strong></span>
-                  <span class="sa-usage-pill"><span>Служители</span><strong>${escapeHtml(item.employeesCount ?? 0)}</strong></span>
-                  <span class="sa-usage-pill"><span>Отдели</span><strong>${escapeHtml(item.departmentsCount ?? 0)}</strong></span>
-                  <span class="sa-usage-pill"><span>Графици</span><strong>${escapeHtml(item.schedulesCount ?? 0)}</strong></span>
-                  <span class="sa-usage-pill"><span>Записи</span><strong>${escapeHtml(item.scheduleEntriesCount ?? 0)}</strong></span>
-                </div>
-              </article>
-            `,
-          )
-          .join('');
       }
 
       function renderBubbles(row, hiddenKeys = new Set()) {
@@ -652,7 +614,6 @@
           const payload = await apiRequest('/api/platform/super-admin/overview');
           renderUsage(payload);
           renderTenants(payload);
-          renderTenantUsage(payload);
           renderLogs(payload);
           setStatus(`${isAuto ? 'Live' : 'Ръчно'} обновяване: ${new Date().toLocaleTimeString('bg-BG')}`);
         } catch (error) {
