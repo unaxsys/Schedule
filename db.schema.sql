@@ -19,11 +19,15 @@ CREATE TABLE IF NOT EXISTS employees (
   young_worker_benefit BOOLEAN NOT NULL DEFAULT FALSE,
   start_date DATE NOT NULL DEFAULT CURRENT_DATE,
   end_date DATE NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT employees_employment_period_check CHECK (end_date IS NULL OR end_date >= start_date)
 );
 
 CREATE INDEX IF NOT EXISTS idx_employees_department_id ON employees(department_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_egn_unique ON employees(egn) WHERE egn IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_employees_start_date ON employees(start_date);
+CREATE INDEX IF NOT EXISTS idx_employees_end_date ON employees(end_date);
+CREATE INDEX IF NOT EXISTS idx_employees_young_worker_benefit ON employees(young_worker_benefit);
 
 CREATE TABLE IF NOT EXISTS schedules (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -36,7 +40,7 @@ CREATE TABLE IF NOT EXISTS schedules (
 
 CREATE TABLE IF NOT EXISTS schedule_entries (
   schedule_id UUID NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
   day INTEGER NOT NULL CHECK (day >= 1 AND day <= 31),
   shift_code VARCHAR(16) NOT NULL,
   PRIMARY KEY (schedule_id, employee_id, day)

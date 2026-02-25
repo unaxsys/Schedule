@@ -787,10 +787,11 @@ function createEmployeeId() {
   return `emp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-const EXTRA_VACATION_DAYS_PER_BENEFIT = 6;
+const TELK_EXTRA_VACATION_DAYS = 5;
+const YOUNG_WORKER_EXTRA_VACATION_DAYS = 6;
 
 function getExtraVacationDays(hasTelk, hasYoungWorkerBenefit) {
-  return (hasTelk ? EXTRA_VACATION_DAYS_PER_BENEFIT : 0) + (hasYoungWorkerBenefit ? EXTRA_VACATION_DAYS_PER_BENEFIT : 0);
+  return (hasTelk ? TELK_EXTRA_VACATION_DAYS : 0) + (hasYoungWorkerBenefit ? YOUNG_WORKER_EXTRA_VACATION_DAYS : 0);
 }
 
 function calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit) {
@@ -1070,27 +1071,9 @@ function renderEmployees() {
         return;
       }
 
-      const updatedEmployee = await updateEmployeeBackend(employee.id, {
-        name: employee.name,
-        position: employee.position,
-        egn: employee.egn,
-        vacationAllowance: employee.vacationAllowance,
-        telk: Boolean(employee.telk),
-        youngWorkerBenefit: Boolean(employee.youngWorkerBenefit),
-        baseVacationAllowance: resolveBaseVacationAllowance(employee),
-        startDate: employee.startDate || getMonthStartDate(state.month || todayMonth()),
-        endDate: releaseDate
-      });
-
-      if (updatedEmployee) {
-        state.employees = state.employees.map((entry) => (entry.id === employee.id
-          ? normalizeEmployeeVacationData({ ...entry, ...updatedEmployee })
-          : entry));
-        persistEmployeesLocal();
-        await deleteEmployeeBackend(employee.id, releaseDate);
-        await refreshMonthlyView();
-        renderAll();
-      }
+      await releaseEmployeeBackend(employee.id, releaseDate);
+      await refreshMonthlyView();
+      renderAll();
     });
 
     actions.append(employeeDepartmentSelect, editBtn, removeBtn);
@@ -1851,9 +1834,10 @@ async function refreshMonthlyView() {
 
   await loadSchedulesForMonth();
 
+  const monthParam = encodeURIComponent(state.month || todayMonth());
   const employeeQuery = state.selectedDepartmentId && state.selectedDepartmentId !== 'all'
-    ? `/api/employees?department_id=${encodeURIComponent(state.selectedDepartmentId)}`
-    : '/api/employees';
+    ? `/api/employees?department_id=${encodeURIComponent(state.selectedDepartmentId)}&month_key=${monthParam}`
+    : `/api/employees?month_key=${monthParam}`;
   const employeeResponse = await apiFetch(employeeQuery);
   const employeePayload = employeeResponse.ok ? await employeeResponse.json() : { employees: [] };
   const allowedEmployees = Array.isArray(employeePayload.employees) ? employeePayload.employees : [];
@@ -1967,14 +1951,17 @@ async function saveEmployeeBackend(employee) {
   }
 }
 
-async function deleteEmployeeBackend(employeeId, endDate) {
+async function releaseEmployeeBackend(employeeId, endDate) {
   if (!state.backendAvailable) {
     return;
   }
 
   try {
-    const query = endDate ? `?end_date=${encodeURIComponent(endDate)}` : '';
-    const response = await apiFetch(`/api/employees/${employeeId}${query}`, { method: 'DELETE' });
+    const response = await apiFetch(`/api/employees/${employeeId}/release`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ end_date: endDate || null })
+    });
     if (!response.ok) {
       throw new Error('Delete employee failed');
     }
