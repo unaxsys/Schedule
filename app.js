@@ -46,6 +46,7 @@ const state = {
   departments: [],
   expandedDepartmentId: null,
   selectedDepartmentId: 'all',
+  hasManualScheduleSelection: false,
   backendAvailable: false,
   apiBaseUrl: '',
   rates: loadRates(),
@@ -310,6 +311,7 @@ function renderScheduleList() {
     checkbox.value = schedule.id;
     checkbox.checked = state.selectedScheduleIds.includes(schedule.id);
     checkbox.addEventListener('change', () => {
+      state.hasManualScheduleSelection = true;
       if (checkbox.checked) {
         if (!state.selectedScheduleIds.includes(schedule.id)) {
           state.selectedScheduleIds.push(schedule.id);
@@ -320,7 +322,9 @@ function renderScheduleList() {
       }
 
       if (!state.selectedScheduleIds.length && state.schedules.length) {
-        state.selectedScheduleIds = [state.schedules[0].id];
+        state.selectedScheduleIds = state.selectedDepartmentId === 'all'
+          ? state.schedules.map((item) => item.id)
+          : [state.schedules[0].id];
       }
 
       if (!state.selectedScheduleIds.includes(state.activeScheduleId)) {
@@ -509,6 +513,13 @@ function attachLockAndExport() {
 }
 
 generateBtn.addEventListener('click', async () => {
+  state.month = monthPicker.value || todayMonth();
+  saveScheduleLocal();
+  await refreshMonthlyView();
+  renderAll();
+});
+
+monthPicker.addEventListener('change', async () => {
   state.month = monthPicker.value || todayMonth();
   saveScheduleLocal();
   await refreshMonthlyView();
@@ -1790,7 +1801,16 @@ async function loadDepartmentsFromBackend() {
 }
 
 async function loadSchedulesForMonth() {
-  const query = new URLSearchParams({ month: state.month || todayMonth() });
+  const monthKey = state.month || monthPicker.value || todayMonth();
+  const previousScheduleIds = state.schedules.map((schedule) => schedule.id);
+  const previousSelectedIds = state.selectedScheduleIds.slice();
+  const wasSelectAll = previousScheduleIds.length > 0 && previousScheduleIds.every((id) => previousSelectedIds.includes(id));
+
+  const query = new URLSearchParams({ month_key: monthKey });
+  if (state.selectedDepartmentId && state.selectedDepartmentId !== 'all') {
+    query.set('department_id', state.selectedDepartmentId);
+  }
+
   const response = await apiFetch(`/api/schedules?${query.toString()}`);
   if (!response.ok) {
     throw new Error('Schedules unavailable');
@@ -1801,22 +1821,27 @@ async function loadSchedulesForMonth() {
   state.schedules.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 
   const validIds = new Set(state.schedules.map((schedule) => schedule.id));
-  state.selectedScheduleIds = state.selectedScheduleIds.filter((id) => validIds.has(id));
+  let selectedScheduleIds = previousSelectedIds.filter((id) => validIds.has(id));
 
-  if (!state.selectedScheduleIds.length && state.schedules.length) {
-    state.selectedScheduleIds = [state.schedules[0].id];
+  if (state.selectedDepartmentId === 'all' && (wasSelectAll || !state.hasManualScheduleSelection)) {
+    selectedScheduleIds = state.schedules.map((schedule) => schedule.id);
   }
 
-  if (!state.activeScheduleId || !validIds.has(state.activeScheduleId)) {
-    state.activeScheduleId = state.selectedScheduleIds[0] || state.schedules[0]?.id || null;
+  if (!selectedScheduleIds.length && state.schedules.length) {
+    selectedScheduleIds = state.selectedDepartmentId === 'all'
+      ? state.schedules.map((schedule) => schedule.id)
+      : [state.schedules[0].id];
   }
 
-  if (state.activeScheduleId && !state.selectedScheduleIds.includes(state.activeScheduleId)) {
-    state.selectedScheduleIds.unshift(state.activeScheduleId);
+  state.selectedScheduleIds = selectedScheduleIds;
+
+  if (!state.activeScheduleId || !validIds.has(state.activeScheduleId) || !state.selectedScheduleIds.includes(state.activeScheduleId)) {
+    state.activeScheduleId = state.selectedScheduleIds[0] || null;
   }
 
   renderScheduleList();
 }
+
 
 async function fetchScheduleDetails(scheduleId) {
   const response = await apiFetch(`/api/schedules/${scheduleId}`);
@@ -1832,9 +1857,11 @@ async function refreshMonthlyView() {
     return;
   }
 
+  const month = state.month || monthPicker.value || todayMonth();
+  state.month = month;
   await loadSchedulesForMonth();
 
-  const monthParam = encodeURIComponent(state.month || todayMonth());
+  const monthParam = encodeURIComponent(month);
   const employeeQuery = state.selectedDepartmentId && state.selectedDepartmentId !== 'all'
     ? `/api/employees?department_id=${encodeURIComponent(state.selectedDepartmentId)}&month_key=${monthParam}`
     : `/api/employees?month_key=${monthParam}`;

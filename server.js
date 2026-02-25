@@ -94,8 +94,8 @@ const EMPLOYEE_SELECT_FIELDS = `e.id,
               e.young_worker_benefit AS "youngWorkerBenefit",
               e.start_date::text AS "startDate",
               e.end_date::text AS "endDate",
-              (e.base_vacation_allowance + CASE WHEN e.telk THEN 5 ELSE 0 END + CASE WHEN e.young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
-              (e.base_vacation_allowance + CASE WHEN e.telk THEN 5 ELSE 0 END + CASE WHEN e.young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`;
+              (e.base_vacation_allowance + CASE WHEN e.telk THEN 6 ELSE 0 END + CASE WHEN e.young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
+              (e.base_vacation_allowance + CASE WHEN e.telk THEN 6 ELSE 0 END + CASE WHEN e.young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`;
 
 function getReleaseDateFromRequest(req) {
   const requestedEndDate = normalizeDateOnly(req.body?.end_date || req.body?.endDate || req.query.end_date);
@@ -171,7 +171,7 @@ function validateEmployeeInput(data = {}) {
   const telk = Boolean(data.telk);
   const youngWorkerBenefit = Boolean(data.youngWorkerBenefit ?? data.young_worker_benefit);
   const baseVacationAllowance = Number(rawVacationAllowance);
-  const vacationAllowance = baseVacationAllowance + (telk ? 5 : 0) + (youngWorkerBenefit ? 6 : 0);
+  const vacationAllowance = baseVacationAllowance + (telk ? 6 : 0) + (youngWorkerBenefit ? 6 : 0);
   if (!Number.isFinite(baseVacationAllowance) || baseVacationAllowance < 0) {
     return {
       valid: false,
@@ -775,11 +775,11 @@ app.post('/api/schedules', async (req, res) => {
 });
 
 app.get('/api/schedules', async (req, res) => {
-  const month = cleanStr(req.query.month);
+  const month = cleanStr(req.query.month_key || req.query.month);
   const departmentId = cleanStr(req.query.department_id);
 
   if (month && !isValidMonthKey(month)) {
-    return res.status(400).json({ message: 'month трябва да е във формат YYYY-MM.' });
+    return res.status(400).json({ message: 'month_key трябва да е във формат YYYY-MM.' });
   }
 
   if (departmentId && departmentId !== 'all' && !isValidUuid(departmentId)) {
@@ -787,71 +787,15 @@ app.get('/api/schedules', async (req, res) => {
   }
 
   try {
-    if (month && Object.prototype.hasOwnProperty.call(req.query, 'department_id')) {
-      const filterAll = !departmentId || departmentId === 'all';
-      const bounds = getMonthBounds(month);
-      const employeesParams = [bounds.monthStart, bounds.monthEnd];
-      const overlapClause = buildEmploymentOverlapClause('$1', '$2');
-
-      const employeesQuery = filterAll
-        ? pool.query(
-            `SELECT ${EMPLOYEE_SELECT_FIELDS}
-             FROM employees e
-             LEFT JOIN departments d ON d.id = e.department_id
-             WHERE ${overlapClause}
-             ORDER BY e.name ASC`,
-            employeesParams
-          )
-        : pool.query(
-            `SELECT ${EMPLOYEE_SELECT_FIELDS}
-             FROM employees e
-             LEFT JOIN departments d ON d.id = e.department_id
-             WHERE e.department_id = $3
-               AND ${overlapClause}
-             ORDER BY e.name ASC`,
-            [...employeesParams, departmentId]
-          );
-
-      const entriesQuery = filterAll
-        ? pool.query(
-            `SELECT se.schedule_id AS "scheduleId", se.employee_id AS "employeeId", se.day, se.shift_code AS "shiftCode"
-             FROM schedule_entries se
-             JOIN schedules s ON s.id = se.schedule_id
-             JOIN employees e ON e.id = se.employee_id
-             WHERE s.month_key = $1
-               AND e.start_date <= $3::date
-               AND (e.end_date IS NULL OR e.end_date >= $2::date)
-             ORDER BY se.schedule_id, se.employee_id, se.day`,
-            [month, bounds.monthStart, bounds.monthEnd]
-          )
-        : pool.query(
-            `SELECT se.schedule_id AS "scheduleId", se.employee_id AS "employeeId", se.day, se.shift_code AS "shiftCode"
-             FROM schedule_entries se
-             JOIN schedules s ON s.id = se.schedule_id
-             JOIN employees e ON e.id = se.employee_id
-             WHERE s.month_key = $1
-               AND e.department_id = $2
-               AND e.start_date <= $4::date
-               AND (e.end_date IS NULL OR e.end_date >= $3::date)
-             ORDER BY se.schedule_id, se.employee_id, se.day`,
-            [month, departmentId, bounds.monthStart, bounds.monthEnd]
-          );
-
-      const [employeesResult, entriesResult] = await Promise.all([employeesQuery, entriesQuery]);
-
-      return res.json({
-        month,
-        department_id: filterAll ? 'all' : departmentId,
-        employees: employeesResult.rows,
-        entries: entriesResult.rows,
-      });
-    }
-
     const params = [];
     const where = [];
     if (month) {
       params.push(month);
       where.push(`month_key = $${params.length}`);
+    }
+    if (departmentId && departmentId !== 'all') {
+      params.push(departmentId);
+      where.push(`department = (SELECT name FROM departments WHERE id = $${params.length})`);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
