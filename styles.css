@@ -194,17 +194,66 @@ button:hover {
 .department-header {
   cursor: pointer;
 }
+.department-header-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.65rem;
+}
+.department-toggle {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #1d4ed8;
+  background: #dbeafe;
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+}
 .department-members {
   display: none;
   border-top: 1px solid #e5e7eb;
-  padding-top: 0.45rem;
+  margin-top: 0.35rem;
+  padding-top: 0.55rem;
 }
 .department-members.expanded {
-  display: block;
+  display: grid;
+  gap: 0.4rem;
 }
 .department-member-item {
   font-size: 0.9rem;
-  padding: 0.2rem 0;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #f8fbff 0%, #eef5ff 100%);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.department-member-index {
+  color: #1e3a8a;
+  font-weight: 700;
+  min-width: 1.4rem;
+  text-align: center;
+}
+.department-member-avatar {
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 999px;
+  background: #1d4ed8;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.department-member-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+.department-member-details small {
+  color: #475569;
 }
 .legend {
   display: flex;
