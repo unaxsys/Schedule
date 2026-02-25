@@ -1373,7 +1373,7 @@ app.post('/api/platform/users', requireSuperAdmin, async (req, res, next) => {
 app.get('/api/platform/super-admin/overview', requireSuperAdmin, async (req, res, next) => {
 
   try {
-    const [tenantsResult, usersByRole, dbStats, latestLogs] = await Promise.all([
+    const [tenantsResult, usersByRole, dbStats, tenantUsageStats, latestLogs] = await Promise.all([
       pool.query(
         `SELECT
            t.id,
@@ -1415,6 +1415,25 @@ app.get('/api/platform/super-admin/overview', requireSuperAdmin, async (req, res
            (SELECT COUNT(*)::int FROM users) AS "usersCount"`
       ),
       pool.query(
+        `SELECT
+           t.id,
+           t.name,
+           t.status,
+           COUNT(DISTINCT tu.user_id)::int AS "usersCount",
+           COUNT(DISTINCT e.id)::int AS "employeesCount",
+           COUNT(DISTINCT d.id)::int AS "departmentsCount",
+           COUNT(DISTINCT s.id)::int AS "schedulesCount",
+           COUNT(DISTINCT se.id)::int AS "scheduleEntriesCount"
+         FROM tenants t
+         LEFT JOIN tenant_users tu ON tu.tenant_id = t.id
+         LEFT JOIN employees e ON e.tenant_id = t.id
+         LEFT JOIN departments d ON d.tenant_id = t.id
+         LEFT JOIN schedules s ON s.tenant_id = t.id
+         LEFT JOIN schedule_entries se ON se.tenant_id = t.id
+         GROUP BY t.id, t.name, t.status, t.created_at
+         ORDER BY t.created_at DESC`
+      ),
+      pool.query(
         `SELECT id, tenant_id AS "tenantId", actor_user_id AS "actorUserId", action, entity, entity_id AS "entityId", before_json AS "beforeJson", after_json AS "afterJson", ip, user_agent AS "userAgent", created_at AS "createdAt"
          FROM audit_log
          ORDER BY created_at DESC
@@ -1427,6 +1446,7 @@ app.get('/api/platform/super-admin/overview', requireSuperAdmin, async (req, res
       tenants: tenantsResult.rows,
       usersByRole: usersByRole.rows,
       usage: dbStats.rows[0],
+      tenantUsage: tenantUsageStats.rows,
       logs: latestLogs.rows,
     });
   } catch (error) {
