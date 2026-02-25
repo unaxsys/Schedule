@@ -145,6 +145,9 @@ const signInForm = document.getElementById('signInForm');
 const loginEmailInput = document.getElementById('loginEmailInput');
 const loginPasswordInput = document.getElementById('loginPasswordInput');
 const authSignedInInfo = document.getElementById('authSignedInInfo');
+const preAuthScreen = document.getElementById('preAuthScreen');
+const appShell = document.getElementById('appShell');
+const logoutBtn = document.getElementById('logoutBtn');
 const createPlatformUserForm = document.getElementById('createPlatformUserForm');
 const platformUserRegistrationIdInput = document.getElementById('platformUserRegistrationIdInput');
 const platformUserFullNameInput = document.getElementById('platformUserFullNameInput');
@@ -198,6 +201,7 @@ async function init() {
   attachRegistrationControls();
   attachSuperAdminControls();
   updateAuthUi();
+  updateAuthGate();
 
   const synced = await loadFromBackend();
   if (!synced) {
@@ -304,6 +308,18 @@ function attachRegistrationControls() {
     showSignUpBtn.addEventListener('click', () => setAuthMode('signup'));
   }
 
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', () => {
+      clearAuthSession();
+      updateAuthUi();
+      updateAuthGate();
+      setAuthMode('signin');
+      setStatus('Излязохте от профила.', true);
+    });
+  }
+
+  setAuthMode('signin');
+
   if (signInForm) {
     signInForm.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -323,10 +339,12 @@ function attachRegistrationControls() {
 
         signInForm.reset();
         updateAuthUi();
+        updateAuthGate();
         setStatus(`Успешен вход: ${payload.user.email}`, true);
       } catch (error) {
         clearAuthSession();
         updateAuthUi();
+        updateAuthGate();
         setStatus(`Грешка при вход: ${error.message}`, false);
       }
     });
@@ -396,6 +414,20 @@ function updateAuthUi() {
   } else {
     authSignedInInfo.textContent = '';
     authSignedInInfo.classList.add('hidden');
+  }
+}
+
+function updateAuthGate() {
+  const isAuthenticated = Boolean(state.currentUser && state.authToken);
+
+  if (preAuthScreen) {
+    preAuthScreen.classList.toggle('hidden', isAuthenticated);
+  }
+  if (appShell) {
+    appShell.classList.toggle('hidden', !isAuthenticated);
+  }
+  if (logoutBtn) {
+    logoutBtn.classList.toggle('hidden', !isAuthenticated);
   }
 }
 

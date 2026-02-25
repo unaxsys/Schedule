@@ -654,3 +654,112 @@ select.shift-select {
 .auth-form-card p {
   margin: 0;
 }
+
+.magos-landing {
+  min-height: 100vh;
+  background: #e9eef6;
+  padding: 1.1rem;
+}
+
+.magos-topbar {
+  background: #f8fafc;
+  color: #0f172a;
+  border: 1px solid #dbe4f2;
+  border-radius: 14px;
+  padding: 0.7rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.magos-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.magos-brand-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: #dbeafe;
+  color: #1e40af;
+  font-weight: 700;
+}
+
+.magos-brand small {
+  display: block;
+  color: #64748b;
+}
+
+.magos-nav {
+  display: flex;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.magos-nav a {
+  color: #334155;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.magos-cta {
+  background: #3b82f6;
+}
+
+.magos-hero {
+  margin-top: 1rem;
+  background: linear-gradient(135deg, #f8fbff 0%, #dde8fb 100%);
+  border: 1px solid #dbe4f2;
+  border-radius: 18px;
+  padding: 1.2rem;
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 1rem;
+}
+
+.magos-kicker {
+  display: inline-block;
+  border: 1px solid #93c5fd;
+  background: #dbeafe;
+  color: #1e3a8a;
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.85rem;
+  margin-bottom: 0.55rem;
+}
+
+.magos-hero-copy h1 {
+  margin: 0;
+  color: #1e293b;
+  font-size: clamp(1.6rem, 3vw, 2.7rem);
+}
+
+.magos-hero-copy p {
+  color: #334155;
+  max-width: 62ch;
+}
+
+.magos-hero-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.magos-auth-card {
+  background: #ffffff;
+  border: 1px solid #dbe4f2;
+  border-radius: 14px;
+  padding: 0.9rem;
+}
+
+@media (max-width: 980px) {
+  .magos-hero {
+    grid-template-columns: 1fr;
+  }
+}

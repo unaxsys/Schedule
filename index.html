@@ -7,6 +7,64 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <section id="preAuthScreen" class="magos-landing">
+      <header class="magos-topbar">
+        <div class="magos-brand">
+          <div class="magos-brand-mark">M</div>
+          <div>
+            <strong>Магос</strong>
+            <small>счетоводни услуги</small>
+          </div>
+        </div>
+        <nav class="magos-nav">
+          <a href="#">Услуги</a>
+          <a href="#">Решения</a>
+          <a href="#">За нас</a>
+          <a href="#">Контакт</a>
+        </nav>
+        <button type="button" class="magos-cta">Запитване</button>
+      </header>
+
+      <div class="magos-hero">
+        <div class="magos-hero-copy">
+          <span class="magos-kicker">Платформа за графици</span>
+          <h1>Ясно планиране на смени за вашия екип</h1>
+          <p>
+            Организирайте служители, отдели, отпуски и работни графици в една система.
+            Подходящо решение за счетоводни къщи и работодатели, които искат контрол и яснота.
+          </p>
+          <div class="magos-hero-actions">
+            <button id="showSignInBtn" type="button">Вход</button>
+            <button id="showSignUpBtn" type="button" class="btn-add">Регистрация</button>
+          </div>
+        </div>
+
+        <div class="magos-auth-card">
+          <div id="authSignedInInfo" class="role-permission-note hidden"></div>
+
+          <form id="signInForm" class="employee-form auth-form-card hidden">
+            <h3>Вход в профила</h3>
+            <input id="loginEmailInput" type="email" required placeholder="Email" />
+            <input id="loginPasswordInput" type="password" required placeholder="Парола" />
+            <button id="submitSignInBtn" type="submit">Вход в платформата</button>
+          </form>
+
+          <form id="registrationForm" class="employee-form auth-form-card hidden">
+            <h3>Регистрация на организация</h3>
+            <input id="companyNameInput" required placeholder="Име на фирма/организация" />
+            <input id="companyEikInput" required pattern="\d{9,13}" placeholder="ЕИК (9 до 13 цифри)" />
+            <input id="ownerFullNameInput" required placeholder="Имена на собственик" />
+            <input id="ownerEmailInput" type="email" required placeholder="Email на собственика" />
+            <input id="ownerPhoneInput" required placeholder="Телефон" />
+            <input id="ownerPasswordInput" type="password" minlength="8" required placeholder="Парола (мин. 8 символа)" />
+            <input id="ownerPasswordConfirmInput" type="password" minlength="8" required placeholder="Повтори парола" />
+            <button id="submitRegistrationBtn" class="btn-add" type="submit">Създай профил</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <div id="appShell" class="hidden">
     <header>
       <h1>Планиране на смени</h1>
       <p>Управление на отдели, длъжности, графици, отпуски и болнични.</p>
@@ -23,6 +81,7 @@
           <option value="super_admin">Супер администратор</option>
         </select>
         <a id="superAdminPortalLink" href="super-admin.html" target="_blank" class="super-admin-link hidden">Супер админ панел</a>
+        <button id="logoutBtn" type="button" class="hidden">Изход</button>
       </div>
     </header>
 
@@ -36,7 +95,7 @@
           <button type="button" class="tab-btn" data-tab="vacationTab">Отпуски</button>
           <button type="button" class="tab-btn" data-tab="settingsTab">Настройки</button>
           <button type="button" class="tab-btn" data-tab="helpTab">FAQ / Help</button>
-          <button type="button" class="tab-btn" data-tab="authTab">Вход / Регистрация</button>
+          <button type="button" class="tab-btn" data-tab="authTab">Орг. потребители</button>
         </div>
       </aside>
 
@@ -186,39 +245,8 @@
 
 
         <section id="authTab" class="panel tab-panel">
-          <div class="welcome-auth-header">
-            <h2>Добре дошли в платформата за графици</h2>
-            <p>
-              Системата е създадена за фирми, които искат бързо да управляват смени, служители, отпуски и натоварване.
-              Изберете дали да влезете в съществуващ профил или да създадете нова организация.
-            </p>
-            <div class="welcome-auth-actions">
-              <button id="showSignInBtn" type="button">Sign In</button>
-              <button id="showSignUpBtn" type="button" class="btn-add">Sign Up</button>
-            </div>
-          </div>
-
-          <div id="authSignedInInfo" class="role-permission-note hidden"></div>
-
-          <form id="signInForm" class="employee-form auth-form-card hidden">
-            <h3>Вход в профила</h3>
-            <input id="loginEmailInput" type="email" required placeholder="Email" />
-            <input id="loginPasswordInput" type="password" required placeholder="Парола" />
-            <button id="submitSignInBtn" type="submit">Вход</button>
-          </form>
-
-          <form id="registrationForm" class="employee-form auth-form-card hidden">
-            <h3>Регистрация на организация</h3>
-            <p>След регистрация профилът получава роля <strong>Owner/Администратор</strong>.</p>
-            <input id="companyNameInput" required placeholder="Име на фирма/организация" />
-            <input id="companyEikInput" required pattern="\d{9,13}" placeholder="ЕИК (9 до 13 цифри)" />
-            <input id="ownerFullNameInput" required placeholder="Имена на собственик" />
-            <input id="ownerEmailInput" type="email" required placeholder="Email на собственика" />
-            <input id="ownerPhoneInput" placeholder="Телефон" />
-            <input id="ownerPasswordInput" type="password" minlength="8" required placeholder="Парола (мин. 8 символа)" />
-            <input id="ownerPasswordConfirmInput" type="password" minlength="8" required placeholder="Повтори парола" />
-            <button id="submitRegistrationBtn" class="btn-add" type="submit">Подай регистрация</button>
-          </form>
+          <h2>Управление на достъп в организацията</h2>
+          <p>След като сте влезли, можете да добавяте потребители към вашата организация.</p>
 
           <h3 style="margin-top: 1rem;">Добавяне на потребител към организация</h3>
           <p>Owner/Admin може да добавя само роли <strong>Мениджър</strong> и <strong>Потребител</strong>.</p>
@@ -396,6 +424,8 @@
           </div>
         </form>
       </div>
+    </div>
+
     </div>
 
     <script src="app.js"></script>
