@@ -54,13 +54,14 @@ function validateEmployeeInput(data = {}) {
     typeof value === 'string' ? value.trim() : String(value ?? '').trim();
 
   const name = normalizeString(data.name);
-  if (name.length < 2) {
+  const nameParts = name.split(/\s+/).filter(Boolean);
+  if (nameParts.length < 3) {
     return {
       valid: false,
       error: {
         error: 'VALIDATION_ERROR',
         field: 'name',
-        message: 'Името е задължително и трябва да съдържа поне 2 символа.',
+        message: 'Моля, въведете 3 имена (собствено, бащино и фамилия).',
       },
     };
   }
@@ -461,6 +462,46 @@ app.post('/api/employees', async (req, res) => {
       return res.status(409).json({ message: 'Служител с това ЕГН вече съществува.' });
     }
     console.error('EMPLOYEE POST ERROR:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+
+app.put('/api/employees/:id', async (req, res) => {
+  const id = cleanStr(req.params.id);
+  if (!isValidUuid(id)) {
+    return res.status(400).json({ message: 'Невалиден employee id.' });
+  }
+
+  const validation = validateEmployeeInput(req.body);
+  if (!validation.valid) {
+    return res.status(400).json(validation.error);
+  }
+
+  const { name, position, egn, vacationAllowance } = validation.value;
+
+  try {
+    const updated = await pool.query(
+      `UPDATE employees
+       SET name = $2,
+           position = $3,
+           egn = $4,
+           vacation_allowance = $5
+       WHERE id = $1
+       RETURNING id, name, department_id AS "departmentId", COALESCE(department, 'Без отдел') AS department,
+                 position, egn, vacation_allowance AS "vacationAllowance"`,
+      [id, name, position, egn, vacationAllowance]
+    );
+
+    if (!updated.rowCount) {
+      return res.status(404).json({ message: 'Служителят не е намерен.' });
+    }
+
+    res.json({ ok: true, employee: updated.rows[0] });
+  } catch (error) {
+    if (error.code === '23505' && String(error.constraint || '').includes('idx_employees_egn_unique')) {
+      return res.status(409).json({ message: 'Служител с това ЕГН вече съществува.' });
+    }
     res.status(500).json({ message: error.message });
   }
 });

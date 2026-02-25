@@ -54,7 +54,9 @@ const state = {
 const monthPicker = document.getElementById('monthPicker');
 const generateBtn = document.getElementById('generateBtn');
 const employeeForm = document.getElementById('employeeForm');
-const nameInput = document.getElementById('nameInput');
+const firstNameInput = document.getElementById('firstNameInput');
+const middleNameInput = document.getElementById('middleNameInput');
+const lastNameInput = document.getElementById('lastNameInput');
 const departmentInput = document.getElementById('departmentInput');
 const positionInput = document.getElementById('positionInput');
 const egnInput = document.getElementById('egnInput');
@@ -474,9 +476,13 @@ generateBtn.addEventListener('click', async () => {
 
 employeeForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  const firstName = (firstNameInput?.value || '').trim();
+  const middleName = (middleNameInput?.value || '').trim();
+  const lastName = (lastNameInput?.value || '').trim();
+
   const employee = {
     id: createEmployeeId(),
-    name: nameInput.value.trim(),
+    name: `${firstName} ${middleName} ${lastName}`.trim(),
     department: null,
     departmentId: departmentInput.value || null,
     position: positionInput.value.trim(),
@@ -484,7 +490,7 @@ employeeForm.addEventListener('submit', async (event) => {
     vacationAllowance: Number(vacationAllowanceInput.value)
   };
 
-  if (!employee.name || !employee.position || !/^\d{10}$/.test(employee.egn)) {
+  if (!firstName || !middleName || !lastName || !employee.position || !/^\d{10}$/.test(employee.egn)) {
     return;
   }
 
@@ -621,6 +627,35 @@ function renderDepartmentList() {
   });
 }
 
+function splitEmployeeNameParts(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0] || '',
+    middleName: parts[1] || '',
+    lastName: parts.slice(2).join(' ') || ''
+  };
+}
+
+async function updateEmployeeBackend(employeeId, payload) {
+  if (!state.backendAvailable) {
+    return null;
+  }
+
+  const response = await apiFetch(`/api/employees/${employeeId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errPayload = await response.json().catch(() => ({}));
+    throw new Error(errPayload.message || 'Неуспешна редакция на служител.');
+  }
+
+  const data = await response.json();
+  return data.employee || null;
+}
+
 function createEmployeeId() {
   if (window.crypto && typeof window.crypto.randomUUID === 'function') {
     return window.crypto.randomUUID();
@@ -732,6 +767,49 @@ function renderEmployees() {
 
     const actions = document.createElement('div');
 
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.textContent = 'Редакция';
+    editBtn.addEventListener('click', async () => {
+      const names = splitEmployeeNameParts(employee.name);
+      const firstName = window.prompt('Собствено име:', names.firstName);
+      if (firstName === null) return;
+      const middleName = window.prompt('Бащино име:', names.middleName);
+      if (middleName === null) return;
+      const lastName = window.prompt('Фамилия:', names.lastName);
+      if (lastName === null) return;
+      const position = window.prompt('Длъжност:', employee.position || '');
+      if (position === null) return;
+      const egn = window.prompt('ЕГН (10 цифри):', employee.egn || '');
+      if (egn === null) return;
+      const vacationAllowanceRaw = window.prompt('Полагаем отпуск:', String(employee.vacationAllowance ?? 20));
+      if (vacationAllowanceRaw === null) return;
+
+      const fullName = `${firstName.trim()} ${middleName.trim()} ${lastName.trim()}`.trim();
+      const vacationAllowance = Number(vacationAllowanceRaw);
+      if (!firstName.trim() || !middleName.trim() || !lastName.trim() || !position.trim() || !/^\d{10}$/.test(egn.trim()) || !Number.isFinite(vacationAllowance) || vacationAllowance < 0) {
+        setStatus('Невалидни данни за редакция на служител.', false);
+        return;
+      }
+
+      try {
+        const updatedEmployee = await updateEmployeeBackend(employee.id, {
+          name: fullName,
+          position: position.trim(),
+          egn: egn.trim(),
+          vacationAllowance
+        });
+
+        if (updatedEmployee) {
+          state.employees = state.employees.map((entry) => (entry.id === employee.id ? { ...entry, ...updatedEmployee } : entry));
+          persistEmployeesLocal();
+          renderAll();
+        }
+      } catch (error) {
+        setStatus(error.message, false);
+      }
+    });
+
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.textContent = 'Изтрий';
@@ -742,7 +820,7 @@ function renderEmployees() {
       renderAll();
     });
 
-    actions.append(employeeDepartmentSelect, removeBtn);
+    actions.append(employeeDepartmentSelect, editBtn, removeBtn);
     item.append(details, actions);
     employeeList.appendChild(item);
   });
