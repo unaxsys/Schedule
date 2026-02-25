@@ -50,6 +50,7 @@ const state = {
   hasManualScheduleSelection: false,
   backendAvailable: false,
   apiBaseUrl: '',
+  userRole: loadUserRole(),
   rates: loadRates(),
   shiftTemplates: loadShiftTemplates(),
   lockedMonths: loadLockedMonths(),
@@ -76,6 +77,7 @@ const scheduleTable = document.getElementById('scheduleTable');
 const storageStatus = document.getElementById('storageStatus');
 const apiUrlInput = document.getElementById('apiUrlInput');
 const saveApiUrlBtn = document.getElementById('saveApiUrlBtn');
+const userRoleSelect = document.getElementById('userRoleSelect');
 const tabButtons = document.querySelectorAll('.tab-btn');
 const tabPanels = document.querySelectorAll('.tab-panel');
 const monthInfo = document.getElementById('monthInfo');
@@ -141,8 +143,12 @@ async function init() {
   holidayRateInput.value = String(state.rates.holiday);
   sirvPeriodInput.value = String(state.sirvPeriodMonths);
   apiUrlInput.value = state.apiBaseUrl;
+  if (userRoleSelect) {
+    userRoleSelect.value = state.userRole;
+  }
 
   attachApiControls();
+  attachRoleControls();
   attachTabs();
   attachRatesForm();
   attachVacationForm();
@@ -162,6 +168,40 @@ async function init() {
   monthPicker.value = state.month;
   await refreshMonthlyView();
   renderAll();
+}
+
+
+function normalizeUserRole(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['user', 'manager', 'admin'].includes(normalized) ? normalized : 'user';
+}
+
+function getRoleLabel(role) {
+  if (role === 'admin') {
+    return 'Администратор';
+  }
+  if (role === 'manager') {
+    return 'Мениджър';
+  }
+  return 'Потребител';
+}
+
+function canDeleteEmployees() {
+  return state.userRole === 'admin';
+}
+
+function attachRoleControls() {
+  if (!userRoleSelect) {
+    return;
+  }
+
+  userRoleSelect.value = state.userRole;
+  userRoleSelect.addEventListener('change', () => {
+    state.userRole = normalizeUserRole(userRoleSelect.value);
+    saveUserRole();
+    renderEmployees();
+    setStatus(`Активна роля: ${getRoleLabel(state.userRole)}.`, true);
+  });
 }
 
 function attachSettingsControls() {
@@ -1031,6 +1071,13 @@ function renderEmployees() {
     return;
   }
 
+  if (!canDeleteEmployees()) {
+    const roleNotice = document.createElement('small');
+    roleNotice.className = 'role-permission-note';
+    roleNotice.textContent = `Изтриването на служител е достъпно само за Администратор. Активна роля: ${getRoleLabel(state.userRole)}.`;
+    employeeList.appendChild(roleNotice);
+  }
+
   state.employees.forEach((employee) => {
     const item = document.createElement('div');
     item.className = 'employee-item employee-item--top';
@@ -1072,23 +1119,30 @@ function renderEmployees() {
       openEmployeeEditModal(employee);
     });
 
-    const removeBtn = document.createElement('button');
-    removeBtn.type = 'button';
-    removeBtn.textContent = 'Освободи';
-    removeBtn.className = 'btn-delete';
-    removeBtn.addEventListener('click', async () => {
-      const monthEnd = getMonthEndDate(state.month || todayMonth());
-      const releaseDate = promptLastWorkingDate(employee, monthEnd);
-      if (!releaseDate) {
-        return;
-      }
+    actions.append(employeeDepartmentSelect, editBtn);
 
-      await releaseEmployeeBackend(employee.id, releaseDate);
-      await refreshMonthlyView();
-      renderAll();
-    });
+    if (canDeleteEmployees()) {
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = 'Изтрий';
+      removeBtn.className = 'btn-delete';
+      removeBtn.addEventListener('click', async () => {
+        const confirmed = window.confirm(`Сигурни ли сте, че искате да изтриете служителя ${employee.name}?`);
+        if (!confirmed) {
+          return;
+        }
 
-    actions.append(employeeDepartmentSelect, editBtn, removeBtn);
+        try {
+          await deleteEmployeeBackend(employee.id);
+          await refreshMonthlyView();
+          renderAll();
+        } catch (error) {
+          setStatus(error.message, false);
+        }
+      });
+      actions.append(removeBtn);
+    }
+
     item.append(details, actions);
     employeeList.appendChild(item);
   });
@@ -1786,7 +1840,13 @@ function normalizeApiBaseUrl(url) {
 }
 
 async function apiFetch(path, options = {}) {
-  const response = await fetch(`${state.apiBaseUrl}${path}`, options);
+  const headers = new Headers(options.headers || {});
+  headers.set('X-User-Role', state.userRole);
+
+  const response = await fetch(`${state.apiBaseUrl}${path}`, {
+    ...options,
+    headers
+  });
   return response;
 }
 
@@ -1980,23 +2040,27 @@ async function saveEmployeeBackend(employee) {
   }
 }
 
-async function releaseEmployeeBackend(employeeId, endDate) {
+async function deleteEmployeeBackend(employeeId) {
   if (!state.backendAvailable) {
-    return;
+    throw new Error('Изтриването е достъпно само с активен API бекенд.');
+  }
+
+  if (!canDeleteEmployees()) {
+    throw new Error('Само администратор може да изтрива служители.');
   }
 
   try {
-    const response = await apiFetch(`/api/employees/${employeeId}/release`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ end_date: endDate || null })
+    const response = await apiFetch(`/api/employees/${employeeId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' }
     });
+
     if (!response.ok) {
-      throw new Error('Delete employee failed');
+      const errPayload = await response.json().catch(() => ({}));
+      throw new Error(errPayload.message || 'Delete employee failed');
     }
-  } catch {
-    setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
-    state.backendAvailable = false;
+  } catch (error) {
+    throw new Error(error.message || 'Неуспешно изтриване на служител.');
   }
 }
 
@@ -2167,6 +2231,19 @@ function loadScheduleState() {
     return JSON.parse(localStorage.getItem('scheduleState') || '{}');
   } catch {
     return { month: todayMonth(), schedule: {} };
+  }
+}
+
+
+function saveUserRole() {
+  localStorage.setItem('userRole', state.userRole);
+}
+
+function loadUserRole() {
+  try {
+    return normalizeUserRole(localStorage.getItem('userRole'));
+  } catch {
+    return 'user';
   }
 }
 

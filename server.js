@@ -40,6 +40,19 @@ function cleanStr(v) {
   return String(v ?? '').trim();
 }
 
+function getRequestUserRole(req) {
+  const role = cleanStr(req.get('x-user-role')).toLowerCase();
+  return ['user', 'manager', 'admin'].includes(role) ? role : 'user';
+}
+
+function ensureAdmin(req, res) {
+  if (getRequestUserRole(req) !== 'admin') {
+    res.status(403).json({ message: 'Само администратор може да изтрива служители.' });
+    return false;
+  }
+  return true;
+}
+
 function isValidMonthKey(value) {
   return /^\d{4}-\d{2}$/.test(cleanStr(value));
 }
@@ -742,7 +755,31 @@ async function releaseEmployee(req, res) {
 }
 
 app.patch('/api/employees/:id/release', releaseEmployee);
-app.delete('/api/employees/:id', releaseEmployee);
+
+app.delete('/api/employees/:id', async (req, res) => {
+  if (!ensureAdmin(req, res)) {
+    return;
+  }
+
+  const id = cleanStr(req.params.id);
+  if (!isValidUuid(id)) {
+    return res.status(400).json({ message: 'Невалиден employee id.' });
+  }
+
+  try {
+    const deleted = await pool.query('DELETE FROM employees WHERE id = $1 RETURNING id', [id]);
+    if (!deleted.rowCount) {
+      return res.status(404).json({ message: 'Служителят не е намерен.' });
+    }
+
+    return res.json({ ok: true, deletedEmployeeId: deleted.rows[0].id });
+  } catch (error) {
+    if (error.code === '23503') {
+      return res.status(409).json({ message: 'Служителят има свързани записи в графици и не може да бъде изтрит.' });
+    }
+    return res.status(500).json({ message: error.message });
+  }
+});
 
 app.post('/api/schedules', async (req, res) => {
   const monthKey = cleanStr(req.body?.month_key || req.body?.month || req.body?.monthKey);

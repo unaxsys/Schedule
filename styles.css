@@ -47,6 +47,19 @@ header p {
   min-width: 280px;
 }
 
+
+.api-config select {
+  min-width: 170px;
+}
+
+.role-permission-note {
+  color: #9a3412;
+  background: #ffedd5;
+  border: 1px solid #fdba74;
+  border-radius: 8px;
+  padding: 0.45rem 0.6rem;
+}
+
 .app-layout {
   display: grid;
   grid-template-columns: 240px 1fr;
