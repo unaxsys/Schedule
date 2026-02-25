@@ -525,6 +525,52 @@ select.shift-select {
   font-size: 0.9rem;
 }
 
+
+.field-checkbox {
+  width: fit-content;
+}
+
+.hover-tooltip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: help;
+  user-select: none;
+}
+
+.hover-tooltip__text {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.4rem);
+  transform: translateX(-50%);
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition: opacity 0.18s ease;
+  z-index: 12;
+}
+
+.hover-tooltip:hover .hover-tooltip__text,
+.hover-tooltip:focus .hover-tooltip__text {
+  opacity: 1;
+  visibility: visible;
+}
+
 .day-outside-employment {
   background: #e5e7eb !important;
 }
