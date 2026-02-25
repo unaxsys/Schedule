@@ -273,41 +273,23 @@ app.delete('/api/employees/:id', async (req, res) => {
 });
 
 app.post('/api/schedules', async (req, res) => {
-  const month = cleanStr(req.body?.month_key || req.body?.month || req.body?.monthKey);
-  const department = cleanStr(req.body?.department);
-  const name = cleanStr(req.body?.name) || `${department} график ${month}`;
+  const monthKey = cleanStr(req.body?.month_key || req.body?.month || req.body?.monthKey);
+  const rawDepartment = cleanStr(req.body?.department);
+  const department = !rawDepartment || rawDepartment === 'Общ' ? null : rawDepartment;
+  const departmentLabel = department || 'Общ';
+  const defaultName = `График ${departmentLabel} – ${monthKey}`;
+  const name = cleanStr(req.body?.name) || defaultName;
 
-  if (!isValidMonthKey(month)) {
+  if (!isValidMonthKey(monthKey)) {
     return res.status(400).json({ message: 'Месецът трябва да е във формат YYYY-MM.' });
   }
 
-  if (!department) {
-    return res.status(400).json({ message: 'department е задължително поле.' });
-  }
-
   try {
-    const existing = await pool.query(
-      `SELECT id, name, month_key AS month, department, status, created_at AS "createdAt"
-       FROM schedules
-       WHERE month_key = $1 AND department = $2
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [month, department]
-    );
-
-    if (existing.rowCount > 0) {
-      return res.json({
-        ok: true,
-        schedule_id: existing.rows[0].id,
-        schedule: existing.rows[0],
-      });
-    }
-
     const created = await pool.query(
       `INSERT INTO schedules (name, month_key, department, status)
        VALUES ($1, $2, $3, $4)
-       RETURNING id, name, month_key AS month, department, status, created_at AS "createdAt"`,
-      [name, month, department, 'draft']
+       RETURNING id, name, month_key, department, status, created_at`,
+      [name, monthKey, department, 'draft']
     );
 
     res.status(201).json({
@@ -337,10 +319,10 @@ app.get('/api/schedules', async (req, res) => {
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const schedulesResult = await pool.query(
-      `SELECT id, department, name, status
+      `SELECT id, name, month_key, department, status, created_at
        FROM schedules
        ${whereSql}
-       ORDER BY month_key, COALESCE(department, ''), created_at`,
+       ORDER BY created_at DESC`,
       params
     );
 
@@ -408,51 +390,76 @@ app.get('/api/schedule-view', async (req, res) => {
 
 app.get('/api/schedules/merged', async (req, res) => {
   const month = cleanStr(req.query.month);
+  const ids = cleanStr(req.query.ids)
+    .split(',')
+    .map((id) => cleanStr(id))
+    .filter((id) => isValidUuid(id));
+
   if (!isValidMonthKey(month)) {
     return res.status(400).json({ message: 'month трябва да е във формат YYYY-MM.' });
   }
 
+  if (!ids.length) {
+    return res.status(400).json({ message: 'ids е задължителен списък от uuid.' });
+  }
+
   try {
     const schedulesResult = await pool.query(
-      `SELECT id, name, month_key AS month, department, status, created_at AS "createdAt"
+      `SELECT id, name, month_key, department, status, created_at
        FROM schedules
        WHERE month_key = $1
-       ORDER BY COALESCE(department, ''), created_at, id`,
-      [month]
+         AND id = ANY($2::uuid[])
+       ORDER BY created_at DESC`,
+      [month, ids]
+    );
+
+    const employeesResult = await pool.query(
+      `SELECT s.id AS schedule_id,
+              s.department AS schedule_department,
+              e.id,
+              e.name,
+              e.department,
+              e.position,
+              e.vacation_allowance AS "vacationAllowance"
+       FROM schedules s
+       JOIN employees e ON (s.department IS NULL OR e.department = s.department)
+       WHERE s.month_key = $1
+         AND s.id = ANY($2::uuid[])
+       ORDER BY COALESCE(s.department, 'Общ'), e.name`,
+      [month, ids]
     );
 
     const entriesResult = await pool.query(
-      `WITH ranked_entries AS (
-         SELECT
-           se.schedule_id,
-           se.employee_id,
-           se.day,
-           se.shift_code,
-           ROW_NUMBER() OVER (
-             PARTITION BY se.employee_id, se.day
-             ORDER BY s.created_at DESC, se.schedule_id DESC
-           ) AS rn
-         FROM schedule_entries se
-         JOIN schedules s ON s.id = se.schedule_id
-         WHERE s.month_key = $1
-       )
-       SELECT
-         re.schedule_id AS "scheduleId",
-         re.employee_id AS "employeeId",
-         e.name AS "employeeName",
-         e.department,
-         re.day,
-         re.shift_code AS "shiftCode"
-       FROM ranked_entries re
-       JOIN employees e ON e.id = re.employee_id
-       WHERE re.rn = 1
-       ORDER BY e.department, e.name, re.day`,
-      [month]
+      `SELECT schedule_id, employee_id, day, shift_code
+       FROM schedule_entries
+       WHERE schedule_id = ANY($1::uuid[])
+       ORDER BY schedule_id, employee_id, day`,
+      [ids]
     );
+
+    const grouped = {};
+    employeesResult.rows.forEach((employee) => {
+      const department = employee.schedule_department || 'Общ';
+      if (!grouped[department]) {
+        grouped[department] = { employees: [], entries: [] };
+      }
+      grouped[department].employees.push(employee);
+    });
+
+    entriesResult.rows.forEach((entry) => {
+      const schedule = schedulesResult.rows.find((row) => row.id === entry.schedule_id);
+      const department = schedule?.department || 'Общ';
+      if (!grouped[department]) {
+        grouped[department] = { employees: [], entries: [] };
+      }
+      grouped[department].entries.push(entry);
+    });
 
     res.json({
       month,
       schedules: schedulesResult.rows,
+      grouped,
+      employees: employeesResult.rows,
       entries: entriesResult.rows,
     });
   } catch (error) {
@@ -468,7 +475,7 @@ app.get('/api/schedules/:id', async (req, res) => {
 
   try {
     const scheduleResult = await pool.query(
-      `SELECT id, name, month_key AS month, department, status, created_at AS "createdAt"
+      `SELECT id, name, month_key, department, status, created_at
        FROM schedules WHERE id = $1`,
       [scheduleId]
     );
@@ -506,12 +513,13 @@ app.post('/api/schedules/:id/entry', async (req, res) => {
   const employeeId = cleanStr(req.body?.employee_id || req.body?.employeeId);
   const day = Number(req.body?.day);
   const shiftCode = cleanStr(req.body?.shift_code || req.body?.shiftCode);
+  const monthKey = cleanStr(req.body?.month_key || req.body?.monthKey);
 
   if (!isValidUuid(scheduleId) || !isValidUuid(employeeId)) {
     return res.status(400).json({ message: 'Невалиден scheduleId или employeeId.' });
   }
 
-  if (!Number.isInteger(day) || day < 1 || day > 31 || !shiftCode) {
+  if (!Number.isInteger(day) || day < 1 || day > 31 || !shiftCode || (monthKey && !isValidMonthKey(monthKey))) {
     return res.status(400).json({ message: 'Невалидни данни за запис в график.' });
   }
 

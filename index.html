@@ -39,6 +39,22 @@
             <input id="monthPicker" type="month" />
             <button id="generateBtn" type="button">Генерирай календар</button>
           </div>
+
+          <div class="panel" style="margin: 12px 0;">
+            <h3>Графици</h3>
+            <div class="row">
+              <label for="scheduleDepartmentSelect">Отдел</label>
+              <select id="scheduleDepartmentSelect"></select>
+              <label for="scheduleNameInput">Име на график</label>
+              <input id="scheduleNameInput" type="text" placeholder="График Общ – 2026-02" />
+              <button id="createScheduleBtn" type="button">Създай график</button>
+            </div>
+            <div>
+              <strong>Покажи графици за месеца</strong>
+              <div id="scheduleList" class="schedule-list"></div>
+            </div>
+          </div>
+
           <div class="row actions-row">
             <button id="lockScheduleBtn" type="button">Заключи графика</button>
             <button id="unlockScheduleBtn" type="button">Отключи графика</button>
@@ -47,11 +63,6 @@
             <span id="lockStatus" class="lock-status">Статус: Отключен</span>
           </div>
           <div id="monthInfo" class="month-info"></div>
-          <div class="row">
-            <label for="departmentSelect">Отдел</label>
-            <select id="departmentSelect" multiple></select>
-            <button id="showDepartmentsBtn" type="button">Покажи</button>
-          </div>
           <div class="legend" id="shiftLegend"></div>
           <div class="table-wrap">
             <table id="scheduleTable"></table>
