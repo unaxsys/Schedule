@@ -85,6 +85,10 @@
 
       async function apiRequest(path, options = {}) {
         const headers = { ...(options.headers || {}), 'X-User-Role': 'super_admin' };
+        const authToken = (localStorage.getItem('authToken') || '').trim();
+        if (authToken && !headers.Authorization) {
+          headers.Authorization = `Bearer ${authToken}`;
+        }
         if (options.body && !headers['Content-Type']) {
           headers['Content-Type'] = 'application/json';
         }

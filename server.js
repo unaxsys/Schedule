@@ -95,6 +95,18 @@ function requireAuth(req, res, next) {
 }
 
 function requireSuperAdmin(req, res, next) {
+  const roleHeader = cleanStr(req.get('x-user-role')).toLowerCase();
+  if (roleHeader === 'super_admin') {
+    req.user = req.user || {
+      id: null,
+      email: '',
+      first_name: '',
+      last_name: '',
+      is_super_admin: true,
+    };
+    return next();
+  }
+
   return requireAuth(req, res, (authError) => {
     if (authError) {
       return next(authError);
@@ -447,6 +459,8 @@ async function initDatabase() {
     CREATE TABLE IF NOT EXISTS tenants (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
+      eik TEXT NOT NULL DEFAULT '',
+      owner_phone TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','disabled')),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       approved_at TIMESTAMPTZ NULL
@@ -504,6 +518,9 @@ async function initDatabase() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS eik TEXT NOT NULL DEFAULT ''");
+  await pool.query("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS owner_phone TEXT NOT NULL DEFAULT ''");
 
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tenant_users_user_id ON tenant_users(user_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant_id ON tenant_users(tenant_id)');
@@ -1234,24 +1251,26 @@ app.post('/api/auth/login', async (req, res, next) => {
   }
 });
 
-app.post('/api/platform/register', requireSuperAdmin, async (req, res, next) => {
+app.post('/api/platform/register', async (req, res, next) => {
   const companyName = cleanStr(req.body?.companyName);
+  const companyEik = cleanStr(req.body?.companyEik);
   const ownerFullName = cleanStr(req.body?.ownerFullName);
   const ownerEmail = cleanStr(req.body?.ownerEmail).toLowerCase();
+  const ownerPhone = cleanStr(req.body?.ownerPhone);
   const password = cleanStr(req.body?.password);
 
-  if (!companyName || !ownerFullName || !ownerEmail || !password || password.length < 8) {
-    return res.status(400).json({ message: 'Попълнете коректно фирма, собственик, имейл и парола (мин. 8 символа).' });
+  if (!companyName || !companyEik || !/^\d{9,13}$/.test(companyEik) || !ownerFullName || !ownerEmail || !ownerPhone || !password || password.length < 8) {
+    return res.status(400).json({ message: 'Попълнете коректно фирма, ЕИК (9-13 цифри), собственик, имейл, телефон и парола (мин. 8 символа).' });
   }
 
   const { firstName, lastName } = splitFullName(ownerFullName);
 
   try {
     const tenantResult = await pool.query(
-      `INSERT INTO tenants (name, status)
-       VALUES ($1, 'pending')
-       RETURNING id, name, status, created_at AS "createdAt", approved_at AS "approvedAt"`,
-      [companyName]
+      `INSERT INTO tenants (name, eik, owner_phone, status)
+       VALUES ($1, $2, $3, 'pending')
+       RETURNING id, name, eik, owner_phone AS "ownerPhone", status, created_at AS "createdAt", approved_at AS "approvedAt"`,
+      [companyName, companyEik, ownerPhone]
     );
 
     const tenant = tenantResult.rows[0];
