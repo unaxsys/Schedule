@@ -592,7 +592,13 @@ function renderDepartmentList() {
 
     const text = document.createElement('div');
     text.className = 'department-header';
-    text.innerHTML = `<b>${department.name}</b><br><small>${members.length} служител(и)</small>`;
+    text.innerHTML = `
+      <div class="department-header-main">
+        <b>${department.name}</b>
+        <span class="department-toggle">${isExpanded ? 'Скрий' : 'Покажи'} списъка</span>
+      </div>
+      <small>${members.length} служител(и)</small>
+    `;
     text.addEventListener('click', () => {
       state.expandedDepartmentId = isExpanded ? null : department.id;
       renderDepartmentList();
@@ -601,10 +607,24 @@ function renderDepartmentList() {
     const membersList = document.createElement('div');
     membersList.className = `department-members${isExpanded ? ' expanded' : ''}`;
     if (members.length) {
-      members.forEach((member) => {
+      members.forEach((member, index) => {
         const memberRow = document.createElement('div');
         memberRow.className = 'department-member-item';
-        memberRow.textContent = `${member.name} (${member.position || 'Без длъжност'})`;
+        const initials = String(member.name || '')
+          .split(/\s+/)
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((part) => part[0]?.toUpperCase() || '')
+          .join('');
+
+        memberRow.innerHTML = `
+          <span class="department-member-index">${index + 1}</span>
+          <span class="department-member-avatar">${initials || '•'}</span>
+          <span class="department-member-details">
+            <strong>${member.name}</strong>
+            <small>${member.position || 'Без длъжност'}</small>
+          </span>
+        `;
         membersList.appendChild(memberRow);
       });
     } else {
