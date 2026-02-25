@@ -596,6 +596,17 @@ function attachDepartmentControls() {
     });
   }
 
+  if (scheduleNameInput) {
+    scheduleNameInput.dataset.autofill = 'true';
+    scheduleNameInput.addEventListener('input', () => {
+      if (!scheduleNameInput) {
+        return;
+      }
+
+      scheduleNameInput.dataset.autofill = scheduleNameInput.value.trim() ? 'false' : 'true';
+    });
+  }
+
   if (createScheduleBtn) {
     createScheduleBtn.addEventListener('click', async () => {
       await createScheduleForCurrentMonth();
@@ -679,10 +690,14 @@ function updateScheduleNameSuggestion() {
 
   const department = scheduleDepartmentSelect.value || '';
   const month = state.month || monthPicker.value || todayMonth();
-  if (!scheduleNameInput.value.trim()) {
-    scheduleNameInput.value = department
-      ? `График ${department} – ${month}`
-      : `График – ${month}`;
+  const suggestion = department
+    ? `График ${department} – ${month}`
+    : `График – ${month}`;
+  const shouldAutofill = scheduleNameInput.dataset.autofill !== 'false';
+
+  if (shouldAutofill || !scheduleNameInput.value.trim()) {
+    scheduleNameInput.value = suggestion;
+    scheduleNameInput.dataset.autofill = 'true';
   }
 }
 
@@ -763,7 +778,7 @@ function updateCreateScheduleButtonState() {
   const department = (scheduleDepartmentSelect?.value || '').trim();
   const existing = findScheduleByMonthAndDepartment(month, department);
 
-  createScheduleBtn.disabled = !department || Boolean(existing);
+  createScheduleBtn.disabled = !department;
   createScheduleBtn.title = !department
     ? 'Добавете отдел, за да създадете график.'
     : (existing ? 'За този месец и отдел вече има създаден график.' : '');
@@ -821,6 +836,7 @@ async function createScheduleForCurrentMonth() {
 
   if (scheduleNameInput) {
     scheduleNameInput.value = '';
+    scheduleNameInput.dataset.autofill = 'true';
   }
 
   await refreshMonthlyView();
@@ -1003,7 +1019,18 @@ employeeForm.addEventListener('submit', async (event) => {
 
   state.employees.push(employee);
   persistEmployeesLocal();
-  const persistedEmployee = await saveEmployeeBackend(employee);
+
+  let persistedEmployee = null;
+  try {
+    persistedEmployee = await saveEmployeeBackend(employee);
+  } catch (error) {
+    state.employees = state.employees.filter((entry) => entry.id !== employee.id);
+    persistEmployeesLocal();
+    renderAll();
+    setStatus(error.message || 'Неуспешно създаване на служител.', false);
+    return;
+  }
+
   if (persistedEmployee && persistedEmployee.id !== employee.id) {
     state.employees = state.employees.map((entry) => (entry.id === employee.id ? normalizeEmployeeVacationData(persistedEmployee) : entry));
     persistEmployeesLocal();
@@ -2479,12 +2506,19 @@ async function saveEmployeeBackend(employee) {
     });
 
     if (!response.ok) {
-      throw new Error('Save employee failed');
+      const payload = await response.json().catch(() => ({}));
+      const error = new Error(payload.message || 'Неуспешно създаване на служител.');
+      error.isBusinessError = response.status < 500;
+      throw error;
     }
 
     const payload = await response.json();
     return payload.employee || employee;
-  } catch {
+  } catch (error) {
+    if (error?.isBusinessError) {
+      throw error;
+    }
+
     setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
     state.backendAvailable = false;
     return null;
