@@ -453,6 +453,24 @@ function renderSchedule() {
   scheduleTable.innerHTML = '';
   scheduleTable.appendChild(header);
 
+  const totals = {
+    workedDays: 0,
+    workedHours: 0,
+    normHours: 0,
+    deviation: 0,
+    sirvNormHours: 0,
+    sirvWorkedHours: 0,
+    overtimeHours: 0,
+    holidayWorkedHours: 0,
+    weekendWorkedHours: 0,
+    nightWorkedHours: 0,
+    nightConvertedHours: 0,
+    payableHours: 0,
+    vacationDays: 0,
+    remainingVacation: 0,
+    sickDays: 0
+  };
+
   state.employees.forEach((employee) => {
     const row = document.createElement('tr');
     const nameCell = document.createElement('td');
@@ -525,9 +543,80 @@ function renderSchedule() {
     const deviation = summary.workedHours + summary.nightConvertedHours - monthStats.normHours;
     const sirvTotals = getSirvTotalsForEmployee(employee.id, month, state.sirvPeriodMonths);
 
-    row.innerHTML += `<td class="summary-col">${summary.workedDays}</td><td class="summary-col">${summary.workedHours.toFixed(2)}</td><td class="summary-col">${monthStats.normHours}</td><td class="summary-col ${deviation < 0 ? 'negative' : 'positive'}">${deviation.toFixed(2)}</td><td class="summary-col">${sirvTotals.normHours.toFixed(2)}</td><td class="summary-col">${sirvTotals.convertedWorkedHours.toFixed(2)}</td><td class="summary-col ${sirvTotals.overtimeHours > 0 ? 'negative' : 'positive'}">${sirvTotals.overtimeHours.toFixed(2)}</td><td class="summary-col">${summary.holidayWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.weekendWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.nightWorkedHours.toFixed(2)}</td><td class="summary-col">${summary.nightConvertedHours.toFixed(2)}</td><td class="summary-col">${payableHours.toFixed(2)}</td><td class="summary-col">${summary.vacationDays}</td><td class="summary-col">${remainingVacation}</td><td class="summary-col">${summary.sickDays}</td>`;
+    totals.workedDays += summary.workedDays;
+    totals.workedHours += summary.workedHours;
+    totals.normHours += monthStats.normHours;
+    totals.deviation += deviation;
+    totals.sirvNormHours += sirvTotals.normHours;
+    totals.sirvWorkedHours += sirvTotals.convertedWorkedHours;
+    totals.overtimeHours += sirvTotals.overtimeHours;
+    totals.holidayWorkedHours += summary.holidayWorkedHours;
+    totals.weekendWorkedHours += summary.weekendWorkedHours;
+    totals.nightWorkedHours += summary.nightWorkedHours;
+    totals.nightConvertedHours += summary.nightConvertedHours;
+    totals.payableHours += payableHours;
+    totals.vacationDays += summary.vacationDays;
+    totals.remainingVacation += remainingVacation;
+    totals.sickDays += summary.sickDays;
+
+    appendSummaryCell(row, summary.workedDays, 'summary-col');
+    appendSummaryCell(row, summary.workedHours.toFixed(2), 'summary-col');
+    appendSummaryCell(row, monthStats.normHours, 'summary-col');
+    appendSummaryCell(row, deviation.toFixed(2), `summary-col ${deviation < 0 ? 'negative' : 'positive'}`);
+    appendSummaryCell(row, sirvTotals.normHours.toFixed(2), 'summary-col');
+    appendSummaryCell(row, sirvTotals.convertedWorkedHours.toFixed(2), 'summary-col');
+    appendSummaryCell(row, sirvTotals.overtimeHours.toFixed(2), `summary-col ${sirvTotals.overtimeHours > 0 ? 'negative' : 'positive'}`);
+    appendSummaryCell(row, summary.holidayWorkedHours.toFixed(2), 'summary-col');
+    appendSummaryCell(row, summary.weekendWorkedHours.toFixed(2), 'summary-col');
+    appendSummaryCell(row, summary.nightWorkedHours.toFixed(2), 'summary-col');
+    appendSummaryCell(row, summary.nightConvertedHours.toFixed(2), 'summary-col');
+    appendSummaryCell(row, payableHours.toFixed(2), 'summary-col');
+    appendSummaryCell(row, summary.vacationDays, 'summary-col');
+    appendSummaryCell(row, remainingVacation, 'summary-col');
+    appendSummaryCell(row, summary.sickDays, 'summary-col');
+
     scheduleTable.appendChild(row);
   });
+
+  if (state.employees.length) {
+    const totalsRow = document.createElement('tr');
+    const totalsLabel = document.createElement('td');
+    totalsLabel.className = 'sticky';
+    totalsLabel.innerHTML = '<b>Общо</b>';
+    totalsRow.appendChild(totalsLabel);
+
+    for (let day = 1; day <= totalDays; day += 1) {
+      const filler = document.createElement('td');
+      filler.className = 'summary-col';
+      filler.textContent = '—';
+      totalsRow.appendChild(filler);
+    }
+
+    appendSummaryCell(totalsRow, totals.workedDays, 'summary-col');
+    appendSummaryCell(totalsRow, totals.workedHours.toFixed(2), 'summary-col');
+    appendSummaryCell(totalsRow, totals.normHours.toFixed(2), 'summary-col');
+    appendSummaryCell(totalsRow, totals.deviation.toFixed(2), `summary-col ${totals.deviation < 0 ? 'negative' : 'positive'}`);
+    appendSummaryCell(totalsRow, totals.sirvNormHours.toFixed(2), 'summary-col');
+    appendSummaryCell(totalsRow, totals.sirvWorkedHours.toFixed(2), 'summary-col');
+    appendSummaryCell(totalsRow, totals.overtimeHours.toFixed(2), `summary-col ${totals.overtimeHours > 0 ? 'negative' : 'positive'}`);
+    appendSummaryCell(totalsRow, totals.holidayWorkedHours.toFixed(2), 'summary-col');
+    appendSummaryCell(totalsRow, totals.weekendWorkedHours.toFixed(2), 'summary-col');
+    appendSummaryCell(totalsRow, totals.nightWorkedHours.toFixed(2), 'summary-col');
+    appendSummaryCell(totalsRow, totals.nightConvertedHours.toFixed(2), 'summary-col');
+    appendSummaryCell(totalsRow, totals.payableHours.toFixed(2), 'summary-col');
+    appendSummaryCell(totalsRow, totals.vacationDays, 'summary-col');
+    appendSummaryCell(totalsRow, totals.remainingVacation, 'summary-col');
+    appendSummaryCell(totalsRow, totals.sickDays, 'summary-col');
+
+    scheduleTable.appendChild(totalsRow);
+  }
+}
+
+function appendSummaryCell(row, value, className) {
+  const cell = document.createElement('td');
+  cell.className = className;
+  cell.textContent = String(value);
+  row.appendChild(cell);
 }
 
 function collectSummary(summary, shiftCode, holiday, weekend) {
