@@ -732,6 +732,28 @@ function renderEmployees() {
 
     const actions = document.createElement('div');
 
+    const departmentSelect = document.createElement('select');
+    const emptyOption = document.createElement('option');
+    emptyOption.value = '';
+    emptyOption.textContent = 'Без отдел';
+    departmentSelect.appendChild(emptyOption);
+    state.departments.forEach((dep) => {
+      const option = document.createElement('option');
+      option.value = dep.id;
+      option.textContent = dep.name;
+      departmentSelect.appendChild(option);
+    });
+    departmentSelect.value = employee.departmentId || '';
+    departmentSelect.addEventListener('change', async () => {
+      try {
+        await attachEmployeeToDepartment(employee.id, departmentSelect.value || null);
+        await refreshMonthlyView();
+        renderAll();
+      } catch (error) {
+        setStatus(error.message, false);
+      }
+    });
+
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.textContent = 'Изтрий';
