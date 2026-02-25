@@ -24,6 +24,7 @@
         <div class="side-tabs">
           <button type="button" class="tab-btn active" data-tab="scheduleTab">График</button>
           <button type="button" class="tab-btn" data-tab="employeesTab">Служители</button>
+          <button type="button" class="tab-btn" data-tab="departmentsTab">Отдели</button>
           <button type="button" class="tab-btn" data-tab="vacationTab">Отпуски</button>
           <button type="button" class="tab-btn" data-tab="rulesTab">Изчисления</button>
           <button type="button" class="tab-btn" data-tab="settingsTab">Настройки</button>
@@ -43,7 +44,9 @@
           <div class="panel" style="margin: 12px 0;">
             <h3>Графици</h3>
             <div class="row">
-              <label for="scheduleDepartmentSelect">Отдел</label>
+              <label for="scheduleFilterDepartmentSelect">Отдел (преглед)</label>
+              <select id="scheduleFilterDepartmentSelect"></select>
+              <label for="scheduleDepartmentSelect">Отдел (създаване)</label>
               <select id="scheduleDepartmentSelect"></select>
               <label for="scheduleNameInput">Име на график</label>
               <input id="scheduleNameInput" type="text" placeholder="График Общ – 2026-02" />
@@ -73,12 +76,24 @@
           <h2>Служители</h2>
           <form id="employeeForm" class="employee-form">
             <input id="nameInput" required placeholder="Име и фамилия" />
-            <input id="departmentInput" required placeholder="Отдел" />
+            <select id="departmentInput">
+              <option value="">Без отдел</option>
+            </select>
             <input id="positionInput" required placeholder="Длъжност" />
             <input id="vacationAllowanceInput" type="number" min="0" value="20" required placeholder="Годишен отпуск" />
             <button type="submit">Добави служител</button>
           </form>
           <div id="employeeList" class="employee-list"></div>
+        </section>
+
+
+        <section id="departmentsTab" class="panel tab-panel">
+          <h2>Отдели</h2>
+          <form id="departmentForm" class="row">
+            <input id="departmentNameInput" required placeholder="Име на отдел" />
+            <button type="submit">Добави отдел</button>
+          </form>
+          <div id="departmentList" class="employee-list"></div>
         </section>
 
         <section id="vacationTab" class="panel tab-panel">
