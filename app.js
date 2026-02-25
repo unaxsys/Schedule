@@ -605,11 +605,8 @@ function attachDepartmentControls() {
 
 function renderDepartmentOptions() {
   if (scheduleDepartmentSelect) {
+    const previousValue = scheduleDepartmentSelect.value;
     scheduleDepartmentSelect.innerHTML = '';
-    const commonOption = document.createElement('option');
-    commonOption.value = 'Общ';
-    commonOption.textContent = 'Общ';
-    scheduleDepartmentSelect.appendChild(commonOption);
 
     state.departments.forEach((department) => {
       const option = document.createElement('option');
@@ -618,9 +615,10 @@ function renderDepartmentOptions() {
       scheduleDepartmentSelect.appendChild(option);
     });
 
-    if (!scheduleDepartmentSelect.value) {
-      scheduleDepartmentSelect.value = 'Общ';
-    }
+    const hasSelectedDepartment = state.departments.some((department) => department.name === previousValue);
+    scheduleDepartmentSelect.value = hasSelectedDepartment
+      ? previousValue
+      : (state.departments[0]?.name || '');
   }
 
   if (scheduleFilterDepartmentSelect) {
@@ -679,10 +677,12 @@ function updateScheduleNameSuggestion() {
     return;
   }
 
-  const department = scheduleDepartmentSelect.value || 'Общ';
+  const department = scheduleDepartmentSelect.value || '';
   const month = state.month || monthPicker.value || todayMonth();
   if (!scheduleNameInput.value.trim()) {
-    scheduleNameInput.value = `График ${department} – ${month}`;
+    scheduleNameInput.value = department
+      ? `График ${department} – ${month}`
+      : `График – ${month}`;
   }
 }
 
@@ -743,9 +743,13 @@ function renderScheduleList() {
 }
 
 function findScheduleByMonthAndDepartment(month, department) {
-  const normalizedDepartment = !department || department === 'Общ' ? null : department;
+  const normalizedDepartment = (department || '').trim();
+  if (!normalizedDepartment) {
+    return null;
+  }
+
   return state.schedules.find((schedule) => {
-    const scheduleDepartment = schedule.department || null;
+    const scheduleDepartment = (schedule.department || '').trim();
     return schedule.month_key === month && scheduleDepartment === normalizedDepartment;
   });
 }
@@ -756,13 +760,13 @@ function updateCreateScheduleButtonState() {
   }
 
   const month = state.month || monthPicker.value || todayMonth();
-  const department = scheduleDepartmentSelect?.value || 'Общ';
+  const department = (scheduleDepartmentSelect?.value || '').trim();
   const existing = findScheduleByMonthAndDepartment(month, department);
 
-  createScheduleBtn.disabled = Boolean(existing);
-  createScheduleBtn.title = existing
-    ? 'За този месец и отдел вече има създаден график.'
-    : '';
+  createScheduleBtn.disabled = !department || Boolean(existing);
+  createScheduleBtn.title = !department
+    ? 'Добавете отдел, за да създадете график.'
+    : (existing ? 'За този месец и отдел вече има създаден график.' : '');
 }
 
 async function createScheduleForCurrentMonth() {
@@ -772,9 +776,14 @@ async function createScheduleForCurrentMonth() {
   }
 
   const month = state.month || monthPicker.value || todayMonth();
-  const department = scheduleDepartmentSelect?.value || 'Общ';
-  const name = (scheduleNameInput?.value || '').trim() || `График ${department} – ${month}`;
+  const department = (scheduleDepartmentSelect?.value || '').trim();
+  if (!department) {
+    setStatus('Изберете отдел за създаване на график.', false);
+    updateCreateScheduleButtonState();
+    return;
+  }
 
+  const name = (scheduleNameInput?.value || '').trim() || `График ${department} – ${month}`;
   const existing = findScheduleByMonthAndDepartment(month, department);
   if (existing) {
     setStatus('За този месец и отдел вече има създаден график.', false);
@@ -1755,7 +1764,7 @@ function renderSchedule() {
   const shouldGroupByDepartment = state.selectedDepartmentId === DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS;
   const groupedEmployees = shouldGroupByDepartment
     ? employeesToRender.reduce((acc, employee) => {
-      const department = employee.scheduleDepartment || employee.department || 'Общ';
+      const department = (employee.department || '').trim() || 'Без отдел';
       if (!acc[department]) {
         acc[department] = [];
       }
@@ -2368,21 +2377,36 @@ async function refreshMonthlyView() {
   const requests = selectedIds.map((id) => fetchScheduleDetails(id));
   const details = await Promise.all(requests);
 
-  const mergedEmployees = [];
+  const employeeById = new Map();
   const mappedEntries = {};
 
   details.forEach((detail) => {
     const schedule = detail.schedule || {};
-    const scheduleDepartment = schedule.department || 'Общ';
+    const scheduleDepartment = (schedule.department || '').trim();
+
     (detail.employees || []).forEach((employee) => {
       if (!allowedIds.has(employee.id)) {
         return;
       }
-      mergedEmployees.push({
+
+      const employeeDepartment = String(employee.department || '').trim();
+      const nextEmployee = {
         ...employee,
         scheduleId: schedule.id,
         scheduleDepartment
-      });
+      };
+
+      const current = employeeById.get(employee.id);
+      if (!current) {
+        employeeById.set(employee.id, nextEmployee);
+        return;
+      }
+
+      const currentScore = current.scheduleDepartment && current.scheduleDepartment === employeeDepartment ? 2 : (current.scheduleDepartment ? 1 : 0);
+      const nextScore = scheduleDepartment && scheduleDepartment === employeeDepartment ? 2 : (scheduleDepartment ? 1 : 0);
+      if (nextScore > currentScore) {
+        employeeById.set(employee.id, nextEmployee);
+      }
     });
 
     (detail.entries || []).forEach((entry) => {
@@ -2393,6 +2417,7 @@ async function refreshMonthlyView() {
     });
   });
 
+  const mergedEmployees = Array.from(employeeById.values());
   mergedEmployees.sort((a, b) => a.name.localeCompare(b.name, 'bg'));
   state.scheduleEmployees = mergedEmployees.map(normalizeEmployeeVacationData);
   state.scheduleEntriesById = mappedEntries;

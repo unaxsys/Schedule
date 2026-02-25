@@ -962,24 +962,32 @@ app.delete('/api/employees/:id', async (req, res) => {
 
 app.post('/api/schedules', async (req, res) => {
   const monthKey = cleanStr(req.body?.month_key || req.body?.month || req.body?.monthKey);
-  const rawDepartment = cleanStr(req.body?.department);
-  const department = !rawDepartment || rawDepartment === 'Общ' ? null : rawDepartment;
-  const departmentLabel = department || 'Общ';
-  const defaultName = `График ${departmentLabel} – ${monthKey}`;
-  const name = cleanStr(req.body?.name) || defaultName;
+  const department = cleanStr(req.body?.department);
 
   if (!isValidMonthKey(monthKey)) {
     return res.status(400).json({ message: 'Месецът трябва да е във формат YYYY-MM.' });
   }
 
+  if (!department || department === 'Общ') {
+    return res.status(400).json({ message: 'График може да се създава само за конкретен отдел.' });
+  }
+
+  const defaultName = `График ${department} – ${monthKey}`;
+  const name = cleanStr(req.body?.name) || defaultName;
+
   try {
+    const departmentResult = await pool.query('SELECT id FROM departments WHERE name = $1 LIMIT 1', [department]);
+    if (!departmentResult.rowCount) {
+      return res.status(400).json({ message: 'Отделът не съществува.' });
+    }
+
     const existing = await pool.query(
-      `SELECT id FROM schedules WHERE month_key = $1 AND COALESCE(department, '') = COALESCE($2, '') LIMIT 1`,
+      `SELECT id FROM schedules WHERE month_key = $1 AND department = $2 LIMIT 1`,
       [monthKey, department]
     );
 
     if (existing.rowCount) {
-      return res.status(409).json({ message: `Вече има създаден график за ${departmentLabel} (${monthKey}).` });
+      return res.status(409).json({ message: `Вече има създаден график за ${department} (${monthKey}).` });
     }
 
     const created = await pool.query(
@@ -996,7 +1004,7 @@ app.post('/api/schedules', async (req, res) => {
     });
   } catch (error) {
     if (error.code === '23505') {
-      return res.status(409).json({ message: `Вече има създаден график за ${departmentLabel} (${monthKey}).` });
+      return res.status(409).json({ message: `Вече има създаден график за ${department} (${monthKey}).` });
     }
     res.status(500).json({ message: error.message });
   }
