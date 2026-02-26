@@ -2573,7 +2573,7 @@ function renderVacationLedger() {
           const formattedStart = formatDateForDisplay(start);
           const formattedEnd = formatDateForDisplay(end);
           const period = start === end ? formattedStart : `${formattedStart} - ${formattedEnd}`;
-          return `<tr><td>${index + 1}</td><td>${period}</td><td>${canManageVacationCorrections() ? `<button type="button" class="btn-edit vacation-period-edit-btn" data-employee-id="${employee.id}" data-range-start="${start}" data-range-end="${end}">Редакция</button>` : '<span>-</span>'}</td></tr>`;
+          return `<tr><td>${index + 1}</td><td>${period}</td><td>${canManageVacationCorrections() ? `<button type="button" class="btn-edit vacation-period-correct-btn" data-employee-id="${employee.id}" data-range-start="${start}" data-range-end="${end}">Корекция</button>` : ''}${state.userRole === 'admin' ? ` <button type="button" class="btn-delete vacation-period-delete-btn" data-employee-id="${employee.id}" data-range-start="${start}" data-range-end="${end}">Изтрий</button>` : ''}${!canManageVacationCorrections() && state.userRole !== 'admin' ? '<span>-</span>' : ''}</td></tr>`;
         }).join('')
         : '<tr><td colspan="3">Няма записани отпуски за годината.</td></tr>';
 
@@ -2603,10 +2603,10 @@ function renderVacationLedger() {
     });
   });
 
-  vacationLedger.querySelectorAll('.vacation-period-edit-btn').forEach((button) => {
+  vacationLedger.querySelectorAll('.vacation-period-correct-btn').forEach((button) => {
     button.addEventListener('click', async () => {
       if (!canManageVacationCorrections()) {
-        setStatus('Редакцията на отпуск е позволена само за Мениджър и Администратор.', false);
+        setStatus('Корекцията на отпуск е позволена само за Мениджър и Администратор.', false);
         return;
       }
 
@@ -2619,45 +2619,109 @@ function renderVacationLedger() {
         return;
       }
 
-      const confirmed = window.confirm(`Да коригирам ли период ${formatDateForDisplay(rangeStart)} - ${formatDateForDisplay(rangeEnd)} за ${employee.name}?`);
+      const defaultDays = getWorkingDaysBetween(rangeStart, rangeEnd);
+      const inputStart = window.prompt('Нова начална дата (YYYY-MM-DD):', rangeStart);
+      if (!inputStart) {
+        return;
+      }
+      const inputDaysRaw = window.prompt('Брой работни дни за новия период:', String(defaultDays));
+      if (!inputDaysRaw) {
+        return;
+      }
+      const inputDays = Number(inputDaysRaw);
+      if (!Number.isInteger(inputDays) || inputDays < 1) {
+        setStatus('Невалиден брой работни дни за корекция.', false);
+        return;
+      }
+
+      await correctVacationPeriod(employee, rangeStart, rangeEnd, inputStart, inputDays);
+    });
+  });
+
+  vacationLedger.querySelectorAll('.vacation-period-delete-btn').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (state.userRole !== 'admin') {
+        setStatus('Изтриването на период отпуск е позволено само за Администратор.', false);
+        return;
+      }
+
+      const employeeId = button.dataset.employeeId || '';
+      const rangeStart = button.dataset.rangeStart || '';
+      const rangeEnd = button.dataset.rangeEnd || '';
+      const employee = state.employees.find((entry) => entry.id === employeeId);
+      if (!employee || !rangeStart || !rangeEnd) {
+        setStatus('Липсват данни за изтриване на периода отпуск.', false);
+        return;
+      }
+
+      const confirmed = window.confirm(`Да изтрия ли период ${formatDateForDisplay(rangeStart)} - ${formatDateForDisplay(rangeEnd)} за ${employee.name}?`);
       if (!confirmed) {
         return;
       }
 
-      await correctVacationPeriod(employee, rangeStart, rangeEnd);
+      await setVacationShiftForDateRange(employee, rangeStart, rangeEnd, 'P', { ensureSchedule: false });
+      await refreshMonthlyView();
+      renderAll();
+      setStatus('Периодът отпуск е изтрит успешно.', true);
     });
   });
 }
 
-
-async function correctVacationPeriod(employee, startDateKey, endDateKey) {
-  if (!canManageVacationCorrections()) {
-    setStatus('Редакцията на отпуск е позволена само за Мениджър и Администратор.', false);
-    return;
-  }
-
+function getWorkingDaysBetween(startDateKey, endDateKey) {
   const start = new Date(`${startDateKey}T00:00:00`);
   const end = new Date(`${endDateKey}T00:00:00`);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
-    setStatus('Невалиден период за корекция.', false);
-    return;
+    return 0;
   }
 
-  const backendPromises = [];
+  let count = 0;
   const current = new Date(start);
   while (current <= end) {
     if (!isWeekend(current) && !isOfficialHoliday(current)) {
+      count += 1;
+    }
+    current.setDate(current.getDate() + 1);
+  }
+
+  return count;
+}
+
+async function setVacationShiftForDateRange(employee, startDateKey, endDateKey, shiftCode, options = {}) {
+  const start = new Date(`${startDateKey}T00:00:00`);
+  const end = new Date(`${endDateKey}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+    return { updated: 0, skipped: 0 };
+  }
+
+  const backendPromises = [];
+  let updated = 0;
+  let skipped = 0;
+  const current = new Date(start);
+
+  while (current <= end) {
+    if (!isWeekend(current) && !isOfficialHoliday(current)) {
       const monthKey = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`;
-      if (!isMonthLocked(monthKey)) {
+      if (isMonthLocked(monthKey)) {
+        skipped += 1;
+      } else {
         const day = current.getDate();
         const key = scheduleKey(employee.id, monthKey, day);
-        state.schedule[key] = 'P';
-        const schedule = findScheduleByMonthAndDepartment(monthKey, resolveEmployeeDepartmentName(employee));
-        const scheduleId = schedule?.id || null;
-        if (scheduleId) {
-          state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = 'P';
-          backendPromises.push(saveScheduleEntryBackend({ ...employee, scheduleId }, day, 'P', { monthKey, scheduleId }));
+        state.schedule[key] = shiftCode;
+
+        let scheduleId = null;
+        if (options.ensureSchedule === true && shiftCode === 'O') {
+          const schedule = await ensureScheduleForMonthAndDepartment(monthKey, resolveEmployeeDepartmentName(employee));
+          scheduleId = schedule?.id || null;
+        } else {
+          const schedule = findScheduleByMonthAndDepartment(monthKey, resolveEmployeeDepartmentName(employee));
+          scheduleId = schedule?.id || null;
         }
+
+        if (scheduleId) {
+          state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = shiftCode;
+          backendPromises.push(saveScheduleEntryBackend({ ...employee, scheduleId }, day, shiftCode, { monthKey, scheduleId }));
+        }
+        updated += 1;
       }
     }
     current.setDate(current.getDate() + 1);
@@ -2665,9 +2729,48 @@ async function correctVacationPeriod(employee, startDateKey, endDateKey) {
 
   saveScheduleLocal();
   await Promise.all(backendPromises);
+  return { updated, skipped };
+}
+
+async function correctVacationPeriod(employee, oldStartDateKey, oldEndDateKey, newStartDateKey, newWorkingDays) {
+  if (!canManageVacationCorrections()) {
+    setStatus('Корекцията на отпуск е позволена само за Мениджър и Администратор.', false);
+    return;
+  }
+
+  const newStart = new Date(`${newStartDateKey}T00:00:00`);
+  if (Number.isNaN(newStart.getTime()) || !Number.isInteger(newWorkingDays) || newWorkingDays < 1) {
+    setStatus('Невалидни данни за корекция на отпуск.', false);
+    return;
+  }
+
+  const oldResult = await setVacationShiftForDateRange(employee, oldStartDateKey, oldEndDateKey, 'P', { ensureSchedule: false });
+  const newDates = getWorkingVacationDates(newStart, newWorkingDays);
+  const newRanges = groupDatesByMonth(newDates);
+
+  let inserted = 0;
+  let skipped = oldResult.skipped;
+  for (const [, dates] of newRanges.entries()) {
+    if (!dates.length) {
+      continue;
+    }
+    const rangeStart = `${dates[0].getFullYear()}-${String(dates[0].getMonth() + 1).padStart(2, '0')}-${String(dates[0].getDate()).padStart(2, '0')}`;
+    const last = dates[dates.length - 1];
+    const rangeEnd = `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, '0')}-${String(last.getDate()).padStart(2, '0')}`;
+    const result = await setVacationShiftForDateRange(employee, rangeStart, rangeEnd, 'O', { ensureSchedule: true });
+    inserted += result.updated;
+    skipped += result.skipped;
+  }
+
   await refreshMonthlyView();
   renderAll();
-  setStatus('Периодът отпуск е коригиран успешно.', true);
+  if (!inserted) {
+    setStatus('Няма приложена корекция (възможно е месеците да са заключени).', false);
+    return;
+  }
+
+  const skippedText = skipped > 0 ? ` Пропуснати дни (заключен месец): ${skipped}.` : '';
+  setStatus(`Периодът е коригиран успешно.${skippedText}`, true);
 }
 
 function getActiveSchedule() {
