@@ -170,6 +170,8 @@ const inspectTableForm = document.getElementById('inspectTableForm');
 const inspectTableNameInput = document.getElementById('inspectTableNameInput');
 const inspectTableOutput = document.getElementById('inspectTableOutput');
 
+let statusToastTimer = null;
+
 init();
 
 async function init() {
@@ -2761,8 +2763,20 @@ function exportScheduleToPdf() {
 }
 
 function setStatus(message, good) {
+  if (!storageStatus) {
+    return;
+  }
+
   storageStatus.textContent = message;
-  storageStatus.className = good ? 'status-ok' : 'status-warn';
+  storageStatus.className = `status-toast ${good ? 'status-ok' : 'status-warn'} status-toast-visible`;
+
+  if (statusToastTimer) {
+    clearTimeout(statusToastTimer);
+  }
+
+  statusToastTimer = setTimeout(() => {
+    storageStatus.classList.remove('status-toast-visible');
+  }, good ? 3200 : 5600);
 }
 
 function getVacationUsedForYear(employeeId, year) {
