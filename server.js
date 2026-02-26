@@ -529,77 +529,12 @@ async function initDatabase() {
     )
   `);
 
-  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS department_id UUID NULL`);
-  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS egn CHAR(10) NULL`);
-  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS start_date DATE NOT NULL DEFAULT CURRENT_DATE`);
-  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS base_vacation_allowance INTEGER NOT NULL DEFAULT 20`);
-  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS telk BOOLEAN NOT NULL DEFAULT FALSE`);
-  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS young_worker_benefit BOOLEAN NOT NULL DEFAULT FALSE`);
-  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS end_date DATE NULL`);
-  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'employees_department_id_fkey'
-      ) THEN
-        ALTER TABLE employees
-          ADD CONSTRAINT employees_department_id_fkey
-          FOREIGN KEY (department_id)
-          REFERENCES departments(id)
-          ON DELETE SET NULL;
-      END IF;
-    END $$;
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_department_id ON employees(department_id)`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_tenant_id ON employees(tenant_id)`);
-  
-  await pool.query(`ALTER TABLE departments ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_departments_tenant_id ON departments(tenant_id)`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedules_tenant_id ON schedules(tenant_id)`);
-  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_departments_tenant_name_unique ON departments(tenant_id, name)`);
-  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_schedules_tenant_month_department_unique ON schedules(tenant_id, month_key, department)`);
-  await pool.query(`DROP INDEX IF EXISTS idx_schedules_month_department`);
-  await pool.query(`DROP INDEX IF EXISTS idx_employees_egn_unique`);
-  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_tenant_egn_unique ON employees(tenant_id, egn) WHERE egn IS NOT NULL`);
-
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conrelid = 'departments'::regclass
-          AND conname = 'departments_name_key'
-      ) THEN
-        ALTER TABLE departments DROP CONSTRAINT departments_name_key;
-      END IF;
-    END $$;
-  `);
-
-  // Backwards-compatible bootstrap for existing single-tenant installations:
-  // if legacy employees exist without tenant_id and there is exactly one tenant,
-  // assign them to that tenant so old data remains visible.
-  try {
-    const tenantsCountResult = await pool.query('SELECT COUNT(*)::int AS total FROM tenants');
-    const tenantsCount = tenantsCountResult.rows[0]?.total || 0;
-    if (tenantsCount === 1) {
-      await pool.query(
-        `UPDATE employees
-         SET tenant_id = (SELECT id FROM tenants ORDER BY created_at ASC LIMIT 1)
-         WHERE tenant_id IS NULL`
-      );
-    }
-  } catch (bootstrapError) {
-    console.error('EMPLOYEE TENANT BACKFILL WARN:', bootstrapError.message);
-  }
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schedules (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
-      month_key TEXT NOT NULL CHECK (month_key ~ '^\\d{4}-\\d{2}$'),
+      month_key TEXT NOT NULL CHECK (month_key ~ '^\d{4}-\d{2}$'),
       department TEXT NULL,
       status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'locked')),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -612,50 +547,10 @@ async function initDatabase() {
       employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
       day INTEGER NOT NULL CHECK (day >= 1 AND day <= 31),
       shift_code VARCHAR(16) NOT NULL,
-      month_key TEXT NOT NULL CHECK (month_key ~ '^\\d{4}-\\d{2}$'),
+      month_key TEXT NOT NULL CHECK (month_key ~ '^\d{4}-\d{2}$'),
       PRIMARY KEY (schedule_id, employee_id, day)
     )
   `);
-
-
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_entries_month_key ON schedule_entries(month_key)`);
-
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'schedule_entries_employee_id_fkey'
-      ) THEN
-        ALTER TABLE schedule_entries DROP CONSTRAINT schedule_entries_employee_id_fkey;
-      END IF;
-
-      ALTER TABLE schedule_entries
-        ADD CONSTRAINT schedule_entries_employee_id_fkey
-        FOREIGN KEY (employee_id)
-        REFERENCES employees(id)
-        ON DELETE RESTRICT;
-    EXCEPTION WHEN duplicate_object THEN NULL;
-    END $$;
-  `);
-
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'employees_employment_period_check'
-      ) THEN
-        ALTER TABLE employees
-          ADD CONSTRAINT employees_employment_period_check
-          CHECK (end_date IS NULL OR end_date >= start_date);
-      END IF;
-    END $$;
-  `);
-
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_start_date ON employees(start_date)`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_end_date ON employees(end_date)`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_young_worker_benefit ON employees(young_worker_benefit)`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS shift_templates (
@@ -665,42 +560,6 @@ async function initDatabase() {
       end_time CHAR(5) NOT NULL,
       hours NUMERIC(6,2) NOT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS tenants (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      name TEXT NOT NULL,
-      eik TEXT NOT NULL DEFAULT '',
-      owner_phone TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','disabled')),
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      approved_at TIMESTAMPTZ NULL
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      email TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      first_name TEXT NOT NULL DEFAULT '',
-      last_name TEXT NOT NULL DEFAULT '',
-      is_super_admin BOOLEAN NOT NULL DEFAULT FALSE,
-      is_active BOOLEAN NOT NULL DEFAULT TRUE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      last_login_at TIMESTAMPTZ NULL
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS tenant_users (
-      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      role TEXT NOT NULL CHECK (role IN ('owner','admin','manager','user')),
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (tenant_id, user_id)
     )
   `);
 
@@ -732,15 +591,115 @@ async function initDatabase() {
     )
   `);
 
-  await pool.query("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS eik TEXT NOT NULL DEFAULT ''");
-  await pool.query("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS owner_phone TEXT NOT NULL DEFAULT ''");
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS department_id UUID NULL`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS egn CHAR(10) NULL`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS start_date DATE NOT NULL DEFAULT CURRENT_DATE`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS base_vacation_allowance INTEGER NOT NULL DEFAULT 20`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS telk BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS young_worker_benefit BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS end_date DATE NULL`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
+  await pool.query(`ALTER TABLE departments ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
+  await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
 
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'employees_department_id_fkey'
+      ) THEN
+        ALTER TABLE employees
+          ADD CONSTRAINT employees_department_id_fkey
+          FOREIGN KEY (department_id)
+          REFERENCES departments(id)
+          ON DELETE SET NULL;
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'schedule_entries_employee_id_fkey'
+      ) THEN
+        ALTER TABLE schedule_entries DROP CONSTRAINT schedule_entries_employee_id_fkey;
+      END IF;
+
+      ALTER TABLE schedule_entries
+        ADD CONSTRAINT schedule_entries_employee_id_fkey
+        FOREIGN KEY (employee_id)
+        REFERENCES employees(id)
+        ON DELETE RESTRICT;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'employees_employment_period_check'
+      ) THEN
+        ALTER TABLE employees
+          ADD CONSTRAINT employees_employment_period_check
+          CHECK (end_date IS NULL OR end_date >= start_date);
+      END IF;
+
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'departments'::regclass
+          AND conname = 'departments_name_key'
+      ) THEN
+        ALTER TABLE departments DROP CONSTRAINT departments_name_key;
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`DROP INDEX IF EXISTS idx_schedules_month_department`);
+  await pool.query(`DROP INDEX IF EXISTS idx_employees_egn_unique`);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_department_id ON employees(department_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_tenant_id ON employees(tenant_id)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_tenant_egn_unique ON employees(tenant_id, egn) WHERE egn IS NOT NULL`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_start_date ON employees(start_date)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_end_date ON employees(end_date)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_young_worker_benefit ON employees(young_worker_benefit)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_departments_tenant_name_unique ON departments(tenant_id, name)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_departments_tenant_id ON departments(tenant_id)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_schedules_tenant_month_department_unique ON schedules(tenant_id, month_key, department)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedules_tenant_id ON schedules(tenant_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_entries_month_key ON schedule_entries(month_key)`);
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tenant_users_user_id ON tenant_users(user_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant_id ON tenant_users(tenant_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_request_log_created_at ON request_log(created_at DESC)');
+
+  await pool.query("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS eik TEXT NOT NULL DEFAULT ''");
+  await pool.query("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS owner_phone TEXT NOT NULL DEFAULT ''");
+
+  // Backwards-compatible bootstrap for existing single-tenant installations:
+  // if legacy employees exist without tenant_id and there is exactly one tenant,
+  // assign them to that tenant so old data remains visible.
+  try {
+    const tenantsCountResult = await pool.query('SELECT COUNT(*)::int AS total FROM tenants');
+    const tenantsCount = tenantsCountResult.rows[0]?.total || 0;
+    if (tenantsCount === 1) {
+      await pool.query(
+        `UPDATE employees
+         SET tenant_id = (SELECT id FROM tenants ORDER BY created_at ASC LIMIT 1)
+         WHERE tenant_id IS NULL`
+      );
+    }
+  } catch (bootstrapError) {
+    console.error('EMPLOYEE TENANT BACKFILL WARN:', bootstrapError.message);
+  }
 
   await pool.query(`
     UPDATE employees e
