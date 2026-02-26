@@ -68,7 +68,9 @@ const state = {
   availableTenants: [],
   pendingLoginToken: '',
   requiresTenantSelection: false,
-  expandedVacationDossierEmployeeId: null
+  expandedVacationDossierEmployeeId: null,
+  vacationLedgerDepartmentFilter: 'all',
+  vacationLedgerSearchQuery: ''
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -109,6 +111,13 @@ const vacationEmployeeSelect = document.getElementById('vacationEmployeeSelect')
 const vacationStartInput = document.getElementById('vacationStartInput');
 const vacationDaysInput = document.getElementById('vacationDaysInput');
 const vacationLedger = document.getElementById('vacationLedger');
+const vacationCorrectionForm = document.getElementById('vacationCorrectionForm');
+const vacationCorrectionEmployeeSelect = document.getElementById('vacationCorrectionEmployeeSelect');
+const vacationCorrectionStartInput = document.getElementById('vacationCorrectionStartInput');
+const vacationCorrectionDaysInput = document.getElementById('vacationCorrectionDaysInput');
+const vacationCorrectionNote = document.getElementById('vacationCorrectionNote');
+const vacationDepartmentFilterSelect = document.getElementById('vacationDepartmentFilterSelect');
+const vacationSearchInput = document.getElementById('vacationSearchInput');
 const ratesForm = document.getElementById('ratesForm');
 const weekendRateInput = document.getElementById('weekendRateInput');
 const holidayRateInput = document.getElementById('holidayRateInput');
@@ -218,6 +227,8 @@ async function init() {
   attachTabs();
   attachRatesForm();
   attachVacationForm();
+  attachVacationCorrectionForm();
+  attachVacationFilters();
   attachShiftForm();
   attachLockAndExport();
   attachSettingsControls();
@@ -268,6 +279,10 @@ function getRoleLabel(role) {
 
 function canDeleteEmployees() {
   return state.userRole === 'admin';
+}
+
+function canManageVacationCorrections() {
+  return state.userRole === 'manager' || state.userRole === 'admin';
 }
 
 
@@ -1820,8 +1835,11 @@ function resolveBaseVacationAllowance(employee) {
 function renderAll() {
   renderEmployees();
   renderSchedule();
-  renderVacationLedger();
   renderVacationEmployeeOptions();
+  renderVacationCorrectionEmployeeOptions();
+  renderVacationDepartmentFilterOptions();
+  updateVacationCorrectionVisibility();
+  renderVacationLedger();
   renderPlatformUserEmployeeOptions();
   renderShiftList();
   renderLegend();
@@ -2303,9 +2321,165 @@ function renderEmployees() {
   });
 }
 
+
+function updateVacationCorrectionVisibility() {
+  if (!vacationCorrectionForm || !vacationCorrectionNote) {
+    return;
+  }
+
+  const canManage = canManageVacationCorrections();
+  vacationCorrectionForm.classList.toggle('hidden', !canManage);
+  vacationCorrectionNote.classList.toggle('hidden', canManage);
+}
+
+function getVacationLedgerFilteredEmployees() {
+  const selectedDepartment = (state.vacationLedgerDepartmentFilter || 'all').trim();
+  const searchQuery = (state.vacationLedgerSearchQuery || '').trim().toLowerCase();
+
+  return state.employees.filter((employee) => {
+    if (selectedDepartment !== 'all' && employee.departmentId !== selectedDepartment) {
+      return false;
+    }
+
+    if (searchQuery && !String(employee.name || '').toLowerCase().includes(searchQuery)) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function renderVacationCorrectionEmployeeOptions() {
+  if (!vacationCorrectionEmployeeSelect) {
+    return;
+  }
+
+  vacationCorrectionEmployeeSelect.innerHTML = '';
+  const employees = getVacationLedgerFilteredEmployees();
+  if (!employees.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'Няма служители';
+    vacationCorrectionEmployeeSelect.appendChild(option);
+    return;
+  }
+
+  employees.forEach((employee) => {
+    const option = document.createElement('option');
+    option.value = employee.id;
+    option.textContent = `${employee.name} (${employee.department || 'Без отдел'})`;
+    vacationCorrectionEmployeeSelect.appendChild(option);
+  });
+}
+
+function renderVacationDepartmentFilterOptions() {
+  if (!vacationDepartmentFilterSelect) {
+    return;
+  }
+
+  const previousValue = state.vacationLedgerDepartmentFilter || 'all';
+  vacationDepartmentFilterSelect.innerHTML = '';
+
+  const allOption = document.createElement('option');
+  allOption.value = 'all';
+  allOption.textContent = 'Всички отдели';
+  vacationDepartmentFilterSelect.appendChild(allOption);
+
+  state.departments.forEach((department) => {
+    const option = document.createElement('option');
+    option.value = department.id;
+    option.textContent = department.name;
+    vacationDepartmentFilterSelect.appendChild(option);
+  });
+
+  const hasCurrent = previousValue === 'all' || state.departments.some((department) => department.id === previousValue);
+  state.vacationLedgerDepartmentFilter = hasCurrent ? previousValue : 'all';
+  vacationDepartmentFilterSelect.value = state.vacationLedgerDepartmentFilter;
+  if (vacationSearchInput) {
+    vacationSearchInput.value = state.vacationLedgerSearchQuery || '';
+  }
+}
+
+function attachVacationFilters() {
+  if (vacationDepartmentFilterSelect) {
+    vacationDepartmentFilterSelect.addEventListener('change', () => {
+      state.vacationLedgerDepartmentFilter = vacationDepartmentFilterSelect.value || 'all';
+      renderVacationCorrectionEmployeeOptions();
+      renderVacationLedger();
+    });
+  }
+
+  if (vacationSearchInput) {
+    vacationSearchInput.addEventListener('input', () => {
+      state.vacationLedgerSearchQuery = (vacationSearchInput.value || '').trim();
+      renderVacationCorrectionEmployeeOptions();
+      renderVacationLedger();
+    });
+  }
+}
+
+function attachVacationCorrectionForm() {
+  if (!vacationCorrectionForm) {
+    return;
+  }
+
+  vacationCorrectionForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!canManageVacationCorrections()) {
+      setStatus('Корекцията на отпуск е позволена само за Мениджър и Администратор.', false);
+      return;
+    }
+
+    const employeeId = vacationCorrectionEmployeeSelect?.value || '';
+    const startValue = vacationCorrectionStartInput?.value || '';
+    const correctionDays = Number(vacationCorrectionDaysInput?.value);
+
+    const employee = state.employees.find((item) => item.id === employeeId);
+    if (!employee || !startValue || !Number.isInteger(correctionDays) || correctionDays < 1) {
+      setStatus('Попълнете валидни данни за корекция на отпуск.', false);
+      return;
+    }
+
+    const start = new Date(`${startValue}T00:00:00`);
+    if (Number.isNaN(start.getTime())) {
+      setStatus('Невалидна начална дата за корекция.', false);
+      return;
+    }
+
+    if (!canModifyMonth(state.month || todayMonth())) {
+      setStatus('Графикът за този месец е заключен. Отключете, за да редактирате.', false);
+      return;
+    }
+
+    const vacationDates = getWorkingVacationDates(start, correctionDays);
+    const backendPromises = [];
+
+    for (const date of vacationDates) {
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      const day = date.getDate();
+      const schedule = await ensureScheduleForMonthAndDepartment(monthKey, resolveEmployeeDepartmentName(employee));
+      const scheduleId = schedule?.id || getEmployeeScheduleId(employee);
+      const key = scheduleKey(employeeId, monthKey, day);
+      state.schedule[key] = 'P';
+      if (scheduleId) {
+        state.scheduleEntriesById[`${scheduleId}|${employeeId}|${day}`] = 'P';
+        backendPromises.push(saveScheduleEntryBackend({ ...employee, scheduleId }, day, 'P', { monthKey, scheduleId }));
+      }
+    }
+
+    saveScheduleLocal();
+    await Promise.all(backendPromises);
+    await refreshMonthlyView();
+    renderAll();
+    vacationCorrectionForm.reset();
+    setStatus('Корекцията на отпуск е запазена успешно.', true);
+  });
+}
+
 function renderVacationEmployeeOptions() {
   vacationEmployeeSelect.innerHTML = '';
-  if (!state.employees.length) {
+  const employees = getVacationLedgerFilteredEmployees();
+  if (!employees.length) {
     const option = document.createElement('option');
     option.value = '';
     option.textContent = 'Няма служители';
@@ -2313,10 +2487,10 @@ function renderVacationEmployeeOptions() {
     return;
   }
 
-  state.employees.forEach((employee) => {
+  employees.forEach((employee) => {
     const option = document.createElement('option');
     option.value = employee.id;
-    option.textContent = `${employee.name} (${employee.department})`;
+    option.textContent = `${employee.name} (${employee.department || 'Без отдел'})`;
     vacationEmployeeSelect.appendChild(option);
   });
 }
@@ -2379,6 +2553,7 @@ function attachVacationForm() {
     await Promise.all(backendPromises);
     await refreshMonthlyView();
     renderAll();
+    setStatus('Отпускът е маркиран успешно.', true);
   });
 }
 
@@ -2464,12 +2639,17 @@ function renderVacationLedger() {
   const year = Number((state.month || todayMonth()).split('-')[0]);
   const table = document.createElement('table');
   table.innerHTML =
-    '<tr><th>Служител</th><th>Полагаем</th><th>Период отпуск</th><th>Използван за годината</th><th>Остатък</th></tr>';
+    '<tr><th>Служител</th><th>Полагаем</th><th>Използван за годината</th><th>Остатък</th></tr>';
 
-  state.employees.forEach((employee) => {
+  const filteredEmployees = getVacationLedgerFilteredEmployees();
+  if (!filteredEmployees.length) {
+    vacationLedger.textContent = 'Няма служители по зададения филтър.';
+    return;
+  }
+
+  filteredEmployees.forEach((employee) => {
     const used = getVacationUsedForYear(employee.id, year);
     const allowance = getVacationAllowanceForYear(employee, year);
-    const periods = getVacationPeriodsForYear(employee.id, year);
     const tr = document.createElement('tr');
 
     const isExpanded = state.expandedVacationDossierEmployeeId === employee.id;
@@ -2478,7 +2658,6 @@ function renderVacationLedger() {
         <button type="button" class="vacation-dossier-toggle" data-employee-id="${employee.id}" aria-expanded="${isExpanded}">${employee.name}</button>
       </td>
       <td>${allowance}</td>
-      <td>${periods}</td>
       <td>${used}</td>
       <td>${allowance - used}</td>
     `;
@@ -2498,7 +2677,7 @@ function renderVacationLedger() {
         : '<tr><td colspan="2">Няма записани отпуски за годината.</td></tr>';
 
       detailRow.innerHTML = `
-        <td colspan="5">
+        <td colspan="4">
           <div class="vacation-dossier-wrap">
             <div class="vacation-dossier-title">Период отпуск</div>
             <table class="vacation-dossier-table">
