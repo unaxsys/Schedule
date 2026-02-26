@@ -657,11 +657,46 @@ async function initDatabase() {
       ) THEN
         ALTER TABLE departments DROP CONSTRAINT departments_name_key;
       END IF;
+
+      -- Safety: remove any legacy/global unique constraints over employees.egn.
+      -- Tenant isolation requires uniqueness only per (tenant_id, egn).
+      IF EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'employees'::regclass
+          AND contype = 'u'
+          AND pg_get_constraintdef(oid) LIKE 'UNIQUE (egn)%'
+      ) THEN
+        EXECUTE (
+          SELECT format('ALTER TABLE employees DROP CONSTRAINT %I', conname)
+          FROM pg_constraint
+          WHERE conrelid = 'employees'::regclass
+            AND contype = 'u'
+            AND pg_get_constraintdef(oid) LIKE 'UNIQUE (egn)%'
+          LIMIT 1
+        );
+      END IF;
     END $$;
   `);
 
   await pool.query(`DROP INDEX IF EXISTS idx_schedules_month_department`);
   await pool.query(`DROP INDEX IF EXISTS idx_employees_egn_unique`);
+  await pool.query(`
+    DO $$
+    DECLARE
+      idx RECORD;
+    BEGIN
+      FOR idx IN
+        SELECT i.indexname
+        FROM pg_indexes i
+        WHERE i.schemaname = 'public'
+          AND i.tablename = 'employees'
+          AND i.indexdef ILIKE 'CREATE UNIQUE INDEX % ON public.employees USING btree (egn%'
+      LOOP
+        EXECUTE format('DROP INDEX IF EXISTS %I', idx.indexname);
+      END LOOP;
+    END $$;
+  `);
 
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_department_id ON employees(department_id)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_tenant_id ON employees(tenant_id)`);
