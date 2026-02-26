@@ -2648,7 +2648,7 @@ async function correctVacationPeriod(employee, startDateKey, endDateKey) {
   while (current <= end) {
     if (!isWeekend(current) && !isOfficialHoliday(current)) {
       const monthKey = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`;
-      if (canModifyMonth(monthKey)) {
+      if (!isMonthLocked(monthKey)) {
         const day = current.getDate();
         const key = scheduleKey(employee.id, monthKey, day);
         state.schedule[key] = 'P';
