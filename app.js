@@ -84,6 +84,7 @@ const egnInput = document.getElementById('egnInput');
 const startDateInput = document.getElementById('startDateInput');
 const endDateInput = document.getElementById('endDateInput');
 const vacationAllowanceInput = document.getElementById('vacationAllowanceInput');
+const vacationAllowanceHint = document.getElementById('vacationAllowanceHint');
 const telkInput = document.getElementById('telkInput');
 const youngWorkerInput = document.getElementById('youngWorkerInput');
 const employeeList = document.getElementById('employeeList');
@@ -1461,11 +1462,18 @@ employeeForm.addEventListener('submit', async (event) => {
   if (startDateInput) {
     startDateInput.value = '';
   }
+  updateVacationAllowanceHint();
   if (endDateInput) {
     endDateInput.value = '';
   }
   renderAll();
 });
+
+startDateInput?.addEventListener('change', updateVacationAllowanceHint);
+vacationAllowanceInput?.addEventListener('input', updateVacationAllowanceHint);
+telkInput?.addEventListener('change', updateVacationAllowanceHint);
+youngWorkerInput?.addEventListener('change', updateVacationAllowanceHint);
+updateVacationAllowanceHint();
 
 async function attachEmployeeToDepartment(employeeId, departmentId) {
   if (!state.backendAvailable) {
@@ -1694,11 +1702,14 @@ function calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWork
     return 0;
   }
 
+  return normalizedBase + getExtraVacationDays(hasTelk, hasYoungWorkerBenefit);
+}
+
+function calculateProportionalVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, startDate, year = Number((state.month || todayMonth()).split('-')[0])) {
+  const fullAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit);
   const normalizedYear = Number.isFinite(Number(year)) ? Number(year) : new Date().getFullYear();
   const proportion = getEmploymentYearProportion(startDate, normalizedYear);
-  const proportionalBase = roundVacationDays(normalizedBase * proportion);
-  const proportionalExtra = roundVacationDays(getExtraVacationDays(hasTelk, hasYoungWorkerBenefit) * proportion);
-  return proportionalBase + proportionalExtra;
+  return roundVacationDays(fullAllowance * proportion);
 }
 
 function roundVacationDays(value) {
@@ -1736,13 +1747,29 @@ function getEmploymentYearProportion(startDate, year) {
 }
 
 function getVacationAllowanceForYear(employee, year) {
-  return calculateVacationAllowance(
+  return calculateProportionalVacationAllowance(
     resolveBaseVacationAllowance(employee),
     Boolean(employee?.telk),
     Boolean(employee?.youngWorkerBenefit),
     employee?.startDate,
     year
   );
+}
+
+function updateVacationAllowanceHint() {
+  if (!vacationAllowanceHint) {
+    return;
+  }
+
+  const baseVacationAllowance = Number(vacationAllowanceInput?.value);
+  const hasTelk = Boolean(telkInput?.checked);
+  const hasYoungWorkerBenefit = Boolean(youngWorkerInput?.checked);
+  const startDate = (startDateInput?.value || '').trim();
+  const startYear = Number((normalizeDateOnly(startDate) || '').slice(0, 4));
+  const targetYear = Number.isFinite(startYear) ? startYear : new Date().getFullYear();
+  const allowance = calculateProportionalVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, startDate, targetYear);
+
+  vacationAllowanceHint.textContent = `Полагаем за ${targetYear}: ${allowance} дни`;
 }
 
 function getWorkingVacationDates(startDate, workingDays) {
@@ -2046,7 +2073,7 @@ function attachEmployeeEditModalControls() {
     const hasTelk = Boolean(editTelkInput?.checked);
     const hasYoungWorkerBenefit = Boolean(editYoungWorkerInput?.checked);
     const startDate = (editStartDateInput?.value || '').trim();
-    const vacationAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, startDate);
+    const vacationAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit);
     const endDate = (editEndDateInput?.value || '').trim() || null;
     const departmentId = editDepartmentInput.value || null;
     const selectedDepartment = departmentId ? state.departments.find((dep) => dep.id === departmentId) : null;
@@ -2175,7 +2202,9 @@ function renderEmployees() {
 
     const details = document.createElement('div');
     const employmentRange = formatEmploymentRange(employee);
-    details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Период: ${employmentRange}<br>Полагаем отпуск: ${employee.vacationAllowance} дни${employee.telk ? ' (ТЕЛК)' : ''}${employee.youngWorkerBenefit ? ' (16-18 с разрешение)' : ''}`;
+    const allowanceYear = Number((state.month || todayMonth()).split('-')[0]);
+    const allowanceForYear = getVacationAllowanceForYear(employee, allowanceYear);
+    details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Период: ${employmentRange}<br>Полагаем отпуск (${allowanceYear}): ${allowanceForYear} дни${employee.telk ? ' (ТЕЛК)' : ''}${employee.youngWorkerBenefit ? ' (16-18 с разрешение)' : ''}`;
 
     const employeeDepartmentSelect = document.createElement('select');
     const emptyOption = document.createElement('option');

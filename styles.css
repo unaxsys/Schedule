@@ -576,6 +576,14 @@ select.shift-select {
   width: fit-content;
 }
 
+
+.vacation-allowance-hint {
+  color: #1e40af;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+
 .hover-tooltip {
   position: relative;
   display: inline-flex;
