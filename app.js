@@ -3594,7 +3594,8 @@ function getVacationDateKeysForYear(employeeId, year) {
     entries.add(`${monthKey}-${String(day).padStart(2, '0')}`);
   });
 
-  const scheduleById = new Map(state.schedules.map((schedule) => [schedule.id, schedule]));
+  const scheduleById = new Map(state.schedules.map((schedule) => [String(schedule.id), schedule]));
+  const activeSchedule = getActiveSchedule();
   Object.entries(state.scheduleEntriesById).forEach(([entryKey, code]) => {
     if (code !== 'O') {
       return;
@@ -3605,8 +3606,8 @@ function getVacationDateKeysForYear(employeeId, year) {
       return;
     }
 
-    const schedule = scheduleById.get(scheduleId);
-    const monthKey = schedule?.month_key;
+    const schedule = scheduleById.get(String(scheduleId));
+    const monthKey = schedule?.month_key || (activeSchedule && String(activeSchedule.id) === String(scheduleId) ? state.month : '');
     const day = Number(dayPart);
     if (!monthKey || !monthKey.startsWith(`${year}-`) || !Number.isFinite(day)) {
       return;
