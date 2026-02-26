@@ -416,6 +416,23 @@ async function initDatabase() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_tenant_id ON employees(tenant_id)`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_egn_unique ON employees(egn) WHERE egn IS NOT NULL`);
 
+  // Backwards-compatible bootstrap for existing single-tenant installations:
+  // if legacy employees exist without tenant_id and there is exactly one tenant,
+  // assign them to that tenant so old data remains visible.
+  try {
+    const tenantsCountResult = await pool.query('SELECT COUNT(*)::int AS total FROM tenants');
+    const tenantsCount = tenantsCountResult.rows[0]?.total || 0;
+    if (tenantsCount === 1) {
+      await pool.query(
+        `UPDATE employees
+         SET tenant_id = (SELECT id FROM tenants ORDER BY created_at ASC LIMIT 1)
+         WHERE tenant_id IS NULL`
+      );
+    }
+  } catch (bootstrapError) {
+    console.error('EMPLOYEE TENANT BACKFILL WARN:', bootstrapError.message);
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schedules (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -753,7 +770,7 @@ app.get('/api/employees', requireAuth, async (req, res) => {
     const where = [];
 
     params.push(actor.tenantId);
-    where.push(`e.tenant_id = $${params.length}`);
+    where.push(`(e.tenant_id = $${params.length} OR e.tenant_id IS NULL)`);
 
     if (departmentId) {
       params.push(departmentId);
@@ -863,8 +880,9 @@ app.put('/api/employees/:id', requireAuth, async (req, res) => {
            telk = $7,
            young_worker_benefit = $8,
            start_date = $9,
-           end_date = $10
-       WHERE id = $1 AND tenant_id = $11
+           end_date = $10,
+           tenant_id = COALESCE(tenant_id, $11)
+       WHERE id = $1 AND (tenant_id = $11 OR tenant_id IS NULL)
        RETURNING id, name, department_id AS "departmentId", COALESCE(department, 'Без отдел') AS department,
                  position, egn, base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  start_date::text AS "startDate", end_date::text AS "endDate",
@@ -911,8 +929,9 @@ app.put('/api/employees/:id/department', requireAuth, async (req, res) => {
     const updated = await pool.query(
       `UPDATE employees
        SET department_id = $2,
-           department = $3
-       WHERE id = $1 AND tenant_id = $4
+           department = $3,
+           tenant_id = COALESCE(tenant_id, $4)
+       WHERE id = $1 AND (tenant_id = $4 OR tenant_id IS NULL)
        RETURNING id, name, department_id AS "departmentId", COALESCE($3, 'Без отдел') AS department, position,
                  egn, base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  start_date::text AS "startDate", end_date::text AS "endDate",
@@ -942,7 +961,7 @@ async function releaseEmployee(req, res) {
   try {
     const actor = await resolveActorTenant(req);
     const employeeResult = await pool.query(
-      'SELECT id, start_date::text AS "startDate" FROM employees WHERE id = $1 AND tenant_id = $2',
+      'SELECT id, start_date::text AS "startDate" FROM employees WHERE id = $1 AND (tenant_id = $2 OR tenant_id IS NULL)',
       [id, actor.tenantId]
     );
 
@@ -960,7 +979,7 @@ async function releaseEmployee(req, res) {
     const updated = await pool.query(
       `UPDATE employees
        SET end_date = $2
-       WHERE id = $1 AND tenant_id = $3
+       WHERE id = $1 AND (tenant_id = $3 OR tenant_id IS NULL)
        RETURNING id, end_date::text AS "endDate"`,
       [id, requestedEndDate, actor.tenantId]
     );
@@ -985,7 +1004,7 @@ app.delete('/api/employees/:id', requireAuth, async (req, res) => {
 
   try {
     const actor = await resolveActorTenant(req);
-    const deleted = await pool.query('DELETE FROM employees WHERE id = $1 AND tenant_id = $2 RETURNING id', [id, actor.tenantId]);
+    const deleted = await pool.query('DELETE FROM employees WHERE id = $1 AND (tenant_id = $2 OR tenant_id IS NULL) RETURNING id', [id, actor.tenantId]);
     if (!deleted.rowCount) {
       return res.status(404).json({ message: 'Служителят не е намерен.' });
     }
@@ -1397,7 +1416,7 @@ app.post('/api/platform/users', requireAuth, async (req, res, next) => {
     const employeeCheck = await pool.query(
       `SELECT id, name
        FROM employees
-       WHERE id = $1 AND tenant_id = $2`,
+       WHERE id = $1 AND (tenant_id = $2 OR tenant_id IS NULL)`,
       [employeeId, tenantId]
     );
     if (!employeeCheck.rowCount) {
