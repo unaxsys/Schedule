@@ -2960,10 +2960,27 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
 
 function normalizeDateOnly(value) {
   const text = String(value || '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return text;
+  }
+
+  const dottedMatch = text.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (!dottedMatch) {
     return '';
   }
-  return text;
+
+  const [, day, month, year] = dottedMatch;
+  const normalized = `${year}-${month}-${day}`;
+  const date = new Date(`${normalized}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  if (date.getFullYear() !== Number(year) || (date.getMonth() + 1) !== Number(month) || date.getDate() !== Number(day)) {
+    return '';
+  }
+
+  return normalized;
 }
 
 function isValidEmploymentDates(startDate, endDate) {
@@ -3050,8 +3067,8 @@ function isDateWithinEmployment(employee, date) {
 
 function promptLastWorkingDate(employee, defaultDate) {
   const currentEndDate = normalizeDateOnly(employee.endDate);
-  const suggestedDate = currentEndDate || defaultDate;
-  const result = window.prompt('Въведете последен работен ден (YYYY-MM-DD):', suggestedDate);
+  const suggestedDate = formatDateForDisplay(currentEndDate || defaultDate);
+  const result = window.prompt('Въведете последен работен ден (ДД.ММ.ГГГГ):', suggestedDate);
   if (result === null) {
     return null;
   }
@@ -3512,30 +3529,51 @@ function setStatus(message, good) {
 }
 
 function getVacationUsedForYear(employeeId, year) {
-  let used = 0;
+  return getVacationDateKeysForYear(employeeId, year).length;
+}
+
+function getVacationDateKeysForYear(employeeId, year) {
+  const entries = new Set();
+
   Object.entries(state.schedule).forEach(([key, code]) => {
     if (!key.startsWith(`${employeeId}|${year}-`) || code !== 'O') {
       return;
     }
-    used += 1;
+
+    const [, monthKey, dayPart] = key.split('|');
+    const day = Number(dayPart);
+    if (!monthKey || !Number.isFinite(day)) {
+      return;
+    }
+    entries.add(`${monthKey}-${String(day).padStart(2, '0')}`);
   });
-  return used;
+
+  const scheduleById = new Map(state.schedules.map((schedule) => [schedule.id, schedule]));
+  Object.entries(state.scheduleEntriesById).forEach(([entryKey, code]) => {
+    if (code !== 'O') {
+      return;
+    }
+
+    const [scheduleId, entryEmployeeId, dayPart] = entryKey.split('|');
+    if (entryEmployeeId !== employeeId) {
+      return;
+    }
+
+    const schedule = scheduleById.get(scheduleId);
+    const monthKey = schedule?.month_key;
+    const day = Number(dayPart);
+    if (!monthKey || !monthKey.startsWith(`${year}-`) || !Number.isFinite(day)) {
+      return;
+    }
+
+    entries.add(`${monthKey}-${String(day).padStart(2, '0')}`);
+  });
+
+  return Array.from(entries).sort();
 }
 
-
 function getVacationPeriodsForYear(employeeId, year) {
-  const entries = Object.keys(state.schedule)
-    .filter((key) => key.startsWith(`${employeeId}|${year}-`) && state.schedule[key] === 'O')
-    .map((key) => {
-      const [, monthKey, dayPart] = key.split('|');
-      const day = Number(dayPart);
-      if (!monthKey || !Number.isFinite(day)) {
-        return null;
-      }
-      return `${monthKey}-${String(day).padStart(2, '0')}`;
-    })
-    .filter(Boolean)
-    .sort();
+  const entries = getVacationDateKeysForYear(employeeId, year);
 
   if (!entries.length) {
     return '-';
@@ -3559,7 +3597,11 @@ function getVacationPeriodsForYear(employeeId, year) {
   ranges.push([rangeStart, previous]);
 
   return ranges
-    .map(([start, end]) => (start === end ? start : `${start} - ${end}`))
+    .map(([start, end]) => {
+      const formattedStart = formatDateForDisplay(start);
+      const formattedEnd = formatDateForDisplay(end);
+      return start === end ? formattedStart : `${formattedStart} - ${formattedEnd}`;
+    })
     .join(', ');
 }
 
