@@ -452,6 +452,22 @@
       </div>
     </main>
 
+
+    <div id="vacationCorrectionModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="vacationCorrectionTitle">
+      <div class="modal-card">
+        <h3 id="vacationCorrectionTitle">Корекция на период отпуск</h3>
+        <form id="vacationCorrectionModalForm" class="employee-edit-form">
+          <label class="field-inline">Нова начална дата <input id="vacationCorrectionModalStartInput" type="date" required /></label>
+          <label class="field-inline">Брой работни дни <input id="vacationCorrectionModalDaysInput" type="number" min="1" step="1" required /></label>
+          <div id="vacationCorrectionModalInfo" class="role-permission-note"></div>
+          <div class="modal-actions">
+            <button type="submit" class="btn-edit">Запази корекция</button>
+            <button id="cancelVacationCorrectionModalBtn" type="button">Отказ</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <div id="employeeEditModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="employeeEditTitle">
       <div class="modal-card">
         <h3 id="employeeEditTitle">Редакция на служител</h3>

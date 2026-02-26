@@ -70,7 +70,8 @@ const state = {
   requiresTenantSelection: false,
   expandedVacationDossierEmployeeId: null,
   vacationLedgerDepartmentFilter: 'all',
-  vacationLedgerSearchQuery: ''
+  vacationLedgerSearchQuery: '',
+  vacationCorrectionContext: null
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -113,6 +114,12 @@ const vacationDaysInput = document.getElementById('vacationDaysInput');
 const vacationLedger = document.getElementById('vacationLedger');
 const vacationDepartmentFilterSelect = document.getElementById('vacationDepartmentFilterSelect');
 const vacationSearchInput = document.getElementById('vacationSearchInput');
+const vacationCorrectionModal = document.getElementById('vacationCorrectionModal');
+const vacationCorrectionModalForm = document.getElementById('vacationCorrectionModalForm');
+const vacationCorrectionModalStartInput = document.getElementById('vacationCorrectionModalStartInput');
+const vacationCorrectionModalDaysInput = document.getElementById('vacationCorrectionModalDaysInput');
+const vacationCorrectionModalInfo = document.getElementById('vacationCorrectionModalInfo');
+const cancelVacationCorrectionModalBtn = document.getElementById('cancelVacationCorrectionModalBtn');
 const ratesForm = document.getElementById('ratesForm');
 const weekendRateInput = document.getElementById('weekendRateInput');
 const holidayRateInput = document.getElementById('holidayRateInput');
@@ -223,6 +230,7 @@ async function init() {
   attachRatesForm();
   attachVacationForm();
   attachVacationFilters();
+  attachVacationCorrectionModalControls();
   attachShiftForm();
   attachLockAndExport();
   attachSettingsControls();
@@ -2631,22 +2639,7 @@ function renderVacationLedger() {
         return;
       }
 
-      const defaultDays = getWorkingDaysBetween(rangeStart, rangeEnd);
-      const inputStart = window.prompt('Нова начална дата (YYYY-MM-DD):', rangeStart);
-      if (!inputStart) {
-        return;
-      }
-      const inputDaysRaw = window.prompt('Брой работни дни за новия период:', String(defaultDays));
-      if (!inputDaysRaw) {
-        return;
-      }
-      const inputDays = Number(inputDaysRaw);
-      if (!Number.isInteger(inputDays) || inputDays < 1) {
-        setStatus('Невалиден брой работни дни за корекция.', false);
-        return;
-      }
-
-      await correctVacationPeriod(employee, rangeStart, rangeEnd, inputStart, inputDays);
+      openVacationCorrectionModal(employee, rangeStart, rangeEnd);
     });
   });
 
@@ -2676,6 +2669,84 @@ function renderVacationLedger() {
       renderAll();
       setStatus('Периодът отпуск е изтрит успешно.', true);
     });
+  });
+}
+
+function openVacationCorrectionModal(employee, rangeStart, rangeEnd) {
+  if (!vacationCorrectionModal || !vacationCorrectionModalForm || !vacationCorrectionModalStartInput || !vacationCorrectionModalDaysInput) {
+    return;
+  }
+
+  const defaultDays = getWorkingDaysBetween(rangeStart, rangeEnd);
+  state.vacationCorrectionContext = {
+    employeeId: employee.id,
+    rangeStart,
+    rangeEnd
+  };
+
+  vacationCorrectionModalStartInput.value = rangeStart;
+  vacationCorrectionModalDaysInput.value = String(defaultDays || 1);
+  if (vacationCorrectionModalInfo) {
+    vacationCorrectionModalInfo.textContent = `Служител: ${employee.name} | Стар период: ${formatDateForDisplay(rangeStart)} - ${formatDateForDisplay(rangeEnd)}`;
+  }
+  vacationCorrectionModal.classList.remove('hidden');
+}
+
+function closeVacationCorrectionModal() {
+  if (!vacationCorrectionModal || !vacationCorrectionModalForm) {
+    return;
+  }
+
+  vacationCorrectionModalForm.reset();
+  state.vacationCorrectionContext = null;
+  vacationCorrectionModal.classList.add('hidden');
+}
+
+function attachVacationCorrectionModalControls() {
+  if (!vacationCorrectionModal || !vacationCorrectionModalForm) {
+    return;
+  }
+
+  vacationCorrectionModalForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+
+    if (!canManageVacationCorrections()) {
+      setStatus('Корекцията на отпуск е позволена само за Мениджър и Администратор.', false);
+      return;
+    }
+
+    const context = state.vacationCorrectionContext;
+    if (!context) {
+      closeVacationCorrectionModal();
+      return;
+    }
+
+    const employee = state.employees.find((entry) => entry.id === context.employeeId);
+    if (!employee) {
+      setStatus('Служителят за корекция не е намерен.', false);
+      closeVacationCorrectionModal();
+      return;
+    }
+
+    const inputStart = (vacationCorrectionModalStartInput?.value || '').trim();
+    const inputDays = Number(vacationCorrectionModalDaysInput?.value);
+    if (!inputStart || !Number.isInteger(inputDays) || inputDays < 1) {
+      setStatus('Невалидни данни за корекция на отпуск.', false);
+      return;
+    }
+
+    await correctVacationPeriod(employee, context.rangeStart, context.rangeEnd, inputStart, inputDays);
+    closeVacationCorrectionModal();
+  });
+
+  cancelVacationCorrectionModalBtn?.addEventListener('click', () => {
+    closeVacationCorrectionModal();
+  });
+
+  vacationCorrectionModal.addEventListener('click', (event) => {
+    if (event.target === vacationCorrectionModal) {
+      closeVacationCorrectionModal();
+    }
   });
 }
 
