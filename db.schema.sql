@@ -1,65 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE TABLE IF NOT EXISTS departments (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL UNIQUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS employees (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL,
-  tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  department TEXT NULL,
-  department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL,
-  position TEXT NOT NULL,
-  egn CHAR(10) NULL,
-  vacation_allowance INTEGER NOT NULL DEFAULT 20,
-  base_vacation_allowance INTEGER NOT NULL DEFAULT 20,
-  telk BOOLEAN NOT NULL DEFAULT FALSE,
-  young_worker_benefit BOOLEAN NOT NULL DEFAULT FALSE,
-  start_date DATE NOT NULL DEFAULT CURRENT_DATE,
-  end_date DATE NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  CONSTRAINT employees_employment_period_check CHECK (end_date IS NULL OR end_date >= start_date)
-);
-
-CREATE INDEX IF NOT EXISTS idx_employees_department_id ON employees(department_id);
-CREATE INDEX IF NOT EXISTS idx_employees_tenant_id ON employees(tenant_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_egn_unique ON employees(egn) WHERE egn IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_employees_start_date ON employees(start_date);
-CREATE INDEX IF NOT EXISTS idx_employees_end_date ON employees(end_date);
-CREATE INDEX IF NOT EXISTS idx_employees_young_worker_benefit ON employees(young_worker_benefit);
-
-CREATE TABLE IF NOT EXISTS schedules (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL,
-  month_key TEXT NOT NULL CHECK (month_key ~ '^\d{4}-\d{2}$'),
-  department TEXT NULL,
-  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'locked')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS schedule_entries (
-  schedule_id UUID NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
-  day INTEGER NOT NULL CHECK (day >= 1 AND day <= 31),
-  shift_code VARCHAR(16) NOT NULL,
-  month_key TEXT NOT NULL CHECK (month_key ~ '^\d{4}-\d{2}$'),
-  PRIMARY KEY (schedule_id, employee_id, day)
-);
-
-CREATE INDEX IF NOT EXISTS idx_schedule_entries_month_key ON schedule_entries(month_key);
-
-CREATE TABLE IF NOT EXISTS shift_templates (
-  code VARCHAR(16) PRIMARY KEY,
-  name TEXT NOT NULL,
-  start_time CHAR(5) NOT NULL,
-  end_time CHAR(5) NOT NULL,
-  hours NUMERIC(6,2) NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS tenants (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
@@ -90,8 +30,74 @@ CREATE TABLE IF NOT EXISTS tenant_users (
   PRIMARY KEY (tenant_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS departments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (tenant_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS employees (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  department TEXT NULL,
+  department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL,
+  position TEXT NOT NULL,
+  egn CHAR(10) NULL,
+  vacation_allowance INTEGER NOT NULL DEFAULT 20,
+  base_vacation_allowance INTEGER NOT NULL DEFAULT 20,
+  telk BOOLEAN NOT NULL DEFAULT FALSE,
+  young_worker_benefit BOOLEAN NOT NULL DEFAULT FALSE,
+  start_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  end_date DATE NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT employees_employment_period_check CHECK (end_date IS NULL OR end_date >= start_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_employees_department_id ON employees(department_id);
+CREATE INDEX IF NOT EXISTS idx_employees_tenant_id ON employees(tenant_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_tenant_egn_unique ON employees(tenant_id, egn) WHERE egn IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_employees_start_date ON employees(start_date);
+CREATE INDEX IF NOT EXISTS idx_employees_end_date ON employees(end_date);
+CREATE INDEX IF NOT EXISTS idx_employees_young_worker_benefit ON employees(young_worker_benefit);
+
+CREATE TABLE IF NOT EXISTS schedules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  month_key TEXT NOT NULL CHECK (month_key ~ '^\d{4}-\d{2}$'),
+  department TEXT NULL,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'locked')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (tenant_id, month_key, department)
+);
+
+CREATE TABLE IF NOT EXISTS schedule_entries (
+  schedule_id UUID NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+  day INTEGER NOT NULL CHECK (day >= 1 AND day <= 31),
+  shift_code VARCHAR(16) NOT NULL,
+  month_key TEXT NOT NULL CHECK (month_key ~ '^\d{4}-\d{2}$'),
+  PRIMARY KEY (schedule_id, employee_id, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_schedule_entries_month_key ON schedule_entries(month_key);
+
+CREATE TABLE IF NOT EXISTS shift_templates (
+  code VARCHAR(16) PRIMARY KEY,
+  name TEXT NOT NULL,
+  start_time CHAR(5) NOT NULL,
+  end_time CHAR(5) NOT NULL,
+  hours NUMERIC(6,2) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_tenant_users_user_id ON tenant_users(user_id);
 CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant_id ON tenant_users(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_departments_tenant_id ON departments(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_schedules_tenant_id ON schedules(tenant_id);
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
