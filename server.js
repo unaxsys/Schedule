@@ -554,7 +554,9 @@ async function initDatabase() {
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS shift_templates (
-      code VARCHAR(16) PRIMARY KEY,
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      code VARCHAR(16) NOT NULL,
       name TEXT NOT NULL,
       start_time CHAR(5) NOT NULL,
       end_time CHAR(5) NOT NULL,
@@ -601,6 +603,34 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
   await pool.query(`ALTER TABLE departments ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
   await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
+  await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS id UUID`);
+  await pool.query(`UPDATE shift_templates SET id = gen_random_uuid() WHERE id IS NULL`);
+  await pool.query(`ALTER TABLE shift_templates ALTER COLUMN id SET DEFAULT gen_random_uuid()`);
+  await pool.query(`ALTER TABLE shift_templates ALTER COLUMN id SET NOT NULL`);
+  await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'shift_templates'::regclass
+          AND conname = 'shift_templates_pkey'
+      ) THEN
+        ALTER TABLE shift_templates DROP CONSTRAINT shift_templates_pkey;
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'shift_templates'::regclass
+          AND conname = 'shift_templates_id_pkey'
+      ) THEN
+        ALTER TABLE shift_templates ADD CONSTRAINT shift_templates_id_pkey PRIMARY KEY (id);
+      END IF;
+    END $$;
+  `);
 
   await pool.query(`
     DO $$
@@ -709,6 +739,8 @@ async function initDatabase() {
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_schedules_tenant_month_department_unique ON schedules(tenant_id, month_key, department)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedules_tenant_id ON schedules(tenant_id)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_entries_month_key ON schedule_entries(month_key)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_shift_templates_tenant_code_unique ON shift_templates(tenant_id, code)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_shift_templates_tenant_id ON shift_templates(tenant_id)`);
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tenant_users_user_id ON tenant_users(user_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant_id ON tenant_users(tenant_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status)');
@@ -734,6 +766,35 @@ async function initDatabase() {
     }
   } catch (bootstrapError) {
     console.error('EMPLOYEE TENANT BACKFILL WARN:', bootstrapError.message);
+  }
+
+  // Tenant bootstrap for legacy shift templates that were previously global.
+  // If there is exactly one tenant, attach all templates to it.
+  // If there are multiple tenants, clone templates for every tenant, then remove global rows.
+  try {
+    const tenantsResult = await pool.query('SELECT id FROM tenants ORDER BY created_at ASC');
+    const tenantIds = tenantsResult.rows.map((row) => row.id);
+    if (tenantIds.length === 1) {
+      await pool.query(
+        `UPDATE shift_templates
+         SET tenant_id = $1
+         WHERE tenant_id IS NULL`,
+        [tenantIds[0]]
+      );
+    } else if (tenantIds.length > 1) {
+      await pool.query(
+        `INSERT INTO shift_templates (id, tenant_id, code, name, start_time, end_time, hours, created_at)
+         SELECT gen_random_uuid(), tenant.id, st.code, st.name, st.start_time, st.end_time, st.hours, st.created_at
+         FROM shift_templates st
+         CROSS JOIN (SELECT id FROM tenants) AS tenant
+         WHERE st.tenant_id IS NULL
+         ON CONFLICT (tenant_id, code) DO NOTHING`
+      );
+
+      await pool.query('DELETE FROM shift_templates WHERE tenant_id IS NULL');
+    }
+  } catch (shiftTemplateBootstrapError) {
+    console.error('SHIFT TEMPLATE TENANT BACKFILL WARN:', shiftTemplateBootstrapError.message);
   }
 
   await pool.query(`
@@ -805,7 +866,10 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
          start_time AS start,
          end_time AS "end",
          hours
-         FROM shift_templates ORDER BY created_at, code`
+         FROM shift_templates
+         WHERE tenant_id = $1
+         ORDER BY created_at, code`,
+        [tenantId]
       ),
       pool.query(
         `SELECT id, name, created_at AS "createdAt"
@@ -1444,15 +1508,15 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
 
   try {
     await pool.query(
-      `INSERT INTO shift_templates (code, name, start_time, end_time, hours)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (code)
+      `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, hours)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (tenant_id, code)
        DO UPDATE SET
          name = EXCLUDED.name,
          start_time = EXCLUDED.start_time,
          end_time = EXCLUDED.end_time,
          hours = EXCLUDED.hours`,
-      [code, name, start, end, hours]
+      [req.tenantId, code, name, start, end, hours]
     );
 
     res.json({ ok: true });
@@ -1463,7 +1527,7 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
 
 app.delete('/api/shift-template/:code', requireAuth, requireTenantContext, async (req, res) => {
   try {
-    await pool.query('DELETE FROM shift_templates WHERE code = $1', [req.params.code]);
+    await pool.query('DELETE FROM shift_templates WHERE tenant_id = $1 AND code = $2', [req.tenantId, req.params.code]);
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -1511,7 +1575,9 @@ app.post('/api/calc/summary', requireAuth, requireTenantContext, async (req, res
               end_time,
               hours
        FROM shift_templates
-       ORDER BY code`
+       WHERE tenant_id = $1
+       ORDER BY code`,
+      [actor.tenantId]
     );
 
     const schedulesQuery = await pool.query(
