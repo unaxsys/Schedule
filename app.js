@@ -65,7 +65,8 @@ const state = {
   platformUserEmployees: [],
   platformUsers: [],
   availableTenants: [],
-  pendingLoginToken: ''
+  pendingLoginToken: '',
+  requiresTenantSelection: false
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -224,9 +225,13 @@ async function init() {
   updateAuthGate();
   await loadMyTenants();
 
-  const synced = await loadFromBackend();
-  if (!synced) {
-    setStatus(`Локален режим (localStorage). API: ${state.apiBaseUrl}`, false);
+  const canLoadTenantData = Boolean(state.currentUser && state.authToken);
+  let synced = false;
+  if (canLoadTenantData) {
+    synced = await loadFromBackend();
+    if (!synced) {
+      setStatus(`Локален режим (localStorage). API: ${state.apiBaseUrl}`, false);
+    }
   }
 
   monthPicker.value = state.month;
@@ -336,6 +341,7 @@ function attachRegistrationControls() {
     if (mode !== 'choose_tenant') {
       state.pendingLoginToken = '';
       state.availableTenants = [];
+      state.requiresTenantSelection = false;
     }
     updateAuthGate();
   };
@@ -378,12 +384,14 @@ function attachRegistrationControls() {
         });
 
         if (payload.mode === 'choose_tenant') {
-          state.pendingLoginToken = payload.loginToken || '';
-          state.availableTenants = Array.isArray(payload.tenants) ? payload.tenants : [];
+          state.authToken = '';
           state.currentUser = payload.user || null;
-          clearAuthSession();
           state.pendingLoginToken = payload.loginToken || '';
           state.availableTenants = Array.isArray(payload.tenants) ? payload.tenants : [];
+          state.requiresTenantSelection = true;
+          localStorage.removeItem('authToken');
+          localStorage.removeItem('currentUser');
+
           if (chooseTenantScreen) {
             chooseTenantScreen.classList.remove('hidden');
           }
@@ -398,6 +406,7 @@ function attachRegistrationControls() {
 
         state.authToken = payload.token;
         state.currentUser = payload.user;
+        state.requiresTenantSelection = false;
         syncRoleFromAuthenticatedUser();
         persistAuthSession();
         resetTenantScopedState({ clearLocalStorage: false });
@@ -575,21 +584,42 @@ async function loadMyTenants() {
 }
 
 async function completeTenantSelection(tenantId) {
-  if (!state.pendingLoginToken || !isValidUuid(tenantId)) {
+  if (!isValidUuid(tenantId)) {
     setStatus('Невалиден избор на фирма.', false);
     return;
   }
 
   try {
-    const payload = await apiRequest('/api/auth/select-tenant', {
-      method: 'POST',
-      body: JSON.stringify({
-        loginToken: state.pendingLoginToken,
-        tenantId,
-      }),
-    });
+    let payload = null;
+
+    if (state.pendingLoginToken) {
+      payload = await apiRequest('/api/auth/select-tenant', {
+        method: 'POST',
+        body: JSON.stringify({
+          loginToken: state.pendingLoginToken,
+          tenantId,
+        }),
+      });
+    } else if (state.authToken) {
+      payload = await apiRequest('/api/auth/switch-tenant', {
+        method: 'POST',
+        body: JSON.stringify({ tenantId }),
+      });
+      payload = {
+        mode: 'ok',
+        token: payload.token,
+        tenant: payload.tenant,
+        user: {
+          ...(state.currentUser || {}),
+          tenantId: payload.tenant?.id || tenantId,
+        },
+      };
+    } else {
+      throw new Error('Липсва валидна сесия за избор на фирма.');
+    }
 
     state.pendingLoginToken = '';
+    state.requiresTenantSelection = false;
     state.authToken = payload.token;
     state.currentUser = payload.user;
     syncRoleFromAuthenticatedUser();
@@ -603,7 +633,7 @@ async function completeTenantSelection(tenantId) {
     signInForm?.reset();
     await loadFromBackend();
     renderAll();
-    setStatus(`Успешен вход: ${payload.user.email}`, true);
+    setStatus(`Успешен избор на фирма: ${payload.tenant?.name || tenantId}`, true);
   } catch (error) {
     setStatus(`Грешка при избор на фирма: ${error.message}`, false);
   }
@@ -625,19 +655,19 @@ function updateAuthUi() {
 
 function updateAuthGate() {
   const isAuthenticated = Boolean(state.currentUser && state.authToken);
+  const showChooseTenant = Boolean(state.requiresTenantSelection) && state.availableTenants.length > 1;
 
   if (preAuthScreen) {
-    preAuthScreen.classList.toggle('hidden', isAuthenticated);
+    preAuthScreen.classList.toggle('hidden', isAuthenticated && !showChooseTenant);
   }
   if (appShell) {
-    appShell.classList.toggle('hidden', !isAuthenticated);
+    appShell.classList.toggle('hidden', !isAuthenticated || showChooseTenant);
   }
   if (logoutBtn) {
-    logoutBtn.classList.toggle('hidden', !isAuthenticated);
+    logoutBtn.classList.toggle('hidden', !isAuthenticated || showChooseTenant);
   }
 
   if (chooseTenantScreen) {
-    const showChooseTenant = !isAuthenticated && Boolean(state.pendingLoginToken) && state.availableTenants.length > 1;
     chooseTenantScreen.classList.toggle('hidden', !showChooseTenant);
     if (showChooseTenant) {
       renderChooseTenantScreen();
@@ -679,6 +709,7 @@ function clearAuthSession() {
   state.selectedTenantId = '';
   state.pendingLoginToken = '';
   state.availableTenants = [];
+  state.requiresTenantSelection = false;
   localStorage.removeItem('authToken');
   localStorage.removeItem('currentUser');
   localStorage.removeItem('selectedTenantId');
@@ -3006,8 +3037,28 @@ async function loadFromBackend() {
     persistEmployeesLocal();
     saveScheduleLocal();
     return true;
-  } catch {
+  } catch (error) {
     state.backendAvailable = false;
+
+    const message = cleanStoredValue(error?.message);
+    const missingTenantContext = message.includes('Изберете организация (tenant)') || message.includes('Missing tenant context');
+
+    if (state.authToken && missingTenantContext) {
+      try {
+        const payload = await apiRequest('/api/me/tenants', { method: 'GET' });
+        const tenants = Array.isArray(payload.tenants) ? payload.tenants : [];
+        if (tenants.length > 1) {
+          state.availableTenants = tenants;
+          state.pendingLoginToken = '';
+          state.requiresTenantSelection = true;
+          updateAuthGate();
+          setStatus('Изберете фирма за продължение.', false);
+        }
+      } catch (_inner) {
+        // fallback ignore
+      }
+    }
+
     return false;
   }
 }
