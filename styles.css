@@ -157,7 +157,7 @@ header p {
 }
 
 .form-field--checkbox {
-  grid-column: span 3;
+  grid-column: 1 / -1;
 }
 
 .form-field--action {
@@ -641,6 +641,8 @@ select.shift-select {
   color: #1e40af;
   font-size: 0.78rem;
   font-weight: 700;
+  line-height: 1.2;
+  min-height: 0.95rem;
   display: block;
   margin-bottom: 0.2rem;
 }
@@ -1250,7 +1252,10 @@ html.welcome-lock, html.welcome-lock body { height: 100%; overflow: hidden; }
     grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
-  .form-field--checkbox,
+  .form-field--checkbox {
+    grid-column: 1 / -1;
+  }
+
   .form-field--action {
     grid-column: span 3;
   }
@@ -1261,7 +1266,10 @@ html.welcome-lock, html.welcome-lock body { height: 100%; overflow: hidden; }
     grid-template-columns: 1fr;
   }
 
-  .form-field--checkbox,
+  .form-field--checkbox {
+    grid-column: 1 / -1;
+  }
+
   .form-field--action {
     grid-column: span 1;
   }
