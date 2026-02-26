@@ -231,6 +231,7 @@ async function init() {
   attachVacationForm();
   attachVacationFilters();
   attachVacationCorrectionModalControls();
+  attachVacationDateValidationControls();
   attachShiftForm();
   attachLockAndExport();
   attachSettingsControls();
@@ -1804,6 +1805,45 @@ function updateVacationAllowanceHint() {
   vacationAllowanceHint.textContent = `Полагаем за ${targetYear}: ${allowance} дни`;
 }
 
+
+function isWorkingDateInputValue(value) {
+  const normalized = normalizeDateOnly(value);
+  if (!normalized) {
+    return false;
+  }
+
+  const date = new Date(`${normalized}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return false;
+  }
+
+  return !isWeekend(date) && !isOfficialHoliday(date);
+}
+
+function updateVacationDateInputValidity(input, options = {}) {
+  if (!input) {
+    return true;
+  }
+
+  const value = (input.value || '').trim();
+  if (!value) {
+    input.setCustomValidity('');
+    return false;
+  }
+
+  const isWorkingDay = isWorkingDateInputValue(value);
+  if (!isWorkingDay) {
+    input.setCustomValidity('Не може да се избира почивен или празничен ден за начало на отпуск.');
+    if (options.showStatus) {
+      setStatus('Не може да се пусне отпуск за почивен или празничен ден.', false);
+    }
+    return false;
+  }
+
+  input.setCustomValidity('');
+  return true;
+}
+
 function getWorkingVacationDates(startDate, workingDays) {
   const dates = [];
   const current = new Date(startDate);
@@ -2404,6 +2444,25 @@ function renderVacationEmployeeOptions() {
   });
 }
 
+
+function attachVacationDateValidationControls() {
+  vacationStartInput?.addEventListener('input', () => {
+    updateVacationDateInputValidity(vacationStartInput, { showStatus: false });
+  });
+
+  vacationStartInput?.addEventListener('change', () => {
+    updateVacationDateInputValidity(vacationStartInput, { showStatus: true });
+  });
+
+  vacationCorrectionModalStartInput?.addEventListener('input', () => {
+    updateVacationDateInputValidity(vacationCorrectionModalStartInput, { showStatus: false });
+  });
+
+  vacationCorrectionModalStartInput?.addEventListener('change', () => {
+    updateVacationDateInputValidity(vacationCorrectionModalStartInput, { showStatus: true });
+  });
+}
+
 function attachVacationForm() {
   vacationForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -2414,10 +2473,11 @@ function attachVacationForm() {
     }
 
     const employeeId = vacationEmployeeSelect.value;
+    const isWorkingStartDate = updateVacationDateInputValidity(vacationStartInput, { showStatus: true });
     const start = new Date(`${vacationStartInput.value}T00:00:00`);
     const requestedWorkingDays = Number(vacationDaysInput.value);
 
-    if (!employeeId || Number.isNaN(start.getTime()) || !Number.isInteger(requestedWorkingDays) || requestedWorkingDays < 1) {
+    if (!employeeId || !isWorkingStartDate || Number.isNaN(start.getTime()) || !Number.isInteger(requestedWorkingDays) || requestedWorkingDays < 1) {
       return;
     }
 
@@ -2729,8 +2789,9 @@ function attachVacationCorrectionModalControls() {
     }
 
     const inputStart = (vacationCorrectionModalStartInput?.value || '').trim();
+    const isWorkingStartDate = updateVacationDateInputValidity(vacationCorrectionModalStartInput, { showStatus: true });
     const inputDays = Number(vacationCorrectionModalDaysInput?.value);
-    if (!inputStart || !Number.isInteger(inputDays) || inputDays < 1) {
+    if (!inputStart || !isWorkingStartDate || !Number.isInteger(inputDays) || inputDays < 1) {
       setStatus('Невалидни данни за корекция на отпуск.', false);
       return;
     }
