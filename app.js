@@ -1418,7 +1418,7 @@ employeeForm.addEventListener('submit', async (event) => {
     egn: (egnInput?.value || '').trim(),
     startDate: (startDateInput?.value || '').trim(),
     endDate: (endDateInput?.value || '').trim() || null,
-    vacationAllowance: calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit),
+    vacationAllowance: calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, (startDateInput?.value || '').trim()),
     telk: hasTelk,
     youngWorkerBenefit: hasYoungWorkerBenefit,
     baseVacationAllowance
@@ -1705,7 +1705,7 @@ function getExtraVacationDays(hasTelk, hasYoungWorkerBenefit) {
   return (hasTelk ? TELK_EXTRA_VACATION_DAYS : 0) + (hasYoungWorkerBenefit ? YOUNG_WORKER_EXTRA_VACATION_DAYS : 0);
 }
 
-function calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit) {
+function calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, startDate, year = Number((state.month || todayMonth()).split('-')[0])) {
   const normalizedBase = Number(baseVacationAllowance);
   if (!Number.isFinite(normalizedBase)) {
     return 0;
@@ -3497,7 +3497,7 @@ function normalizeEmployeeVacationData(employee) {
   normalized.telk = Boolean(normalized.telk);
   normalized.youngWorkerBenefit = Boolean(normalized.youngWorkerBenefit);
   normalized.baseVacationAllowance = resolveBaseVacationAllowance(normalized);
-  normalized.vacationAllowance = calculateVacationAllowance(normalized.baseVacationAllowance, normalized.telk, normalized.youngWorkerBenefit);
+  normalized.vacationAllowance = calculateVacationAllowance(normalized.baseVacationAllowance, normalized.telk, normalized.youngWorkerBenefit, normalized.startDate);
   return normalized;
 }
 
