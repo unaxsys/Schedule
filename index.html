@@ -254,12 +254,18 @@
                 <input id="platformUserPasswordInput" type="text" minlength="8" required placeholder="Парола" />
                 <button id="generatePlatformPasswordBtn" type="button">Генерирай парола</button>
               </div>
-            <select id="platformUserRoleInput">
-              <option value="manager">Мениджър</option>
-              <option value="user">Потребител</option>
-            </select>
-            <button class="btn-add" type="submit">Добави потребител</button>
-          </form>
+              <select id="platformUserRoleInput">
+                <option value="manager">Мениджър</option>
+                <option value="user">Потребител</option>
+              </select>
+              <button class="btn-add" type="submit">Добави потребител</button>
+            </form>
+
+            <div class="row" style="margin-top:10px; align-items:center; gap:10px;">
+              <h4 style="margin:0;">Списък с потребители</h4>
+              <button id="refreshPlatformUsersBtn" type="button">Обнови</button>
+            </div>
+            <div id="platformUsersList" class="employee-list"></div>
           </div>
         </section>
 

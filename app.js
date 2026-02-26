@@ -60,7 +60,8 @@ const state = {
   authToken: loadAuthToken(),
   currentUser: loadCurrentUser(),
   selectedTenantId: loadSelectedTenantId(),
-  platformUserEmployees: []
+  platformUserEmployees: [],
+  platformUsers: []
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -159,6 +160,8 @@ const platformUserEmailInput = document.getElementById('platformUserEmailInput')
 const platformUserPasswordInput = document.getElementById('platformUserPasswordInput');
 const generatePlatformPasswordBtn = document.getElementById('generatePlatformPasswordBtn');
 const platformUserRoleInput = document.getElementById('platformUserRoleInput');
+const refreshPlatformUsersBtn = document.getElementById('refreshPlatformUsersBtn');
+const platformUsersList = document.getElementById('platformUsersList');
 const refreshSuperAdminBtn = document.getElementById('refreshSuperAdminBtn');
 const superAdminUsage = document.getElementById('superAdminUsage');
 const superAdminRegistrations = document.getElementById('superAdminRegistrations');
@@ -428,9 +431,20 @@ function attachRegistrationControls() {
           }),
         });
         createPlatformUserForm.reset();
+        await loadPlatformUsers();
         setStatus('Потребителят е добавен успешно.', true);
       } catch (error) {
         setStatus(`Грешка при добавяне на потребител: ${error.message}`, false);
+      }
+    });
+  }
+  if (refreshPlatformUsersBtn) {
+    refreshPlatformUsersBtn.addEventListener('click', async () => {
+      try {
+        await loadPlatformUsers();
+        setStatus('Списъкът с потребители е обновен.', true);
+      } catch (error) {
+        setStatus(`Грешка при зареждане на потребители: ${error.message}`, false);
       }
     });
   }
@@ -981,6 +995,9 @@ function attachSettingsSubtabs() {
         loadPlatformUserEmployees().catch(() => {
           renderPlatformUserEmployeeOptions();
         });
+        loadPlatformUsers().catch(() => {
+          renderPlatformUsersList();
+        });
       }
     });
   });
@@ -1454,6 +1471,135 @@ async function loadPlatformUserEmployees() {
   }
 
   renderPlatformUserEmployeeOptions();
+}
+
+async function loadPlatformUsers() {
+  if (!platformUsersList) {
+    return;
+  }
+
+  if (!state.backendAvailable) {
+    state.platformUsers = [];
+    renderPlatformUsersList();
+    return;
+  }
+
+  const tenantId = resolveTenantIdForPlatformUserCreate();
+  if (state.currentUser?.is_super_admin === true && !isValidUuid(tenantId)) {
+    state.platformUsers = [];
+    renderPlatformUsersList();
+    return;
+  }
+
+  const query = state.currentUser?.is_super_admin === true
+    ? `?tenantId=${encodeURIComponent(tenantId)}`
+    : '';
+
+  const payload = await apiRequest(`/api/platform/users${query}`, { method: 'GET' });
+  state.platformUsers = Array.isArray(payload.users) ? payload.users : [];
+  renderPlatformUsersList();
+}
+
+function roleLabelForPlatform(role) {
+  if (role === 'owner') {
+    return 'Собственик';
+  }
+  if (role === 'admin') {
+    return 'Администратор';
+  }
+  if (role === 'manager') {
+    return 'Мениджър';
+  }
+  return 'Потребител';
+}
+
+function renderPlatformUsersList() {
+  if (!platformUsersList) {
+    return;
+  }
+
+  platformUsersList.innerHTML = '';
+
+  if (!state.platformUsers.length) {
+    platformUsersList.innerHTML = '<div class="employee-item"><small>Няма добавени потребители за тази фирма.</small></div>';
+    return;
+  }
+
+  state.platformUsers.forEach((user) => {
+    const row = document.createElement('div');
+    row.className = 'employee-item employee-item--top';
+
+    const isActive = user.isActive !== false;
+
+    const details = document.createElement('div');
+    const nameStrong = document.createElement('strong');
+    nameStrong.textContent = user.fullName || user.email || 'Потребител';
+    const emailSmall = document.createElement('small');
+    emailSmall.textContent = user.email || '—';
+    const metaSmall = document.createElement('small');
+    metaSmall.innerHTML = `Роля: <b>${roleLabelForPlatform(user.role)}</b> | Статус: <b>${isActive ? 'Активен' : 'Спрян'}</b>`;
+    details.append(nameStrong, document.createElement('br'), emailSmall, document.createElement('br'), metaSmall);
+    row.appendChild(details);
+
+    const controls = document.createElement('div');
+    controls.className = 'employee-actions';
+
+    const roleSelect = document.createElement('select');
+    roleSelect.innerHTML = '<option value="admin">Администратор</option><option value="manager">Мениджър</option><option value="user">Потребител</option>';
+    roleSelect.value = ['admin', 'manager', 'user'].includes(user.role) ? user.role : 'user';
+
+    const isOwner = user.role === 'owner';
+    if (isOwner) {
+      roleSelect.value = 'admin';
+      roleSelect.disabled = true;
+    }
+
+    const saveRoleBtn = document.createElement('button');
+    saveRoleBtn.type = 'button';
+    saveRoleBtn.className = 'btn-edit';
+    saveRoleBtn.textContent = 'Промени роля';
+    if (isOwner) {
+      saveRoleBtn.disabled = true;
+      saveRoleBtn.title = 'Собственикът не може да бъде понижен.';
+    }
+    saveRoleBtn.addEventListener('click', async () => {
+      try {
+        await apiRequest(`/api/platform/users/${encodeURIComponent(user.id)}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ role: roleSelect.value, isActive }),
+        });
+        await loadPlatformUsers();
+        setStatus('Ролята е обновена успешно.', true);
+      } catch (error) {
+        setStatus(`Грешка при промяна на роля: ${error.message}`, false);
+      }
+    });
+
+    const toggleAccessBtn = document.createElement('button');
+    toggleAccessBtn.type = 'button';
+    toggleAccessBtn.className = isActive ? 'btn-delete' : 'btn-add';
+    toggleAccessBtn.textContent = isActive ? 'Спри достъп' : 'Активирай';
+    if (isOwner) {
+      toggleAccessBtn.disabled = true;
+      toggleAccessBtn.title = 'Собственикът винаги има достъп.';
+    }
+    toggleAccessBtn.addEventListener('click', async () => {
+      try {
+        await apiRequest(`/api/platform/users/${encodeURIComponent(user.id)}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ role: roleSelect.value, isActive: !isActive }),
+        });
+        await loadPlatformUsers();
+        setStatus('Статусът на потребителя е обновен.', true);
+      } catch (error) {
+        setStatus(`Грешка при промяна на статус: ${error.message}`, false);
+      }
+    });
+
+    controls.append(roleSelect, saveRoleBtn, toggleAccessBtn);
+    row.appendChild(controls);
+    platformUsersList.appendChild(row);
+  });
 }
 
 function renderPlatformUserEmployeeOptions() {
