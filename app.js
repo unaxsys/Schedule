@@ -59,6 +59,7 @@ const state = {
   superAdminOverview: null,
   authToken: loadAuthToken(),
   currentUser: loadCurrentUser(),
+  selectedTenantId: loadSelectedTenantId(),
   platformUserEmployees: []
 };
 
@@ -206,6 +207,7 @@ async function init() {
   attachEmployeeEditModalControls();
   attachRegistrationControls();
   attachSuperAdminControls();
+  syncRoleFromAuthenticatedUser();
   updateAuthUi();
   updateAuthGate();
 
@@ -259,7 +261,18 @@ function attachRoleControls() {
 
   userRoleSelect.value = state.userRole;
   userRoleSelect.addEventListener('change', () => {
-    state.userRole = normalizeUserRole(userRoleSelect.value);
+    const selectedRole = normalizeUserRole(userRoleSelect.value);
+    if (selectedRole === 'super_admin' && state.currentUser?.is_super_admin !== true) {
+      state.userRole = 'user';
+      userRoleSelect.value = state.userRole;
+      saveUserRole();
+      updateSuperAdminPortalVisibility();
+      renderEmployees();
+      setStatus('Само платформеният собственик може да използва роля Супер администратор.', false);
+      return;
+    }
+
+    state.userRole = selectedRole;
     saveUserRole();
     updateSuperAdminPortalVisibility();
     renderEmployees();
@@ -317,6 +330,8 @@ function attachRegistrationControls() {
   if (logoutBtn) {
     logoutBtn.addEventListener('click', () => {
       clearAuthSession();
+      state.selectedTenantId = '';
+      persistSelectedTenantId();
       updateAuthUi();
       updateAuthGate();
       setAuthMode('signin');
@@ -341,6 +356,7 @@ function attachRegistrationControls() {
 
         state.authToken = payload.token;
         state.currentUser = payload.user;
+        syncRoleFromAuthenticatedUser();
         persistAuthSession();
 
         signInForm.reset();
@@ -396,9 +412,15 @@ function attachRegistrationControls() {
     createPlatformUserForm.addEventListener('submit', async (event) => {
       event.preventDefault();
       try {
+        const tenantId = resolveTenantIdForPlatformUserCreate();
+        if (state.currentUser?.is_super_admin === true && !isValidUuid(tenantId)) {
+          throw new Error('Липсва tenantId (избери организация).');
+        }
+
         await apiRequest('/api/platform/users', {
           method: 'POST',
           body: JSON.stringify({
+            tenantId,
             employeeId: platformUserEmployeeInput.value,
             email: platformUserEmailInput.value,
             password: platformUserPasswordInput.value,
@@ -480,12 +502,76 @@ function persistAuthSession() {
 function clearAuthSession() {
   state.authToken = '';
   state.currentUser = null;
+  state.selectedTenantId = '';
   localStorage.removeItem('authToken');
   localStorage.removeItem('currentUser');
+  localStorage.removeItem('selectedTenantId');
 }
 
 function cleanStoredValue(value) {
   return String(value || '').trim();
+}
+
+
+function isValidUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(cleanStoredValue(value));
+}
+
+function loadSelectedTenantId() {
+  const fromStorage = cleanStoredValue(localStorage.getItem('selectedTenantId'));
+  return isValidUuid(fromStorage) ? fromStorage : '';
+}
+
+function persistSelectedTenantId() {
+  if (isValidUuid(state.selectedTenantId)) {
+    localStorage.setItem('selectedTenantId', state.selectedTenantId);
+  } else {
+    localStorage.removeItem('selectedTenantId');
+  }
+}
+
+function syncRoleFromAuthenticatedUser() {
+  if (!state.currentUser) {
+    return;
+  }
+
+  if (state.currentUser.is_super_admin === true) {
+    state.userRole = 'super_admin';
+  } else if (state.userRole === 'super_admin') {
+    state.userRole = 'user';
+  }
+
+  if (isValidUuid(state.currentUser.tenantId) && !isValidUuid(state.selectedTenantId)) {
+    state.selectedTenantId = state.currentUser.tenantId;
+    persistSelectedTenantId();
+  }
+
+  saveUserRole();
+  if (userRoleSelect) {
+    userRoleSelect.value = state.userRole;
+  }
+  updateSuperAdminPortalVisibility();
+}
+
+function resolveTenantIdForPlatformUserCreate() {
+  if (state.currentUser?.is_super_admin === true) {
+    const fromForm = cleanStoredValue(reviewRegistrationIdInput?.value);
+    if (isValidUuid(fromForm)) {
+      state.selectedTenantId = fromForm;
+      persistSelectedTenantId();
+      return fromForm;
+    }
+    if (isValidUuid(state.selectedTenantId)) {
+      return state.selectedTenantId;
+    }
+    return '';
+  }
+
+  if (isValidUuid(state.currentUser?.tenantId)) {
+    return state.currentUser.tenantId;
+  }
+
+  return '';
 }
 
 function renderSuperAdminPanel() {
@@ -500,6 +586,15 @@ function renderSuperAdminPanel() {
 
   if (superAdminRegistrations) {
     superAdminRegistrations.innerHTML = '';
+
+    if (!isValidUuid(state.selectedTenantId)) {
+      const firstRegistration = (overview.registrations || [])[0];
+      if (isValidUuid(firstRegistration?.id)) {
+        state.selectedTenantId = firstRegistration.id;
+        persistSelectedTenantId();
+      }
+    }
+
     (overview.registrations || []).forEach((registration) => {
       const item = document.createElement('div');
       item.className = 'employee-item employee-item--top';
