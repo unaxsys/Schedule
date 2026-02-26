@@ -1317,3 +1317,14 @@ html.welcome-lock, html.welcome-lock body { height: 100%; overflow: hidden; }
     min-width: 0;
   }
 }
+
+
+.vacation-filters-row {
+  margin-top: 10px;
+  gap: 10px;
+}
+
+.vacation-filters-row input,
+.vacation-filters-row select {
+  min-width: 180px;
+}
