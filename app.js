@@ -1501,7 +1501,16 @@ async function loadPlatformUsers() {
 }
 
 function roleLabelForPlatform(role) {
-  return role === 'manager' ? 'Мениджър' : 'Потребител';
+  if (role === 'owner') {
+    return 'Собственик';
+  }
+  if (role === 'admin') {
+    return 'Администратор';
+  }
+  if (role === 'manager') {
+    return 'Мениджър';
+  }
+  return 'Потребител';
 }
 
 function renderPlatformUsersList() {
@@ -1536,13 +1545,23 @@ function renderPlatformUsersList() {
     controls.className = 'employee-actions';
 
     const roleSelect = document.createElement('select');
-    roleSelect.innerHTML = '<option value="manager">Мениджър</option><option value="user">Потребител</option>';
-    roleSelect.value = ['manager', 'user'].includes(user.role) ? user.role : 'user';
+    roleSelect.innerHTML = '<option value="admin">Администратор</option><option value="manager">Мениджър</option><option value="user">Потребител</option>';
+    roleSelect.value = ['admin', 'manager', 'user'].includes(user.role) ? user.role : 'user';
+
+    const isOwner = user.role === 'owner';
+    if (isOwner) {
+      roleSelect.value = 'admin';
+      roleSelect.disabled = true;
+    }
 
     const saveRoleBtn = document.createElement('button');
     saveRoleBtn.type = 'button';
     saveRoleBtn.className = 'btn-edit';
     saveRoleBtn.textContent = 'Промени роля';
+    if (isOwner) {
+      saveRoleBtn.disabled = true;
+      saveRoleBtn.title = 'Собственикът не може да бъде понижен.';
+    }
     saveRoleBtn.addEventListener('click', async () => {
       try {
         await apiRequest(`/api/platform/users/${encodeURIComponent(user.id)}`, {
@@ -1560,6 +1579,10 @@ function renderPlatformUsersList() {
     toggleAccessBtn.type = 'button';
     toggleAccessBtn.className = isActive ? 'btn-delete' : 'btn-add';
     toggleAccessBtn.textContent = isActive ? 'Спри достъп' : 'Активирай';
+    if (isOwner) {
+      toggleAccessBtn.disabled = true;
+      toggleAccessBtn.title = 'Собственикът винаги има достъп.';
+    }
     toggleAccessBtn.addEventListener('click', async () => {
       try {
         await apiRequest(`/api/platform/users/${encodeURIComponent(user.id)}`, {

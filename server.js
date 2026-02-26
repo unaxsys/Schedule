@@ -1894,8 +1894,8 @@ app.patch('/api/platform/users/:userId', requireAuth, async (req, res, next) => 
   if (!isValidUuid(userId)) {
     return res.status(400).json({ message: 'Невалиден user id.' });
   }
-  if (role && !['manager', 'user'].includes(role)) {
-    return res.status(400).json({ message: 'Позволени роли: manager, user.' });
+  if (role && !['admin', 'manager', 'user'].includes(role)) {
+    return res.status(400).json({ message: 'Позволени роли: admin, manager, user.' });
   }
   if (!role && !hasIsActive) {
     return res.status(400).json({ message: 'Липсват данни за промяна.' });
@@ -1918,7 +1918,13 @@ app.patch('/api/platform/users/:userId', requireAuth, async (req, res, next) => 
       return res.status(404).json({ message: 'Потребителят не е намерен за тази фирма.' });
     }
 
+    const currentRole = cleanStr(membership.rows[0].role).toLowerCase();
+
     if (role) {
+      if (currentRole === 'owner' && role !== 'owner') {
+        return res.status(403).json({ message: 'Ролята owner не може да бъде понижена.' });
+      }
+
       await pool.query(
         `UPDATE tenant_users
          SET role = $3
