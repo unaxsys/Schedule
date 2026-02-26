@@ -2553,12 +2553,13 @@ function getEmployeeScheduleId(employee) {
 }
 
 function getShiftCodeForCell(employee, month, day) {
+  const localValue = state.schedule[scheduleKey(employee.id, month, day)] || 'P';
   const scheduleId = getEmployeeScheduleId(employee);
   if (scheduleId) {
-    return state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] || 'P';
+    return state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] || localValue;
   }
 
-  return state.schedule[scheduleKey(employee.id, month, day)] || 'P';
+  return localValue;
 }
 
 function renderSchedule() {
