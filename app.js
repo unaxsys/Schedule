@@ -3547,12 +3547,7 @@ function getVacationPeriodsForYear(employeeId, year) {
 
   for (let index = 1; index < entries.length; index += 1) {
     const current = entries[index];
-    const previousDate = new Date(`${previous}T00:00:00`);
-    const expectedNext = new Date(previousDate);
-    expectedNext.setDate(previousDate.getDate() + 1);
-    const expectedKey = `${expectedNext.getFullYear()}-${String(expectedNext.getMonth() + 1).padStart(2, '0')}-${String(expectedNext.getDate()).padStart(2, '0')}`;
-
-    if (current === expectedKey) {
+    if (isContinuousVacationPeriod(previous, current)) {
       previous = current;
       continue;
     }
@@ -3564,8 +3559,33 @@ function getVacationPeriodsForYear(employeeId, year) {
   ranges.push([rangeStart, previous]);
 
   return ranges
-    .map(([start, end]) => (start === end ? start : `${start} до ${end}`))
+    .map(([start, end]) => (start === end ? start : `${start} - ${end}`))
     .join(', ');
+}
+
+
+function isContinuousVacationPeriod(previousDateKey, currentDateKey) {
+  const previousDate = new Date(`${previousDateKey}T00:00:00`);
+  const currentDate = new Date(`${currentDateKey}T00:00:00`);
+  if (Number.isNaN(previousDate.getTime()) || Number.isNaN(currentDate.getTime())) {
+    return false;
+  }
+
+  const nextDay = new Date(previousDate);
+  nextDay.setDate(previousDate.getDate() + 1);
+  if (nextDay.getTime() === currentDate.getTime()) {
+    return true;
+  }
+
+  const cursor = new Date(nextDay);
+  while (cursor < currentDate) {
+    if (!isWeekend(cursor) && !isOfficialHoliday(cursor)) {
+      return false;
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return true;
 }
 
 function normalizeEmployeeVacationData(employee) {
