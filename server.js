@@ -1848,6 +1848,133 @@ app.post('/api/platform/users', requireAuth, async (req, res, next) => {
   }
 });
 
+app.get('/api/platform/users', requireAuth, async (req, res, next) => {
+  try {
+    const actor = await resolveActorTenant(req);
+    const tenantId = actor.tenantId;
+
+    if (!['owner', 'admin', 'super_admin'].includes(actor.role)) {
+      return res.status(403).json({ message: 'Само owner/admin може да разглежда потребители.' });
+    }
+
+    const result = await pool.query(
+      `SELECT u.id,
+              u.email,
+              u.first_name AS "firstName",
+              u.last_name AS "lastName",
+              u.is_active AS "isActive",
+              u.created_at AS "createdAt",
+              u.last_login_at AS "lastLoginAt",
+              tu.role
+       FROM tenant_users tu
+       JOIN users u ON u.id = tu.user_id
+       WHERE tu.tenant_id = $1
+       ORDER BY u.created_at DESC, u.email ASC`,
+      [tenantId]
+    );
+
+    const users = result.rows.map((row) => ({
+      ...row,
+      fullName: `${cleanStr(row.firstName)} ${cleanStr(row.lastName)}`.trim(),
+      tenantId,
+    }));
+
+    return res.json({ ok: true, users });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.patch('/api/platform/users/:userId', requireAuth, async (req, res, next) => {
+  const userId = cleanStr(req.params.userId);
+  const role = cleanStr(req.body?.role).toLowerCase();
+  const hasIsActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'isActive');
+  const isActive = hasIsActive ? req.body.isActive === true : null;
+
+  if (!isValidUuid(userId)) {
+    return res.status(400).json({ message: 'Невалиден user id.' });
+  }
+  if (role && !['manager', 'user'].includes(role)) {
+    return res.status(400).json({ message: 'Позволени роли: manager, user.' });
+  }
+  if (!role && !hasIsActive) {
+    return res.status(400).json({ message: 'Липсват данни за промяна.' });
+  }
+
+  try {
+    const actor = await resolveActorTenant(req);
+    const tenantId = actor.tenantId;
+
+    if (!['owner', 'admin', 'super_admin'].includes(actor.role)) {
+      return res.status(403).json({ message: 'Само owner/admin може да редактира потребители.' });
+    }
+
+    const membership = await pool.query(
+      `SELECT role FROM tenant_users WHERE tenant_id = $1 AND user_id = $2 LIMIT 1`,
+      [tenantId, userId]
+    );
+
+    if (!membership.rowCount) {
+      return res.status(404).json({ message: 'Потребителят не е намерен за тази фирма.' });
+    }
+
+    if (role) {
+      await pool.query(
+        `UPDATE tenant_users
+         SET role = $3
+         WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId, role]
+      );
+    }
+
+    if (hasIsActive) {
+      await pool.query(
+        `UPDATE users
+         SET is_active = $2
+         WHERE id = $1`,
+        [userId, isActive]
+      );
+    }
+
+    const updated = await pool.query(
+      `SELECT u.id,
+              u.email,
+              u.first_name AS "firstName",
+              u.last_name AS "lastName",
+              u.is_active AS "isActive",
+              u.created_at AS "createdAt",
+              u.last_login_at AS "lastLoginAt",
+              tu.role
+       FROM tenant_users tu
+       JOIN users u ON u.id = tu.user_id
+       WHERE tu.tenant_id = $1 AND u.id = $2
+       LIMIT 1`,
+      [tenantId, userId]
+    );
+
+    await insertAuditLog('tenant_user_updated', 'tenant_user', {
+      tenantId,
+      actorUserId: req.user?.id || null,
+      entityId: userId,
+      after: { role: updated.rows[0]?.role, isActive: updated.rows[0]?.isActive },
+      ip: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    const row = updated.rows[0];
+    return res.json({
+      ok: true,
+      user: {
+        ...row,
+        fullName: `${cleanStr(row.firstName)} ${cleanStr(row.lastName)}`.trim(),
+        tenantId,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.get('/api/platform/super-admin/overview', requireSuperAdmin, async (req, res, next) => {
 
   try {
