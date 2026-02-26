@@ -154,28 +154,34 @@
           <h2>Служители</h2>
           <form id="employeeForm" class="employee-form">
             <div class="form-field">
+              <label for="firstNameInput" class="field-label">Собствено име</label>
               <input id="firstNameInput" required placeholder="Собствено име" />
               <small class="field-help">Собствено име на служителя.</small>
             </div>
             <div class="form-field">
+              <label for="middleNameInput" class="field-label">Бащино име</label>
               <input id="middleNameInput" required placeholder="Бащино име" />
               <small class="field-help">Бащино име на служителя.</small>
             </div>
             <div class="form-field">
+              <label for="lastNameInput" class="field-label">Фамилия</label>
               <input id="lastNameInput" required placeholder="Фамилия" />
               <small class="field-help">Фамилно име на служителя.</small>
             </div>
             <div class="form-field">
+              <label for="departmentInput" class="field-label">Отдел</label>
               <select id="departmentInput">
                 <option value="">Без отдел</option>
               </select>
               <small class="field-help">Отделът, в който ще се включи в графика.</small>
             </div>
             <div class="form-field">
+              <label for="positionInput" class="field-label">Длъжност</label>
               <input id="positionInput" required placeholder="Длъжност" />
               <small class="field-help">Текуща длъжност на служителя.</small>
             </div>
             <div class="form-field">
+              <label for="egnInput" class="field-label">ЕГН</label>
               <input id="egnInput" required maxlength="10" pattern="\d{10}" placeholder="ЕГН (10 цифри)" />
               <small class="field-help">ЕГН с точно 10 цифри.</small>
             </div>
@@ -190,6 +196,7 @@
               <small class="field-help">Оставете празно, ако е без крайна дата.</small>
             </div>
             <div class="form-field">
+              <label for="vacationAllowanceInput" class="field-label">Годишен отпуск (въвеждане)</label>
               <small id="vacationAllowanceHint" class="vacation-allowance-hint">Полагаем за годината: 20 дни</small>
               <input id="vacationAllowanceInput" type="number" min="0" value="20" required placeholder="Годишен отпуск" />
               <small class="field-help">Въведете базов годишен отпуск (напр. 20 дни).</small>

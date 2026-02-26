@@ -1428,6 +1428,15 @@ employeeForm.addEventListener('submit', async (event) => {
     return;
   }
 
+  const { targetYear, allowance: proportionalAllowance } = getVacationAllowancePreviewData(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, employee.startDate);
+  const enteredTotalAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit);
+  if (enteredTotalAllowance !== proportionalAllowance) {
+    const confirmed = window.confirm(`Въведеният отпуск (${enteredTotalAllowance} дни) е различен от полагаемия за ${targetYear} г. (${proportionalAllowance} дни). Искате ли да продължите?`);
+    if (!confirmed) {
+      return;
+    }
+  }
+
   state.employees.push(employee);
   persistEmployeesLocal();
 
@@ -1756,6 +1765,13 @@ function getVacationAllowanceForYear(employee, year) {
   );
 }
 
+function getVacationAllowancePreviewData(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, startDate) {
+  const startYear = Number((normalizeDateOnly(startDate) || '').slice(0, 4));
+  const targetYear = Number.isFinite(startYear) ? startYear : new Date().getFullYear();
+  const allowance = calculateProportionalVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, startDate, targetYear);
+  return { targetYear, allowance };
+}
+
 function updateVacationAllowanceHint() {
   if (!vacationAllowanceHint) {
     return;
@@ -1765,9 +1781,7 @@ function updateVacationAllowanceHint() {
   const hasTelk = Boolean(telkInput?.checked);
   const hasYoungWorkerBenefit = Boolean(youngWorkerInput?.checked);
   const startDate = (startDateInput?.value || '').trim();
-  const startYear = Number((normalizeDateOnly(startDate) || '').slice(0, 4));
-  const targetYear = Number.isFinite(startYear) ? startYear : new Date().getFullYear();
-  const allowance = calculateProportionalVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, startDate, targetYear);
+  const { targetYear, allowance } = getVacationAllowancePreviewData(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, startDate);
 
   vacationAllowanceHint.textContent = `Полагаем за ${targetYear}: ${allowance} дни`;
 }
