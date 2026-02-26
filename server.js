@@ -1331,28 +1331,65 @@ app.post('/api/platform/register', async (req, res, next) => {
   }
 });
 
-app.post('/api/platform/users', requireSuperAdmin, async (req, res, next) => {
+app.post('/api/platform/users', requireAuth, async (req, res, next) => {
 
-  const tenantId = cleanStr(req.body?.tenantId || req.body?.registrationId);
-  const fullName = cleanStr(req.body?.fullName);
+  const tenantIdFromBody = cleanStr(req.body?.tenantId || req.body?.registrationId);
+  const employeeId = cleanStr(req.body?.employeeId);
   const email = cleanStr(req.body?.email).toLowerCase();
   const password = cleanStr(req.body?.password);
   const role = cleanStr(req.body?.role).toLowerCase();
 
-  if (!isValidUuid(tenantId) || !fullName || !email || !password || password.length < 8) {
+  if (!email || !password || password.length < 8) {
     return res.status(400).json({ message: 'Невалидни данни за потребител.' });
   }
   if (!['manager', 'user'].includes(role)) {
     return res.status(400).json({ message: 'Позволени роли за добавяне: manager и user.' });
   }
+  if (!isValidUuid(employeeId)) {
+    return res.status(400).json({ message: 'Изберете валиден служител.' });
+  }
 
   try {
-    const tenantCheck = await pool.query('SELECT id, name FROM tenants WHERE id = $1', [tenantId]);
-    if (!tenantCheck.rowCount) {
-      return res.status(404).json({ message: 'Организацията не е намерена.' });
+    let tenantId = null;
+
+    if (req.user?.is_super_admin === true) {
+      tenantId = tenantIdFromBody;
+      if (!isValidUuid(tenantId)) {
+        return res.status(400).json({ message: 'Невалиден Tenant ID.' });
+      }
+    } else {
+      const tenantMembership = await pool.query(
+        `SELECT tenant_id AS "tenantId", role
+         FROM tenant_users
+         WHERE user_id = $1
+         ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, tenant_id
+         LIMIT 1`,
+        [req.user.id]
+      );
+
+      if (!tenantMembership.rowCount) {
+        return res.status(403).json({ message: 'Нямате организация за управление.' });
+      }
+
+      const actorRole = cleanStr(tenantMembership.rows[0].role).toLowerCase();
+      if (!['owner', 'admin'].includes(actorRole)) {
+        return res.status(403).json({ message: 'Само owner/admin може да добавя потребители.' });
+      }
+
+      tenantId = tenantMembership.rows[0].tenantId;
     }
 
-    const { firstName, lastName } = splitFullName(fullName);
+    const employeeCheck = await pool.query(
+      `SELECT id, name
+       FROM employees
+       WHERE id = $1`,
+      [employeeId]
+    );
+    if (!employeeCheck.rowCount) {
+      return res.status(404).json({ message: 'Служителят не е намерен.' });
+    }
+
+    const { firstName, lastName } = splitFullName(employeeCheck.rows[0].name);
 
     const passwordHash = await bcrypt.hash(password, 12);
 

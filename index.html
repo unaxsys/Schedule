@@ -95,7 +95,6 @@
           <button type="button" class="tab-btn" data-tab="vacationTab">Отпуски</button>
           <button type="button" class="tab-btn" data-tab="settingsTab">Настройки</button>
           <button type="button" class="tab-btn" data-tab="helpTab">FAQ / Help</button>
-          <button type="button" class="tab-btn" data-tab="authTab">Орг. потребители</button>
         </div>
       </aside>
 
@@ -205,6 +204,7 @@
             <button type="button" class="settings-subtab-btn active" data-settings-tab="summarySettingsPanel">Обобщения</button>
             <button type="button" class="settings-subtab-btn" data-settings-tab="calculationsSettingsPanel">Изчисления</button>
             <button type="button" class="settings-subtab-btn" data-settings-tab="shiftsSettingsPanel">Смени</button>
+            <button type="button" class="settings-subtab-btn" data-settings-tab="usersSettingsPanel">Потребители</button>
           </div>
 
           <div id="summarySettingsPanel" class="settings-subtab-panel active">
@@ -241,26 +241,26 @@
             <div id="shiftList" class="shift-list"></div>
             <small>Смените „Почивка“, „Отпуск“ и „Болничен“ са системни и не се трият.</small>
           </div>
-        </section>
 
-
-        <section id="authTab" class="panel tab-panel">
-          <h2>Управление на достъп в организацията</h2>
-          <p>След като сте влезли, можете да добавяте потребители към вашата организация.</p>
-
-          <h3 style="margin-top: 1rem;">Добавяне на потребител към организация</h3>
-          <p>Owner/Admin може да добавя само роли <strong>Мениджър</strong> и <strong>Потребител</strong>.</p>
-          <form id="createPlatformUserForm" class="employee-form">
-            <input id="platformUserRegistrationIdInput" required placeholder="Tenant ID (UUID)" />
-            <input id="platformUserFullNameInput" required placeholder="Имена" />
-            <input id="platformUserEmailInput" type="email" required placeholder="Email" />
-            <input id="platformUserPasswordInput" type="password" minlength="8" required placeholder="Парола" />
+          <div id="usersSettingsPanel" class="settings-subtab-panel">
+            <h3>Потребители</h3>
+            <p>Изберете служител от списъка и му задайте достъп до системата с email, парола и роля.</p>
+            <form id="createPlatformUserForm" class="employee-form">
+              <select id="platformUserEmployeeInput" required>
+                <option value="">Изберете служител</option>
+              </select>
+              <input id="platformUserEmailInput" type="email" required placeholder="Email" />
+              <div class="row">
+                <input id="platformUserPasswordInput" type="text" minlength="8" required placeholder="Парола" />
+                <button id="generatePlatformPasswordBtn" type="button">Генерирай парола</button>
+              </div>
             <select id="platformUserRoleInput">
               <option value="manager">Мениджър</option>
               <option value="user">Потребител</option>
             </select>
             <button class="btn-add" type="submit">Добави потребител</button>
           </form>
+          </div>
         </section>
 
         <section id="helpTab" class="panel tab-panel marketing-panel">
