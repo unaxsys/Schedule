@@ -2703,7 +2703,7 @@ function renderSchedule() {
           }
 
           const toShift = select.value;
-          const scheduleId = getEmployeeScheduleId(employee);
+          const scheduleId = options.scheduleId || getEmployeeScheduleId(employee);
           if (scheduleId) {
             state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = toShift;
           }
