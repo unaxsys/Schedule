@@ -10,6 +10,7 @@ const BREAK_DEDUCTION_THRESHOLD_HOURS = 9;
 
 const TELK_EXTRA_VACATION_DAYS = 6;
 const YOUNG_WORKER_EXTRA_VACATION_DAYS = 6;
+const DEFAULT_BASE_VACATION_ALLOWANCE = 20;
 
 const SYSTEM_SHIFTS = [
   { code: 'P', label: 'П', name: 'Почивка', type: 'rest', start: '', end: '', hours: 0, locked: true },
@@ -1405,7 +1406,7 @@ employeeForm.addEventListener('submit', async (event) => {
   const middleName = (middleNameInput?.value || '').trim();
   const lastName = (lastNameInput?.value || '').trim();
 
-  const baseVacationAllowance = Number(vacationAllowanceInput.value);
+  const enteredVacationAllowance = Number(vacationAllowanceInput.value);
   const hasTelk = Boolean(telkInput?.checked);
   const hasYoungWorkerBenefit = Boolean(youngWorkerInput?.checked);
 
@@ -1418,18 +1419,18 @@ employeeForm.addEventListener('submit', async (event) => {
     egn: (egnInput?.value || '').trim(),
     startDate: (startDateInput?.value || '').trim(),
     endDate: (endDateInput?.value || '').trim() || null,
-    vacationAllowance: calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, (startDateInput?.value || '').trim()),
+    vacationAllowance: enteredVacationAllowance,
     telk: hasTelk,
     youngWorkerBenefit: hasYoungWorkerBenefit,
-    baseVacationAllowance
+    baseVacationAllowance: DEFAULT_BASE_VACATION_ALLOWANCE
   };
 
-  if (!firstName || !middleName || !lastName || !employee.position || !/^\d{10}$/.test(employee.egn) || !Number.isFinite(baseVacationAllowance) || baseVacationAllowance < 0 || !isValidEmploymentDates(employee.startDate, employee.endDate)) {
+  if (!firstName || !middleName || !lastName || !employee.position || !/^\d{10}$/.test(employee.egn) || !Number.isFinite(enteredVacationAllowance) || enteredVacationAllowance < 0 || !isValidEmploymentDates(employee.startDate, employee.endDate)) {
     return;
   }
 
-  const { targetYear, allowance: proportionalAllowance } = getVacationAllowancePreviewData(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, employee.startDate);
-  const enteredTotalAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit);
+  const { targetYear, allowance: proportionalAllowance } = getVacationAllowancePreviewData(DEFAULT_BASE_VACATION_ALLOWANCE, hasTelk, hasYoungWorkerBenefit, employee.startDate);
+  const enteredTotalAllowance = enteredVacationAllowance;
   if (enteredTotalAllowance !== proportionalAllowance) {
     const confirmed = window.confirm(`Въведеният отпуск (${enteredTotalAllowance} дни) е различен от полагаемия за ${targetYear} г. (${proportionalAllowance} дни). Искате ли да продължите?`);
     if (!confirmed) {
@@ -1461,7 +1462,7 @@ employeeForm.addEventListener('submit', async (event) => {
   if (departmentInput) {
     departmentInput.value = '';
   }
-  vacationAllowanceInput.value = 20;
+  vacationAllowanceInput.value = DEFAULT_BASE_VACATION_ALLOWANCE;
   if (telkInput) {
     telkInput.checked = false;
   }
@@ -1479,7 +1480,6 @@ employeeForm.addEventListener('submit', async (event) => {
 });
 
 startDateInput?.addEventListener('change', updateVacationAllowanceHint);
-vacationAllowanceInput?.addEventListener('input', updateVacationAllowanceHint);
 telkInput?.addEventListener('change', updateVacationAllowanceHint);
 youngWorkerInput?.addEventListener('change', updateVacationAllowanceHint);
 updateVacationAllowanceHint();
@@ -1777,7 +1777,7 @@ function updateVacationAllowanceHint() {
     return;
   }
 
-  const baseVacationAllowance = Number(vacationAllowanceInput?.value);
+  const baseVacationAllowance = DEFAULT_BASE_VACATION_ALLOWANCE;
   const hasTelk = Boolean(telkInput?.checked);
   const hasYoungWorkerBenefit = Boolean(youngWorkerInput?.checked);
   const startDate = (startDateInput?.value || '').trim();
@@ -1792,7 +1792,7 @@ function getWorkingVacationDates(startDate, workingDays) {
   let remaining = Number(workingDays);
 
   while (remaining > 0) {
-    if (!isWeekend(current)) {
+    if (!isWeekend(current) && !isOfficialHoliday(current)) {
       dates.push(new Date(current));
       remaining -= 1;
     }
@@ -1810,7 +1810,7 @@ function resolveBaseVacationAllowance(employee) {
 
   const total = Number(employee?.vacationAllowance);
   if (!Number.isFinite(total)) {
-    return 20;
+    return DEFAULT_BASE_VACATION_ALLOWANCE;
   }
 
   return Math.max(0, total - getExtraVacationDays(Boolean(employee?.telk), Boolean(employee?.youngWorkerBenefit)));
@@ -2353,33 +2353,89 @@ function attachVacationForm() {
     }
 
     const vacationDates = getWorkingVacationDates(start, requestedWorkingDays);
-    const outOfMonth = vacationDates.some((date) => {
-      const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-      return month !== state.month;
-    });
+    const vacationByMonth = groupDatesByMonth(vacationDates);
+    const backendPromises = [];
 
-    if (outOfMonth) {
-      setStatus('Избраният отпуск излиза извън активния месец.', false);
-      return;
+    for (const [monthKey, dates] of vacationByMonth.entries()) {
+      let scheduleId = null;
+      if (state.backendAvailable) {
+        const schedule = await ensureScheduleForMonthAndDepartment(monthKey, employee.department);
+        scheduleId = schedule?.id || null;
+      }
+
+      dates.forEach((date) => {
+        const day = date.getDate();
+        const key = scheduleKey(employeeId, monthKey, day);
+        state.schedule[key] = 'O';
+        if (scheduleId) {
+          state.scheduleEntriesById[`${scheduleId}|${employeeId}|${day}`] = 'O';
+          backendPromises.push(saveScheduleEntryBackend({ ...employee, scheduleId }, day, 'O', { monthKey, scheduleId }));
+        }
+      });
     }
 
-    const scheduleId = getEmployeeScheduleId(employee);
-    const promises = [];
-
-    vacationDates.forEach((date) => {
-      const day = date.getDate();
-      const key = scheduleKey(employeeId, state.month, day);
-      state.schedule[key] = 'O';
-      if (scheduleId) {
-        state.scheduleEntriesById[`${scheduleId}|${employeeId}|${day}`] = 'O';
-      }
-      promises.push(saveScheduleEntryBackend(employee, day, 'O'));
-    });
-
     saveScheduleLocal();
-    await Promise.all(promises);
+    await Promise.all(backendPromises);
+    await refreshMonthlyView();
     renderAll();
   });
+}
+
+
+function groupDatesByMonth(dates) {
+  const byMonth = new Map();
+  dates.forEach((date) => {
+    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    if (!byMonth.has(monthKey)) {
+      byMonth.set(monthKey, []);
+    }
+    byMonth.get(monthKey).push(date);
+  });
+  return byMonth;
+}
+
+async function ensureScheduleForMonthAndDepartment(monthKey, departmentName) {
+  const department = (departmentName || '').trim();
+  if (!department || department === 'Без отдел') {
+    return null;
+  }
+
+  const existing = findScheduleByMonthAndDepartment(monthKey, department);
+  if (existing) {
+    return existing;
+  }
+
+  if (!state.backendAvailable) {
+    return null;
+  }
+
+  const name = `График ${department} – ${monthKey}`;
+  const response = await apiFetch('/api/schedules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ month_key: monthKey, department, name })
+  });
+
+  if (!response.ok) {
+    let message = `Неуспешно автоматично създаване на график за ${monthKey}.`;
+    try {
+      const payload = await response.json();
+      if (payload?.message) {
+        message = payload.message;
+      }
+    } catch {
+      // ignore non-JSON responses
+    }
+    setStatus(message, false);
+    return null;
+  }
+
+  const payload = await response.json();
+  const created = payload.schedule || null;
+  if (created?.id) {
+    state.schedules.push(created);
+  }
+  return created;
 }
 
 function renderVacationLedger() {
@@ -2585,7 +2641,7 @@ function renderSchedule() {
           }
 
           const toShift = select.value;
-          const scheduleId = getEmployeeScheduleId(employee);
+          const scheduleId = options.scheduleId || getEmployeeScheduleId(employee);
           if (scheduleId) {
             state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = toShift;
           }
@@ -3306,13 +3362,13 @@ async function deleteEmployeeBackend(employeeId) {
   }
 }
 
-async function saveScheduleEntryBackend(employee, day, shiftCode) {
+async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) {
   if (!state.backendAvailable) {
     return;
   }
 
   try {
-    const scheduleId = getEmployeeScheduleId(employee);
+    const scheduleId = options.scheduleId || getEmployeeScheduleId(employee);
     if (!scheduleId) {
       throw new Error('Липсва график за отдела.');
     }
@@ -3320,7 +3376,7 @@ async function saveScheduleEntryBackend(employee, day, shiftCode) {
     const response = await apiFetch(`/api/schedules/${scheduleId}/entry`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ employee_id: employee.id, day, shift_code: shiftCode, month_key: state.month })
+      body: JSON.stringify({ employee_id: employee.id, day, shift_code: shiftCode, month_key: options.monthKey || state.month })
     });
 
     if (!response.ok) {
