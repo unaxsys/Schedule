@@ -5,6 +5,8 @@ const DEFAULT_RATES = {
 
 const NIGHT_HOURS_COEFFICIENT = 1.14286;
 const MAX_NIGHT_SHIFT_HOURS = 12;
+const STANDARD_BREAK_HOURS = 1;
+const BREAK_DEDUCTION_THRESHOLD_HOURS = 9;
 
 const TELK_EXTRA_VACATION_DAYS = 6;
 const YOUNG_WORKER_EXTRA_VACATION_DAYS = 6;
@@ -15,7 +17,7 @@ const SYSTEM_SHIFTS = [
   { code: 'B', label: 'Б', name: 'Болничен', type: 'sick', start: '', end: '', hours: 0, locked: true }
 ];
 
-const DEFAULT_WORK_SHIFT = { code: 'R', label: 'Р', name: 'Редовна', type: 'work', start: '09:00', end: '17:00', hours: 8, locked: true };
+const DEFAULT_WORK_SHIFT = { code: 'R', label: 'Р', name: 'Редовна', type: 'work', start: '08:00', end: '17:00', hours: 8, locked: true };
 
 const SUMMARY_COLUMNS = [
   { key: 'workedDays', label: 'Отр. дни' },
@@ -335,8 +337,10 @@ function attachRegistrationControls() {
       clearAuthSession();
       state.selectedTenantId = '';
       persistSelectedTenantId();
+      resetTenantScopedState({ clearLocalStorage: true });
       updateAuthUi();
       updateAuthGate();
+      renderAll();
       setAuthMode('signin');
       setStatus('Излязохте от профила.', true);
     });
@@ -361,10 +365,15 @@ function attachRegistrationControls() {
         state.currentUser = payload.user;
         syncRoleFromAuthenticatedUser();
         persistAuthSession();
+        resetTenantScopedState({ clearLocalStorage: false });
 
         signInForm.reset();
         updateAuthUi();
         updateAuthGate();
+
+        await loadFromBackend();
+        renderAll();
+
         setStatus(`Успешен вход: ${payload.user.email}`, true);
       } catch (error) {
         clearAuthSession();
@@ -520,6 +529,24 @@ function clearAuthSession() {
   localStorage.removeItem('authToken');
   localStorage.removeItem('currentUser');
   localStorage.removeItem('selectedTenantId');
+}
+
+function resetTenantScopedState({ clearLocalStorage = false } = {}) {
+  state.employees = [];
+  state.scheduleEmployees = [];
+  state.schedule = {};
+  state.scheduleEntriesById = {};
+  state.schedules = [];
+  state.selectedScheduleIds = [];
+  state.activeScheduleId = null;
+  state.departments = [];
+  state.shiftTemplates = [...SYSTEM_SHIFTS, DEFAULT_WORK_SHIFT];
+
+  if (clearLocalStorage) {
+    localStorage.removeItem('employees');
+    localStorage.removeItem('scheduleState');
+    localStorage.removeItem('shiftTemplates');
+  }
 }
 
 function cleanStoredValue(value) {
@@ -2783,10 +2810,8 @@ async function loadFromBackend() {
     if (response.ok) {
       const payload = await response.json();
       const backendShiftTemplates = Array.isArray(payload.shiftTemplates) ? payload.shiftTemplates : [];
-      if (backendShiftTemplates.length) {
-        state.shiftTemplates = mergeShiftTemplates(backendShiftTemplates);
-        saveShiftTemplates();
-      }
+      state.shiftTemplates = mergeShiftTemplates(backendShiftTemplates);
+      saveShiftTemplates();
     }
 
     setStatus(`Свързан с PostgreSQL бекенд (${state.apiBaseUrl}).`, true);
@@ -3205,7 +3230,12 @@ function calcShiftHours(start, end) {
     endMinutes += 24 * 60;
   }
 
-  return Number(((endMinutes - startMinutes) / 60).toFixed(2));
+  const totalHours = (endMinutes - startMinutes) / 60;
+  const paidHours = totalHours >= BREAK_DEDUCTION_THRESHOLD_HOURS
+    ? Math.max(totalHours - STANDARD_BREAK_HOURS, 0)
+    : totalHours;
+
+  return Number(paidHours.toFixed(2));
 }
 
 function todayMonth() {
