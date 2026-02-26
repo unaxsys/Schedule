@@ -473,9 +473,13 @@ async function initDatabase() {
       employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
       day INTEGER NOT NULL CHECK (day >= 1 AND day <= 31),
       shift_code VARCHAR(16) NOT NULL,
+      month_key TEXT NOT NULL CHECK (month_key ~ '^\\d{4}-\\d{2}$'),
       PRIMARY KEY (schedule_id, employee_id, day)
     )
   `);
+
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_entries_month_key ON schedule_entries(month_key)`);
 
   await pool.query(`
     DO $$
@@ -1226,7 +1230,11 @@ app.post('/api/schedules/:id/entry', async (req, res) => {
       });
     }
 
-    const effectiveMonth = monthKey || schedule.month_key;
+    const effectiveMonth = monthKey || cleanStr(schedule.month_key);
+    if (!effectiveMonth || !isValidMonthKey(effectiveMonth)) {
+      return res.status(400).json({ message: 'Липсва валиден monthKey (YYYY-MM) за записа.' });
+    }
+
     const entryDate = normalizeDateOnly(`${effectiveMonth}-${String(day).padStart(2, '0')}`);
     if (!entryDate || !isValidEmploymentRange(employee.startDate, employee.endDate || entryDate)) {
       return res.status(400).json({ message: 'Невалиден период на заетост за служителя.' });
@@ -1235,13 +1243,26 @@ app.post('/api/schedules/:id/entry', async (req, res) => {
       return res.status(409).json({ message: 'Денят е извън периода на заетост на служителя.' });
     }
 
-    await pool.query(
-      `INSERT INTO schedule_entries (schedule_id, employee_id, day, shift_code)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (schedule_id, employee_id, day)
-       DO UPDATE SET shift_code = EXCLUDED.shift_code`,
-      [scheduleId, employeeId, day, shiftCode]
-    );
+    const hasScheduleEntriesMonthKey = await tableHasColumn('schedule_entries', 'month_key');
+
+    if (hasScheduleEntriesMonthKey) {
+      await pool.query(
+        `INSERT INTO schedule_entries (schedule_id, employee_id, day, shift_code, month_key)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (schedule_id, employee_id, day)
+         DO UPDATE SET shift_code = EXCLUDED.shift_code,
+                       month_key = EXCLUDED.month_key`,
+        [scheduleId, employeeId, day, shiftCode, effectiveMonth]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO schedule_entries (schedule_id, employee_id, day, shift_code)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (schedule_id, employee_id, day)
+         DO UPDATE SET shift_code = EXCLUDED.shift_code`,
+        [scheduleId, employeeId, day, shiftCode]
+      );
+    }
 
     res.json({ ok: true });
   } catch (error) {
