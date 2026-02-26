@@ -128,6 +128,9 @@ function requireSuperAdmin(req, res, next) {
 async function resolveActorTenant(req, { allowSuperAdminTenantFromBody = false } = {}) {
   if (req.user?.is_super_admin === true && allowSuperAdminTenantFromBody) {
     const superAdminTenantId = cleanStr(req.body?.tenantId || req.body?.registrationId || req.query?.tenantId);
+    if (!superAdminTenantId) {
+      throw createHttpError(400, 'Липсва tenantId (избери организация).');
+    }
     if (!isValidUuid(superAdminTenantId)) {
       throw createHttpError(400, 'Невалиден Tenant ID.');
     }
@@ -1477,6 +1480,19 @@ app.post('/api/auth/login', async (req, res, next) => {
 
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
 
+    let tenantId = null;
+    if (user.is_super_admin !== true) {
+      const membership = await pool.query(
+        `SELECT tenant_id AS "tenantId"
+         FROM tenant_users
+         WHERE user_id = $1
+         ORDER BY created_at ASC
+         LIMIT 1`,
+        [user.id]
+      );
+      tenantId = membership.rows[0]?.tenantId || null;
+    }
+
     const token = jwt.sign(
       {
         id: user.id,
@@ -1484,6 +1500,7 @@ app.post('/api/auth/login', async (req, res, next) => {
         first_name: user.first_name,
         last_name: user.last_name,
         is_super_admin: user.is_super_admin === true,
+        tenant_id: tenantId,
       },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
@@ -1497,6 +1514,7 @@ app.post('/api/auth/login', async (req, res, next) => {
         first_name: user.first_name,
         last_name: user.last_name,
         is_super_admin: user.is_super_admin === true,
+        tenantId,
       },
     });
   } catch (error) {
