@@ -1844,6 +1844,75 @@ function updateVacationDateInputValidity(input, options = {}) {
   return true;
 }
 
+
+function getVacationDateKeysInRange(startDateKey, endDateKey) {
+  const start = new Date(`${startDateKey}T00:00:00`);
+  const end = new Date(`${endDateKey}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+    return [];
+  }
+
+  const dates = [];
+  const current = new Date(start);
+  while (current <= end) {
+    if (!isWeekend(current) && !isOfficialHoliday(current)) {
+      dates.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(current.getDate()).padStart(2, '0')}`);
+    }
+    current.setDate(current.getDate() + 1);
+  }
+
+  return dates;
+}
+
+function hasVacationRecordedOnDate(employeeId, dateKey) {
+  const normalized = normalizeDateOnly(dateKey);
+  if (!normalized) {
+    return false;
+  }
+
+  const [year, month, day] = normalized.split('-');
+  const monthKey = `${year}-${month}`;
+  const dayNumber = Number(day);
+  if (!Number.isFinite(dayNumber)) {
+    return false;
+  }
+
+  if (state.schedule[scheduleKey(employeeId, monthKey, dayNumber)] === 'O') {
+    return true;
+  }
+
+  const scheduleById = new Map(state.schedules.map((schedule) => [String(schedule.id), schedule]));
+  const activeSchedule = getActiveSchedule();
+
+  return Object.entries(state.scheduleEntriesById).some(([entryKey, code]) => {
+    if (code !== 'O') {
+      return false;
+    }
+
+    const [scheduleId, entryEmployeeId, dayPart] = entryKey.split('|');
+    if (entryEmployeeId !== employeeId || Number(dayPart) !== dayNumber) {
+      return false;
+    }
+
+    const schedule = scheduleById.get(String(scheduleId));
+    const entryMonthKey = schedule?.month_key
+      || (activeSchedule && String(activeSchedule.id) === String(scheduleId) ? state.month : '');
+
+    return entryMonthKey === monthKey;
+  });
+}
+
+function hasVacationInDates(employeeId, dates, options = {}) {
+  const ignoredSet = new Set(Array.isArray(options.ignoreDateKeys) ? options.ignoreDateKeys : []);
+  return dates.some((date) => {
+    const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    if (ignoredSet.has(dateKey)) {
+      return false;
+    }
+    return hasVacationRecordedOnDate(employeeId, dateKey);
+  });
+}
+
 function getWorkingVacationDates(startDate, workingDays) {
   const dates = [];
   const current = new Date(startDate);
@@ -2497,6 +2566,11 @@ function attachVacationForm() {
     }
 
     const vacationDates = getWorkingVacationDates(start, requestedWorkingDays);
+    if (hasVacationInDates(employee.id, vacationDates)) {
+      setStatus('За избрания период вече има пуснат отпуск.', false);
+      return;
+    }
+
     const employeeStartDate = normalizeDateOnly(employee.startDate);
     const hasDatesBeforeEmployment = vacationDates.some((date) => {
       const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -2889,6 +2963,12 @@ async function correctVacationPeriod(employee, oldStartDateKey, oldEndDateKey, n
   }
 
   const newDates = getWorkingVacationDates(newStart, newWorkingDays);
+  const ignoredDateKeys = getVacationDateKeysInRange(oldStartDateKey, oldEndDateKey);
+  if (hasVacationInDates(employee.id, newDates, { ignoreDateKeys: ignoredDateKeys })) {
+    setStatus('За новия период вече има пуснат отпуск.', false);
+    return;
+  }
+
   const employeeStartDate = normalizeDateOnly(employee.startDate);
   const hasDatesBeforeEmployment = newDates.some((date) => {
     const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
