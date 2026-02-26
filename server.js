@@ -1801,6 +1801,40 @@ app.post('/api/auth/login', async (req, res, next) => {
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
 
     if (user.is_super_admin === true) {
+      const tenantsResult = await pool.query(
+        `SELECT id AS "tenantId", name AS "tenantName", status
+         FROM tenants
+         WHERE status = 'approved'
+         ORDER BY name ASC, created_at ASC`
+      );
+
+      const superAdminTenants = tenantsResult.rows.map((row) => ({
+        id: row.tenantId,
+        name: cleanStr(row.tenantName),
+        role: 'super_admin',
+      }));
+
+      if (superAdminTenants.length === 1) {
+        const selectedTenant = superAdminTenants[0];
+        const token = signAccessToken({ user, tenantId: selectedTenant.id, role: 'admin' });
+        return res.json({
+          mode: 'ok',
+          token,
+          user: buildUserPayload(user, selectedTenant.id, 'admin'),
+          tenant: { id: selectedTenant.id, name: selectedTenant.name },
+        });
+      }
+
+      if (superAdminTenants.length > 1) {
+        const loginToken = signLoginSelectionToken(user.id);
+        return res.json({
+          mode: 'choose_tenant',
+          loginToken,
+          tenants: superAdminTenants,
+          user: buildUserPayload(user, null, 'admin'),
+        });
+      }
+
       const token = signAccessToken({ user, tenantId: null, role: 'admin' });
       return res.json({
         mode: 'ok',
@@ -1869,38 +1903,72 @@ app.post('/api/auth/select-tenant', async (req, res, next) => {
 
   try {
     const userId = verifyLoginSelectionToken(loginToken);
+    const userResult = await pool.query(
+      `SELECT id, email, first_name, last_name, is_super_admin, is_active
+       FROM users
+       WHERE id = $1
+       LIMIT 1`,
+      [userId]
+    );
 
-    const result = await pool.query(
-      `SELECT u.id, u.email, u.first_name, u.last_name, u.is_super_admin, u.is_active,
-              tu.role,
-              t.id AS "tenantId", t.name AS "tenantName", t.status
-       FROM users u
-       JOIN tenant_users tu ON tu.user_id = u.id
+    if (!userResult.rowCount) {
+      return res.status(401).json({ message: 'Потребителят не е намерен.' });
+    }
+
+    const user = userResult.rows[0];
+    if (!user.is_active) {
+      return res.status(401).json({ message: 'Потребителят е неактивен.' });
+    }
+
+    if (user.is_super_admin === true) {
+      const tenantResult = await pool.query(
+        `SELECT id AS "tenantId", name AS "tenantName"
+         FROM tenants
+         WHERE id = $1
+           AND status = 'approved'
+         LIMIT 1`,
+        [tenantId]
+      );
+
+      if (!tenantResult.rowCount) {
+        return res.status(403).json({ message: 'Нямате достъп до избраната фирма.' });
+      }
+
+      const row = tenantResult.rows[0];
+      const token = signAccessToken({ user, tenantId: row.tenantId, role: 'admin' });
+      return res.json({
+        mode: 'ok',
+        token,
+        tenant: { id: row.tenantId, name: cleanStr(row.tenantName) },
+        user: buildUserPayload(user, row.tenantId, 'admin'),
+      });
+    }
+
+    const membershipResult = await pool.query(
+      `SELECT tu.role,
+              t.id AS "tenantId", t.name AS "tenantName"
+       FROM tenant_users tu
        JOIN tenants t ON t.id = tu.tenant_id
-       WHERE u.id = $1
+       WHERE tu.user_id = $1
          AND tu.tenant_id = $2
          AND t.status = 'approved'
        LIMIT 1`,
       [userId, tenantId]
     );
 
-    if (!result.rowCount) {
+    if (!membershipResult.rowCount) {
       return res.status(403).json({ message: 'Нямате достъп до избраната фирма.' });
     }
 
-    const row = result.rows[0];
-    if (!row.is_active) {
-      return res.status(401).json({ message: 'Потребителят е неактивен.' });
-    }
-
+    const row = membershipResult.rows[0];
     const role = normalizeTenantRole(row.role);
-    const token = signAccessToken({ user: row, tenantId: row.tenantId, role });
+    const token = signAccessToken({ user, tenantId: row.tenantId, role });
 
     return res.json({
       mode: 'ok',
       token,
       tenant: { id: row.tenantId, name: cleanStr(row.tenantName) },
-      user: buildUserPayload(row, row.tenantId, role),
+      user: buildUserPayload(user, row.tenantId, role),
     });
   } catch (error) {
     return next(error);
@@ -1910,7 +1978,21 @@ app.post('/api/auth/select-tenant', async (req, res, next) => {
 app.get('/api/me/tenants', requireAuth, async (req, res, next) => {
   try {
     if (req.user?.is_super_admin === true) {
-      return res.json({ tenants: [] });
+      const tenantsResult = await pool.query(
+        `SELECT id AS "tenantId", name AS "tenantName", status
+         FROM tenants
+         WHERE status = 'approved'
+         ORDER BY name ASC, created_at ASC`
+      );
+
+      return res.json({
+        tenants: tenantsResult.rows.map((row) => ({
+          id: row.tenantId,
+          name: cleanStr(row.tenantName),
+          role: 'super_admin',
+          status: normalizeTenantStatus(row.status),
+        })),
+      });
     }
 
     const membershipsResult = await pool.query(
@@ -1945,6 +2027,7 @@ app.post('/api/auth/switch-tenant', requireAuth, async (req, res, next) => {
         `SELECT id, name
          FROM tenants
          WHERE id = $1
+           AND status = 'approved'
          LIMIT 1`,
         [tenantId]
       );
