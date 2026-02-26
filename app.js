@@ -63,7 +63,9 @@ const state = {
   currentUser: loadCurrentUser(),
   selectedTenantId: loadSelectedTenantId(),
   platformUserEmployees: [],
-  platformUsers: []
+  platformUsers: [],
+  availableTenants: [],
+  pendingLoginToken: ''
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -152,10 +154,14 @@ const showSignUpBtn = document.getElementById('showSignUpBtn');
 const signInForm = document.getElementById('signInForm');
 const loginEmailInput = document.getElementById('loginEmailInput');
 const loginPasswordInput = document.getElementById('loginPasswordInput');
+const chooseTenantScreen = document.getElementById('chooseTenantScreen');
+const chooseTenantList = document.getElementById('chooseTenantList');
 const authSignedInInfo = document.getElementById('authSignedInInfo');
 const preAuthScreen = document.getElementById('preAuthScreen');
 const appShell = document.getElementById('appShell');
 const logoutBtn = document.getElementById('logoutBtn');
+const tenantSwitcherLabel = document.getElementById('tenantSwitcherLabel');
+const tenantSwitcherSelect = document.getElementById('tenantSwitcherSelect');
 const createPlatformUserForm = document.getElementById('createPlatformUserForm');
 const platformUserEmployeeInput = document.getElementById('platformUserEmployeeInput');
 const platformUserEmailInput = document.getElementById('platformUserEmailInput');
@@ -211,10 +217,12 @@ async function init() {
   attachDepartmentManagementControls();
   attachEmployeeEditModalControls();
   attachRegistrationControls();
+  attachTenantSwitcherControls();
   attachSuperAdminControls();
   syncRoleFromAuthenticatedUser();
   updateAuthUi();
   updateAuthGate();
+  await loadMyTenants();
 
   const synced = await loadFromBackend();
   if (!synced) {
@@ -322,6 +330,14 @@ function attachRegistrationControls() {
     if (registrationForm) {
       registrationForm.classList.toggle('hidden', mode !== 'signup');
     }
+    if (chooseTenantScreen) {
+      chooseTenantScreen.classList.toggle('hidden', true);
+    }
+    if (mode !== 'choose_tenant') {
+      state.pendingLoginToken = '';
+      state.availableTenants = [];
+    }
+    updateAuthGate();
   };
 
   if (showSignInBtn) {
@@ -361,6 +377,25 @@ function attachRegistrationControls() {
           }),
         });
 
+        if (payload.mode === 'choose_tenant') {
+          state.pendingLoginToken = payload.loginToken || '';
+          state.availableTenants = Array.isArray(payload.tenants) ? payload.tenants : [];
+          state.currentUser = payload.user || null;
+          clearAuthSession();
+          state.pendingLoginToken = payload.loginToken || '';
+          state.availableTenants = Array.isArray(payload.tenants) ? payload.tenants : [];
+          if (chooseTenantScreen) {
+            chooseTenantScreen.classList.remove('hidden');
+          }
+          if (signInForm) {
+            signInForm.classList.add('hidden');
+          }
+          renderChooseTenantScreen();
+          updateAuthGate();
+          setStatus('Изберете фирма за продължение.', true);
+          return;
+        }
+
         state.authToken = payload.token;
         state.currentUser = payload.user;
         syncRoleFromAuthenticatedUser();
@@ -368,6 +403,7 @@ function attachRegistrationControls() {
         resetTenantScopedState({ clearLocalStorage: false });
 
         signInForm.reset();
+        await loadMyTenants();
         updateAuthUi();
         updateAuthGate();
 
@@ -468,6 +504,111 @@ function generateSecurePassword() {
   return output;
 }
 
+function renderChooseTenantScreen() {
+  if (!chooseTenantList) {
+    return;
+  }
+
+  chooseTenantList.innerHTML = '';
+  state.availableTenants.forEach((tenant) => {
+    const item = document.createElement('div');
+    item.className = 'tenant-choice-item';
+    item.innerHTML = `
+      <div>
+        <strong>${tenant.name || 'Без име'}</strong><br />
+        <small>Роля: ${tenant.role || 'user'}</small>
+      </div>
+      <button type="button" data-tenant-id="${tenant.id}">Избери</button>
+    `;
+    const button = item.querySelector('button');
+    button?.addEventListener('click', async () => {
+      await completeTenantSelection(tenant.id);
+    });
+    chooseTenantList.appendChild(item);
+  });
+}
+
+function updateTenantSwitcherUi() {
+  if (!tenantSwitcherSelect || !tenantSwitcherLabel) {
+    return;
+  }
+
+  const isAuthenticated = Boolean(state.currentUser && state.authToken);
+  const canSwitch = isAuthenticated && Array.isArray(state.availableTenants) && state.availableTenants.length > 1;
+
+  tenantSwitcherSelect.classList.toggle('hidden', !canSwitch);
+  tenantSwitcherLabel.classList.toggle('hidden', !canSwitch);
+
+  if (!canSwitch) {
+    tenantSwitcherSelect.innerHTML = '';
+    return;
+  }
+
+  tenantSwitcherSelect.innerHTML = '';
+  state.availableTenants.forEach((tenant) => {
+    const option = document.createElement('option');
+    option.value = tenant.id;
+    option.textContent = tenant.name;
+    tenantSwitcherSelect.appendChild(option);
+  });
+
+  if (isValidUuid(state.currentUser?.tenantId)) {
+    tenantSwitcherSelect.value = state.currentUser.tenantId;
+  }
+}
+
+async function loadMyTenants() {
+  if (!state.authToken) {
+    state.availableTenants = [];
+    updateTenantSwitcherUi();
+    return;
+  }
+
+  try {
+    const payload = await apiRequest('/api/me/tenants', { method: 'GET' });
+    state.availableTenants = Array.isArray(payload.tenants) ? payload.tenants : [];
+  } catch (_error) {
+    state.availableTenants = [];
+  }
+
+  updateTenantSwitcherUi();
+}
+
+async function completeTenantSelection(tenantId) {
+  if (!state.pendingLoginToken || !isValidUuid(tenantId)) {
+    setStatus('Невалиден избор на фирма.', false);
+    return;
+  }
+
+  try {
+    const payload = await apiRequest('/api/auth/select-tenant', {
+      method: 'POST',
+      body: JSON.stringify({
+        loginToken: state.pendingLoginToken,
+        tenantId,
+      }),
+    });
+
+    state.pendingLoginToken = '';
+    state.authToken = payload.token;
+    state.currentUser = payload.user;
+    syncRoleFromAuthenticatedUser();
+    persistAuthSession();
+    resetTenantScopedState({ clearLocalStorage: false });
+
+    await loadMyTenants();
+    updateAuthUi();
+    updateAuthGate();
+
+    signInForm?.reset();
+    await loadFromBackend();
+    renderAll();
+    setStatus(`Успешен вход: ${payload.user.email}`, true);
+  } catch (error) {
+    setStatus(`Грешка при избор на фирма: ${error.message}`, false);
+  }
+}
+
 function updateAuthUi() {
   if (!authSignedInInfo) {
     return;
@@ -494,6 +635,16 @@ function updateAuthGate() {
   if (logoutBtn) {
     logoutBtn.classList.toggle('hidden', !isAuthenticated);
   }
+
+  if (chooseTenantScreen) {
+    const showChooseTenant = !isAuthenticated && Boolean(state.pendingLoginToken) && state.availableTenants.length > 1;
+    chooseTenantScreen.classList.toggle('hidden', !showChooseTenant);
+    if (showChooseTenant) {
+      renderChooseTenantScreen();
+    }
+  }
+
+  updateTenantSwitcherUi();
 }
 
 function loadAuthToken() {
@@ -526,6 +677,8 @@ function clearAuthSession() {
   state.authToken = '';
   state.currentUser = null;
   state.selectedTenantId = '';
+  state.pendingLoginToken = '';
+  state.availableTenants = [];
   localStorage.removeItem('authToken');
   localStorage.removeItem('currentUser');
   localStorage.removeItem('selectedTenantId');
@@ -654,6 +807,41 @@ function renderSuperAdminPanel() {
   if (superAdminLogs) {
     superAdminLogs.textContent = JSON.stringify(overview.logs || [], null, 2);
   }
+}
+
+function attachTenantSwitcherControls() {
+  if (!tenantSwitcherSelect) {
+    return;
+  }
+
+  tenantSwitcherSelect.addEventListener('change', async () => {
+    const tenantId = cleanStoredValue(tenantSwitcherSelect.value);
+    if (!isValidUuid(tenantId)) {
+      return;
+    }
+
+    try {
+      const payload = await apiRequest('/api/auth/switch-tenant', {
+        method: 'POST',
+        body: JSON.stringify({ tenantId }),
+      });
+
+      state.authToken = payload.token;
+      state.currentUser = {
+        ...(state.currentUser || {}),
+        tenantId: payload.tenant?.id || tenantId,
+      };
+      persistAuthSession();
+      resetTenantScopedState({ clearLocalStorage: false });
+      await loadMyTenants();
+      await loadFromBackend();
+      renderAll();
+      setStatus(`Сменена фирма: ${payload.tenant?.name || tenantId}`, true);
+    } catch (error) {
+      setStatus(`Грешка при смяна на фирма: ${error.message}`, false);
+      updateTenantSwitcherUi();
+    }
+  });
 }
 
 function attachSuperAdminControls() {

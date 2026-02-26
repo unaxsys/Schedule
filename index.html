@@ -49,6 +49,12 @@
             <button id="submitSignInBtn" type="submit">Вход в платформата</button>
           </form>
 
+          <section id="chooseTenantScreen" class="auth-form-card hidden">
+            <h3>Избери фирма</h3>
+            <p>Този акаунт има достъп до повече от една фирма. Изберете с коя да продължите.</p>
+            <div id="chooseTenantList" class="tenant-choice-list"></div>
+          </section>
+
           <form id="registrationForm" class="employee-form auth-form-card hidden">
             <h3>Регистрация на организация</h3>
             <input id="companyNameInput" required placeholder="Име на фирма/организация" />
@@ -81,6 +87,8 @@
           <option value="super_admin">Супер администратор</option>
         </select>
         <a id="superAdminPortalLink" href="super-admin.html" target="_blank" class="super-admin-link hidden">Супер админ панел</a>
+        <label for="tenantSwitcherSelect" class="hidden" id="tenantSwitcherLabel">Фирма:</label>
+        <select id="tenantSwitcherSelect" class="hidden"></select>
         <button id="logoutBtn" type="button" class="hidden">Изход</button>
       </div>
     </header>

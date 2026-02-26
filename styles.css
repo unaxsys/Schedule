@@ -1153,3 +1153,23 @@ html.welcome-lock, html.welcome-lock body { height: 100%; overflow: hidden; }
   opacity: 1;
   transform: translateX(-50%) translateY(-6px);
 }
+
+.tenant-choice-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tenant-choice-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  border: 1px solid #dbe4f2;
+  border-radius: 10px;
+  padding: 0.65rem;
+  background: #f8fbff;
+}
+
+.tenant-choice-item button {
+  white-space: nowrap;
+}
