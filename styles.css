@@ -140,7 +140,34 @@ header p {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 160px;
+}
+
+.form-field--checkbox {
+  min-width: 260px;
+}
+
+.form-field--action {
+  justify-content: flex-end;
+}
+
+.field-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+.field-help {
+  font-size: 0.72rem;
+  color: #64748b;
+  line-height: 1.2;
 }
 .actions-row {
   margin-top: 0.7rem;
@@ -579,8 +606,8 @@ select.shift-select {
 
 .vacation-allowance-hint {
   color: #1e40af;
-  font-size: 0.82rem;
-  font-weight: 600;
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 

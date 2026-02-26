@@ -153,35 +153,73 @@
         <section id="employeesTab" class="panel tab-panel">
           <h2>Служители</h2>
           <form id="employeeForm" class="employee-form">
-            <input id="firstNameInput" required placeholder="Собствено име" />
-            <input id="middleNameInput" required placeholder="Бащино име" />
-            <input id="lastNameInput" required placeholder="Фамилия" />
-            <select id="departmentInput">
-              <option value="">Без отдел</option>
-            </select>
-            <input id="positionInput" required placeholder="Длъжност" />
-            <input id="egnInput" required maxlength="10" pattern="\d{10}" placeholder="ЕГН (10 цифри)" />
-            <label class="field-inline">Начална дата <input id="startDateInput" type="date" required /></label>
-            <label class="field-inline">Последен работен ден <input id="endDateInput" type="date" /></label>
-            <input id="vacationAllowanceInput" type="number" min="0" value="20" required placeholder="Годишен отпуск" />
-            <small id="vacationAllowanceHint" class="vacation-allowance-hint">Полагаем за годината: 20 дни</small>
-            <label class="field-inline field-checkbox">
-              <input id="telkInput" type="checkbox" />
-              <span>ТЕЛК (+6 дни отпуск)</span>
-              <span class="hover-tooltip" tabindex="0" aria-label="Инфо за ТЕЛК">
-                ?
-                <span class="hover-tooltip__text">с 50% и над 50%</span>
-              </span>
-            </label>
-            <label class="field-inline field-checkbox">
-              <input id="youngWorkerInput" type="checkbox" />
-              <span>Служители от 16 - 18 г. (+6 дни отпуск)</span>
-              <span class="hover-tooltip" tabindex="0" aria-label="Инфо за служители от 16 до 18 години">
-                ?
-                <span class="hover-tooltip__text">с разрешение от родител и ИТ</span>
-              </span>
-            </label>
-            <button type="submit" class="btn-add">Добави служител</button>
+            <div class="form-field">
+              <input id="firstNameInput" required placeholder="Собствено име" />
+              <small class="field-help">Собствено име на служителя.</small>
+            </div>
+            <div class="form-field">
+              <input id="middleNameInput" required placeholder="Бащино име" />
+              <small class="field-help">Бащино име на служителя.</small>
+            </div>
+            <div class="form-field">
+              <input id="lastNameInput" required placeholder="Фамилия" />
+              <small class="field-help">Фамилно име на служителя.</small>
+            </div>
+            <div class="form-field">
+              <select id="departmentInput">
+                <option value="">Без отдел</option>
+              </select>
+              <small class="field-help">Отделът, в който ще се включи в графика.</small>
+            </div>
+            <div class="form-field">
+              <input id="positionInput" required placeholder="Длъжност" />
+              <small class="field-help">Текуща длъжност на служителя.</small>
+            </div>
+            <div class="form-field">
+              <input id="egnInput" required maxlength="10" pattern="\d{10}" placeholder="ЕГН (10 цифри)" />
+              <small class="field-help">ЕГН с точно 10 цифри.</small>
+            </div>
+            <div class="form-field">
+              <label for="startDateInput" class="field-label">Начална дата</label>
+              <input id="startDateInput" type="date" required />
+              <small class="field-help">Дата на постъпване за пропорционален отпуск.</small>
+            </div>
+            <div class="form-field">
+              <label for="endDateInput" class="field-label">Последен работен ден</label>
+              <input id="endDateInput" type="date" />
+              <small class="field-help">Оставете празно, ако е без крайна дата.</small>
+            </div>
+            <div class="form-field">
+              <small id="vacationAllowanceHint" class="vacation-allowance-hint">Полагаем за годината: 20 дни</small>
+              <input id="vacationAllowanceInput" type="number" min="0" value="20" required placeholder="Годишен отпуск" />
+              <small class="field-help">Въведете базов годишен отпуск (напр. 20 дни).</small>
+            </div>
+            <div class="form-field form-field--checkbox">
+              <label class="field-inline field-checkbox">
+                <input id="telkInput" type="checkbox" />
+                <span>ТЕЛК (+6 дни отпуск)</span>
+                <span class="hover-tooltip" tabindex="0" aria-label="Инфо за ТЕЛК">
+                  ?
+                  <span class="hover-tooltip__text">с 50% и над 50%</span>
+                </span>
+              </label>
+              <small class="field-help">Добавя допълнителни 6 дни към изчислението.</small>
+            </div>
+            <div class="form-field form-field--checkbox">
+              <label class="field-inline field-checkbox">
+                <input id="youngWorkerInput" type="checkbox" />
+                <span>Служители от 16 - 18 г. (+6 дни отпуск)</span>
+                <span class="hover-tooltip" tabindex="0" aria-label="Инфо за служители от 16 до 18 години">
+                  ?
+                  <span class="hover-tooltip__text">с разрешение от родител и ИТ</span>
+                </span>
+              </label>
+              <small class="field-help">Добавя допълнителни 6 дни за непълнолетни служители.</small>
+            </div>
+            <div class="form-field form-field--action">
+              <button type="submit" class="btn-add">Добави служител</button>
+              <small class="field-help">Записва служителя и го добавя в графика.</small>
+            </div>
           </form>
           <div id="employeeList" class="employee-list"></div>
         </section>
