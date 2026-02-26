@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS departments (
 CREATE TABLE IF NOT EXISTS employees (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
+  tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
   department TEXT NULL,
   department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL,
   position TEXT NOT NULL,
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS employees (
 );
 
 CREATE INDEX IF NOT EXISTS idx_employees_department_id ON employees(department_id);
+CREATE INDEX IF NOT EXISTS idx_employees_tenant_id ON employees(tenant_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_egn_unique ON employees(egn) WHERE egn IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_employees_start_date ON employees(start_date);
 CREATE INDEX IF NOT EXISTS idx_employees_end_date ON employees(end_date);
