@@ -84,6 +84,7 @@ const egnInput = document.getElementById('egnInput');
 const startDateInput = document.getElementById('startDateInput');
 const endDateInput = document.getElementById('endDateInput');
 const vacationAllowanceInput = document.getElementById('vacationAllowanceInput');
+const vacationAllowanceHint = document.getElementById('vacationAllowanceHint');
 const telkInput = document.getElementById('telkInput');
 const youngWorkerInput = document.getElementById('youngWorkerInput');
 const employeeList = document.getElementById('employeeList');
@@ -104,7 +105,7 @@ const scheduleList = document.getElementById('scheduleList');
 const vacationForm = document.getElementById('vacationForm');
 const vacationEmployeeSelect = document.getElementById('vacationEmployeeSelect');
 const vacationStartInput = document.getElementById('vacationStartInput');
-const vacationEndInput = document.getElementById('vacationEndInput');
+const vacationDaysInput = document.getElementById('vacationDaysInput');
 const vacationLedger = document.getElementById('vacationLedger');
 const ratesForm = document.getElementById('ratesForm');
 const weekendRateInput = document.getElementById('weekendRateInput');
@@ -1461,11 +1462,18 @@ employeeForm.addEventListener('submit', async (event) => {
   if (startDateInput) {
     startDateInput.value = '';
   }
+  updateVacationAllowanceHint();
   if (endDateInput) {
     endDateInput.value = '';
   }
   renderAll();
 });
+
+startDateInput?.addEventListener('change', updateVacationAllowanceHint);
+vacationAllowanceInput?.addEventListener('input', updateVacationAllowanceHint);
+telkInput?.addEventListener('change', updateVacationAllowanceHint);
+youngWorkerInput?.addEventListener('change', updateVacationAllowanceHint);
+updateVacationAllowanceHint();
 
 async function attachEmployeeToDepartment(employeeId, departmentId) {
   if (!state.backendAvailable) {
@@ -1693,7 +1701,91 @@ function calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWork
   if (!Number.isFinite(normalizedBase)) {
     return 0;
   }
+
   return normalizedBase + getExtraVacationDays(hasTelk, hasYoungWorkerBenefit);
+}
+
+function calculateProportionalVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, startDate, year = Number((state.month || todayMonth()).split('-')[0])) {
+  const fullAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit);
+  const normalizedYear = Number.isFinite(Number(year)) ? Number(year) : new Date().getFullYear();
+  const proportion = getEmploymentYearProportion(startDate, normalizedYear);
+  return roundVacationDays(fullAllowance * proportion);
+}
+
+function roundVacationDays(value) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.round(value);
+}
+
+function getEmploymentYearProportion(startDate, year) {
+  const normalizedStart = normalizeDateOnly(startDate);
+  if (!normalizedStart) {
+    return 1;
+  }
+
+  const employmentStart = new Date(`${normalizedStart}T00:00:00`);
+  if (Number.isNaN(employmentStart.getTime())) {
+    return 1;
+  }
+
+  if (employmentStart.getFullYear() !== year) {
+    return employmentStart.getFullYear() > year ? 0 : 1;
+  }
+
+  const yearStart = new Date(year, 0, 1);
+  const yearEnd = new Date(year, 11, 31);
+  const totalDaysInYear = Math.floor((yearEnd - yearStart) / (24 * 60 * 60 * 1000)) + 1;
+  const activeDays = Math.floor((yearEnd - employmentStart) / (24 * 60 * 60 * 1000)) + 1;
+
+  if (activeDays <= 0) {
+    return 0;
+  }
+
+  return Math.min(activeDays / totalDaysInYear, 1);
+}
+
+function getVacationAllowanceForYear(employee, year) {
+  return calculateProportionalVacationAllowance(
+    resolveBaseVacationAllowance(employee),
+    Boolean(employee?.telk),
+    Boolean(employee?.youngWorkerBenefit),
+    employee?.startDate,
+    year
+  );
+}
+
+function updateVacationAllowanceHint() {
+  if (!vacationAllowanceHint) {
+    return;
+  }
+
+  const baseVacationAllowance = Number(vacationAllowanceInput?.value);
+  const hasTelk = Boolean(telkInput?.checked);
+  const hasYoungWorkerBenefit = Boolean(youngWorkerInput?.checked);
+  const startDate = (startDateInput?.value || '').trim();
+  const startYear = Number((normalizeDateOnly(startDate) || '').slice(0, 4));
+  const targetYear = Number.isFinite(startYear) ? startYear : new Date().getFullYear();
+  const allowance = calculateProportionalVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, startDate, targetYear);
+
+  vacationAllowanceHint.textContent = `Полагаем за ${targetYear}: ${allowance} дни`;
+}
+
+function getWorkingVacationDates(startDate, workingDays) {
+  const dates = [];
+  const current = new Date(startDate);
+  let remaining = Number(workingDays);
+
+  while (remaining > 0) {
+    if (!isWeekend(current)) {
+      dates.push(new Date(current));
+      remaining -= 1;
+    }
+    current.setDate(current.getDate() + 1);
+  }
+
+  return dates;
 }
 
 function resolveBaseVacationAllowance(employee) {
@@ -1980,8 +2072,8 @@ function attachEmployeeEditModalControls() {
     const baseVacationAllowance = Number(editVacationAllowanceInput.value);
     const hasTelk = Boolean(editTelkInput?.checked);
     const hasYoungWorkerBenefit = Boolean(editYoungWorkerInput?.checked);
-    const vacationAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit);
     const startDate = (editStartDateInput?.value || '').trim();
+    const vacationAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit);
     const endDate = (editEndDateInput?.value || '').trim() || null;
     const departmentId = editDepartmentInput.value || null;
     const selectedDepartment = departmentId ? state.departments.find((dep) => dep.id === departmentId) : null;
@@ -2110,7 +2202,9 @@ function renderEmployees() {
 
     const details = document.createElement('div');
     const employmentRange = formatEmploymentRange(employee);
-    details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Период: ${employmentRange}<br>Полагаем отпуск: ${employee.vacationAllowance} дни${employee.telk ? ' (ТЕЛК)' : ''}${employee.youngWorkerBenefit ? ' (16-18 с разрешение)' : ''}`;
+    const allowanceYear = Number((state.month || todayMonth()).split('-')[0]);
+    const allowanceForYear = getVacationAllowanceForYear(employee, allowanceYear);
+    details.innerHTML = `<b>${employee.name}</b><br>ЕГН: ${employee.egn || '-'}<br>${employee.department} • ${employee.position}<br>Период: ${employmentRange}<br>Полагаем отпуск (${allowanceYear}): ${allowanceForYear} дни${employee.telk ? ' (ТЕЛК)' : ''}${employee.youngWorkerBenefit ? ' (16-18 с разрешение)' : ''}`;
 
     const employeeDepartmentSelect = document.createElement('select');
     const emptyOption = document.createElement('option');
@@ -2222,35 +2316,51 @@ function attachVacationForm() {
     }
 
     const employeeId = vacationEmployeeSelect.value;
-    const start = new Date(vacationStartInput.value);
-    const end = new Date(vacationEndInput.value);
+    const start = new Date(`${vacationStartInput.value}T00:00:00`);
+    const requestedWorkingDays = Number(vacationDaysInput.value);
 
-    if (!employeeId || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
-      return;
-    }
-
-    const startMonth = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`;
-    const endMonth = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}`;
-    if (startMonth !== state.month || endMonth !== state.month) {
-      setStatus('Диапазонът за отпуск трябва да е в избрания месец.', false);
+    if (!employeeId || Number.isNaN(start.getTime()) || !Number.isInteger(requestedWorkingDays) || requestedWorkingDays < 1) {
       return;
     }
 
     const employee = state.employees.find((entry) => entry.id === employeeId);
-    const scheduleId = employee ? getEmployeeScheduleId(employee) : null;
+    if (!employee) {
+      return;
+    }
 
+    const year = Number((state.month || todayMonth()).split('-')[0]);
+    const totalAllowance = getVacationAllowanceForYear(employee, year);
+    const used = getVacationUsedForYear(employee.id, year);
+    const remainingAllowance = totalAllowance - used;
+
+    if (requestedWorkingDays > remainingAllowance) {
+      setStatus(`Недостатъчен наличен отпуск. Остават ${remainingAllowance} дни.`, false);
+      return;
+    }
+
+    const vacationDates = getWorkingVacationDates(start, requestedWorkingDays);
+    const outOfMonth = vacationDates.some((date) => {
+      const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      return month !== state.month;
+    });
+
+    if (outOfMonth) {
+      setStatus('Избраният отпуск излиза извън активния месец.', false);
+      return;
+    }
+
+    const scheduleId = getEmployeeScheduleId(employee);
     const promises = [];
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const day = d.getDate();
+
+    vacationDates.forEach((date) => {
+      const day = date.getDate();
       const key = scheduleKey(employeeId, state.month, day);
       state.schedule[key] = 'O';
       if (scheduleId) {
         state.scheduleEntriesById[`${scheduleId}|${employeeId}|${day}`] = 'O';
       }
-      if (employee) {
-        promises.push(saveScheduleEntryBackend(employee, day, 'O'));
-      }
-    }
+      promises.push(saveScheduleEntryBackend(employee, day, 'O'));
+    });
 
     saveScheduleLocal();
     await Promise.all(promises);
@@ -2267,12 +2377,14 @@ function renderVacationLedger() {
   const year = Number((state.month || todayMonth()).split('-')[0]);
   const table = document.createElement('table');
   table.innerHTML =
-    '<tr><th>Служител</th><th>Полагаем</th><th>Използван за годината</th><th>Остатък</th></tr>';
+    '<tr><th>Служител</th><th>Полагаем</th><th>Период отпуск</th><th>Използван за годината</th><th>Остатък</th></tr>';
 
   state.employees.forEach((employee) => {
     const used = getVacationUsedForYear(employee.id, year);
+    const allowance = getVacationAllowanceForYear(employee, year);
+    const periods = getVacationPeriodsForMonth(employee.id, state.month || todayMonth());
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${employee.name}</td><td>${employee.vacationAllowance}</td><td>${used}</td><td>${employee.vacationAllowance - used}</td>`;
+    tr.innerHTML = `<td>${employee.name}</td><td>${allowance}</td><td>${periods}</td><td>${used}</td><td>${allowance - used}</td>`;
     table.appendChild(tr);
   });
 
@@ -2548,7 +2660,7 @@ function getVisibleSummaryColumns() {
 }
 
 function calculateEmployeeTotals({ employee, summary, year, month, monthNormHours }) {
-  const remainingVacation = employee.vacationAllowance - getVacationUsedForYear(employee.id, year);
+  const remainingVacation = getVacationAllowanceForYear(employee, year) - getVacationUsedForYear(employee.id, year);
   const normalizedHolidayHours = summary.holidayWorkedHours * state.rates.holiday;
   const normalizedWeekendHours = summary.weekendWorkedHours * state.rates.weekend;
   const payableHours =
@@ -3324,6 +3436,47 @@ function getVacationUsedForYear(employeeId, year) {
   return used;
 }
 
+
+function getVacationPeriodsForMonth(employeeId, monthKey) {
+  const entries = [];
+  const [year, month] = monthKey.split('-').map(Number);
+  const totalDays = new Date(year, month, 0).getDate();
+
+  for (let day = 1; day <= totalDays; day += 1) {
+    if (state.schedule[scheduleKey(employeeId, monthKey, day)] === 'O') {
+      entries.push(day);
+    }
+  }
+
+  if (!entries.length) {
+    return '-';
+  }
+
+  const ranges = [];
+  let rangeStart = entries[0];
+  let previous = entries[0];
+
+  for (let index = 1; index < entries.length; index += 1) {
+    const current = entries[index];
+    if (current === previous + 1) {
+      previous = current;
+      continue;
+    }
+
+    ranges.push([rangeStart, previous]);
+    rangeStart = current;
+    previous = current;
+  }
+  ranges.push([rangeStart, previous]);
+
+  return ranges
+    .map(([start, end]) => {
+      const startDate = `${monthKey}-${String(start).padStart(2, '0')}`;
+      const endDate = `${monthKey}-${String(end).padStart(2, '0')}`;
+      return start === end ? startDate : `${startDate} до ${endDate}`;
+    })
+    .join(', ');
+}
 
 function normalizeEmployeeVacationData(employee) {
   const normalized = employee ? { ...employee } : {};
