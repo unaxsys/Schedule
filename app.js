@@ -10,6 +10,7 @@ const BREAK_DEDUCTION_THRESHOLD_HOURS = 9;
 
 const TELK_EXTRA_VACATION_DAYS = 6;
 const YOUNG_WORKER_EXTRA_VACATION_DAYS = 6;
+const DEFAULT_BASE_VACATION_ALLOWANCE = 20;
 
 const SYSTEM_SHIFTS = [
   { code: 'P', label: 'П', name: 'Почивка', type: 'rest', start: '', end: '', hours: 0, locked: true },
@@ -1405,7 +1406,7 @@ employeeForm.addEventListener('submit', async (event) => {
   const middleName = (middleNameInput?.value || '').trim();
   const lastName = (lastNameInput?.value || '').trim();
 
-  const baseVacationAllowance = Number(vacationAllowanceInput.value);
+  const enteredVacationAllowance = Number(vacationAllowanceInput.value);
   const hasTelk = Boolean(telkInput?.checked);
   const hasYoungWorkerBenefit = Boolean(youngWorkerInput?.checked);
 
@@ -1418,18 +1419,18 @@ employeeForm.addEventListener('submit', async (event) => {
     egn: (egnInput?.value || '').trim(),
     startDate: (startDateInput?.value || '').trim(),
     endDate: (endDateInput?.value || '').trim() || null,
-    vacationAllowance: calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, (startDateInput?.value || '').trim()),
+    vacationAllowance: enteredVacationAllowance,
     telk: hasTelk,
     youngWorkerBenefit: hasYoungWorkerBenefit,
-    baseVacationAllowance
+    baseVacationAllowance: DEFAULT_BASE_VACATION_ALLOWANCE
   };
 
-  if (!firstName || !middleName || !lastName || !employee.position || !/^\d{10}$/.test(employee.egn) || !Number.isFinite(baseVacationAllowance) || baseVacationAllowance < 0 || !isValidEmploymentDates(employee.startDate, employee.endDate)) {
+  if (!firstName || !middleName || !lastName || !employee.position || !/^\d{10}$/.test(employee.egn) || !Number.isFinite(enteredVacationAllowance) || enteredVacationAllowance < 0 || !isValidEmploymentDates(employee.startDate, employee.endDate)) {
     return;
   }
 
-  const { targetYear, allowance: proportionalAllowance } = getVacationAllowancePreviewData(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit, employee.startDate);
-  const enteredTotalAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit);
+  const { targetYear, allowance: proportionalAllowance } = getVacationAllowancePreviewData(DEFAULT_BASE_VACATION_ALLOWANCE, hasTelk, hasYoungWorkerBenefit, employee.startDate);
+  const enteredTotalAllowance = enteredVacationAllowance;
   if (enteredTotalAllowance !== proportionalAllowance) {
     const confirmed = window.confirm(`Въведеният отпуск (${enteredTotalAllowance} дни) е различен от полагаемия за ${targetYear} г. (${proportionalAllowance} дни). Искате ли да продължите?`);
     if (!confirmed) {
@@ -1461,7 +1462,7 @@ employeeForm.addEventListener('submit', async (event) => {
   if (departmentInput) {
     departmentInput.value = '';
   }
-  vacationAllowanceInput.value = 20;
+  vacationAllowanceInput.value = DEFAULT_BASE_VACATION_ALLOWANCE;
   if (telkInput) {
     telkInput.checked = false;
   }
@@ -1479,7 +1480,6 @@ employeeForm.addEventListener('submit', async (event) => {
 });
 
 startDateInput?.addEventListener('change', updateVacationAllowanceHint);
-vacationAllowanceInput?.addEventListener('input', updateVacationAllowanceHint);
 telkInput?.addEventListener('change', updateVacationAllowanceHint);
 youngWorkerInput?.addEventListener('change', updateVacationAllowanceHint);
 updateVacationAllowanceHint();
@@ -1777,7 +1777,7 @@ function updateVacationAllowanceHint() {
     return;
   }
 
-  const baseVacationAllowance = Number(vacationAllowanceInput?.value);
+  const baseVacationAllowance = DEFAULT_BASE_VACATION_ALLOWANCE;
   const hasTelk = Boolean(telkInput?.checked);
   const hasYoungWorkerBenefit = Boolean(youngWorkerInput?.checked);
   const startDate = (startDateInput?.value || '').trim();
@@ -1810,7 +1810,7 @@ function resolveBaseVacationAllowance(employee) {
 
   const total = Number(employee?.vacationAllowance);
   if (!Number.isFinite(total)) {
-    return 20;
+    return DEFAULT_BASE_VACATION_ALLOWANCE;
   }
 
   return Math.max(0, total - getExtraVacationDays(Boolean(employee?.telk), Boolean(employee?.youngWorkerBenefit)));
