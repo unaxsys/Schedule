@@ -6,6 +6,11 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
+const {
+  DEFAULT_WEEKEND_RATE,
+  DEFAULT_HOLIDAY_RATE,
+  computeMonthlySummary,
+} = require('./labor_rules');
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -193,6 +198,24 @@ function isValidMonthKey(value) {
 function normalizeDepartmentName(value) {
   const text = cleanStr(value);
   return text.length ? text : null;
+}
+
+async function tableExists(tableName) {
+  const check = await pool.query('SELECT to_regclass($1) IS NOT NULL AS exists', [`public.${tableName}`]);
+  return Boolean(check.rows[0]?.exists);
+}
+
+async function tableHasColumn(tableName, columnName) {
+  const check = await pool.query(
+    `SELECT 1
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = $1
+       AND column_name = $2
+     LIMIT 1`,
+    [tableName, columnName]
+  );
+  return Boolean(check.rowCount);
 }
 
 
@@ -450,9 +473,13 @@ async function initDatabase() {
       employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
       day INTEGER NOT NULL CHECK (day >= 1 AND day <= 31),
       shift_code VARCHAR(16) NOT NULL,
+      month_key TEXT NOT NULL CHECK (month_key ~ '^\\d{4}-\\d{2}$'),
       PRIMARY KEY (schedule_id, employee_id, day)
     )
   `);
+
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_entries_month_key ON schedule_entries(month_key)`);
 
   await pool.query(`
     DO $$
@@ -1203,7 +1230,11 @@ app.post('/api/schedules/:id/entry', async (req, res) => {
       });
     }
 
-    const effectiveMonth = monthKey || schedule.month_key;
+    const effectiveMonth = monthKey || cleanStr(schedule.month_key);
+    if (!effectiveMonth || !isValidMonthKey(effectiveMonth)) {
+      return res.status(400).json({ message: 'Липсва валиден monthKey (YYYY-MM) за записа.' });
+    }
+
     const entryDate = normalizeDateOnly(`${effectiveMonth}-${String(day).padStart(2, '0')}`);
     if (!entryDate || !isValidEmploymentRange(employee.startDate, employee.endDate || entryDate)) {
       return res.status(400).json({ message: 'Невалиден период на заетост за служителя.' });
@@ -1212,13 +1243,26 @@ app.post('/api/schedules/:id/entry', async (req, res) => {
       return res.status(409).json({ message: 'Денят е извън периода на заетост на служителя.' });
     }
 
-    await pool.query(
-      `INSERT INTO schedule_entries (schedule_id, employee_id, day, shift_code)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (schedule_id, employee_id, day)
-       DO UPDATE SET shift_code = EXCLUDED.shift_code`,
-      [scheduleId, employeeId, day, shiftCode]
-    );
+    const hasScheduleEntriesMonthKey = await tableHasColumn('schedule_entries', 'month_key');
+
+    if (hasScheduleEntriesMonthKey) {
+      await pool.query(
+        `INSERT INTO schedule_entries (schedule_id, employee_id, day, shift_code, month_key)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (schedule_id, employee_id, day)
+         DO UPDATE SET shift_code = EXCLUDED.shift_code,
+                       month_key = EXCLUDED.month_key`,
+        [scheduleId, employeeId, day, shiftCode, effectiveMonth]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO schedule_entries (schedule_id, employee_id, day, shift_code)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (schedule_id, employee_id, day)
+         DO UPDATE SET shift_code = EXCLUDED.shift_code`,
+        [scheduleId, employeeId, day, shiftCode]
+      );
+    }
 
     res.json({ ok: true });
   } catch (error) {
@@ -1262,6 +1306,137 @@ app.delete('/api/shift-template/:code', async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/api/calc/summary', requireAuth, async (req, res, next) => {
+  try {
+    const monthKey = cleanStr(req.body?.monthKey);
+    if (!isValidMonthKey(monthKey)) {
+      return res.status(400).json({ message: 'Невалиден monthKey. Очаква се YYYY-MM.' });
+    }
+
+    const requiredTables = ['employees', 'schedules', 'schedule_entries', 'shift_templates'];
+    for (const tableName of requiredTables) {
+      if (!(await tableExists(tableName))) {
+        return res.status(501).json({ message: `Липсва required table: ${tableName}` });
+      }
+    }
+
+    const actor = await resolveActorTenant(req);
+    const hasEmployeesTenantColumn = await tableHasColumn('employees', 'tenant_id');
+    if (!hasEmployeesTenantColumn) {
+      return res.status(501).json({ message: 'Липсва employees.tenant_id за tenant-safe филтриране.' });
+    }
+
+    const employeeQuery = await pool.query(
+      `SELECT id,
+              department_id,
+              start_date::text AS start_date,
+              end_date::text AS end_date
+       FROM employees
+       WHERE tenant_id = $1
+       ORDER BY id`,
+      [actor.tenantId]
+    );
+
+    const employees = employeeQuery.rows;
+    const employeeIds = employees.map((employee) => employee.id);
+
+    const shiftTemplatesQuery = await pool.query(
+      `SELECT code,
+              name,
+              start_time,
+              end_time,
+              hours
+       FROM shift_templates
+       ORDER BY code`
+    );
+
+    const schedulesQuery = await pool.query(
+      `SELECT id, name, month_key, department, status
+       FROM schedules
+       WHERE month_key = $1
+       ORDER BY created_at, id`,
+      [monthKey]
+    );
+
+    const bodyScheduleIdsRaw = Array.isArray(req.body?.selectedScheduleIds)
+      ? req.body.selectedScheduleIds.map((value) => cleanStr(value)).filter(Boolean)
+      : [];
+
+    const validScheduleIds = schedulesQuery.rows.map((schedule) => String(schedule.id));
+    const validScheduleIdSet = new Set(validScheduleIds);
+
+    if (bodyScheduleIdsRaw.some((scheduleId) => !isValidUuid(scheduleId))) {
+      return res.status(400).json({ message: 'selectedScheduleIds трябва да съдържа валидни UUID.' });
+    }
+
+    const selectedFromBody = bodyScheduleIdsRaw.filter((scheduleId) => validScheduleIdSet.has(scheduleId));
+    if (bodyScheduleIdsRaw.length && selectedFromBody.length !== bodyScheduleIdsRaw.length) {
+      return res.status(400).json({ message: 'Невалидни schedule id за този monthKey.' });
+    }
+
+    let selectedScheduleIds = selectedFromBody;
+    if (!selectedScheduleIds.length) {
+      const locked = schedulesQuery.rows.filter((schedule) => cleanStr(schedule.status).toLowerCase() === 'locked');
+      selectedScheduleIds = (locked.length ? locked : schedulesQuery.rows).map((schedule) => String(schedule.id));
+    }
+
+    if (!selectedScheduleIds.length || !employeeIds.length) {
+      return res.json({
+        ok: true,
+        monthKey,
+        summaryByEmployee: {},
+        meta: {
+          selectedScheduleIds,
+          rates: {
+            weekendRate: Number(req.body?.weekendRate) || DEFAULT_WEEKEND_RATE,
+            holidayRate: Number(req.body?.holidayRate) || DEFAULT_HOLIDAY_RATE,
+          },
+        },
+      });
+    }
+
+    const entriesQuery = await pool.query(
+      `SELECT schedule_id, employee_id, day, shift_code
+       FROM schedule_entries
+       WHERE schedule_id = ANY($1::uuid[])
+         AND employee_id = ANY($2::uuid[])
+       ORDER BY employee_id, day`,
+      [selectedScheduleIds, employeeIds]
+    );
+
+    const weekendRate = Number(req.body?.weekendRate) || DEFAULT_WEEKEND_RATE;
+    const holidayRate = Number(req.body?.holidayRate) || DEFAULT_HOLIDAY_RATE;
+
+    const summaryMap = computeMonthlySummary({
+      monthKey,
+      employees,
+      schedules: schedulesQuery.rows,
+      scheduleEntries: entriesQuery.rows,
+      shiftTemplates: shiftTemplatesQuery.rows,
+      selectedScheduleIds,
+      weekendRate,
+      holidayRate,
+    });
+
+    const summaryByEmployee = {};
+    for (const [employeeId, summary] of summaryMap.entries()) {
+      summaryByEmployee[employeeId] = summary;
+    }
+
+    return res.json({
+      ok: true,
+      monthKey,
+      summaryByEmployee,
+      meta: {
+        selectedScheduleIds,
+        rates: { weekendRate, holidayRate },
+      },
+    });
+  } catch (error) {
+    return next(error);
   }
 });
 
