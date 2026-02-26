@@ -2359,7 +2359,7 @@ function attachVacationForm() {
     for (const [monthKey, dates] of vacationByMonth.entries()) {
       let scheduleId = null;
       if (state.backendAvailable) {
-        const schedule = await ensureScheduleForMonthAndDepartment(monthKey, employee.department);
+        const schedule = await ensureScheduleForMonthAndDepartment(monthKey, resolveEmployeeDepartmentName(employee));
         scheduleId = schedule?.id || null;
       }
 
@@ -2381,6 +2381,22 @@ function attachVacationForm() {
   });
 }
 
+
+
+function resolveEmployeeDepartmentName(employee) {
+  const direct = (employee?.department || '').trim();
+  if (direct && direct !== 'Без отдел') {
+    return direct;
+  }
+
+  const departmentId = employee?.departmentId || null;
+  if (!departmentId) {
+    return '';
+  }
+
+  const byId = state.departments.find((department) => department.id === departmentId);
+  return byId ? String(byId.name || '').trim() : '';
+}
 
 function groupDatesByMonth(dates) {
   const byMonth = new Map();
@@ -2452,7 +2468,7 @@ function renderVacationLedger() {
   state.employees.forEach((employee) => {
     const used = getVacationUsedForYear(employee.id, year);
     const allowance = getVacationAllowanceForYear(employee, year);
-    const periods = getVacationPeriodsForMonth(employee.id, state.month || todayMonth());
+    const periods = getVacationPeriodsForYear(employee.id, year);
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${employee.name}</td><td>${allowance}</td><td>${periods}</td><td>${used}</td><td>${allowance - used}</td>`;
     table.appendChild(tr);
@@ -3507,16 +3523,19 @@ function getVacationUsedForYear(employeeId, year) {
 }
 
 
-function getVacationPeriodsForMonth(employeeId, monthKey) {
-  const entries = [];
-  const [year, month] = monthKey.split('-').map(Number);
-  const totalDays = new Date(year, month, 0).getDate();
-
-  for (let day = 1; day <= totalDays; day += 1) {
-    if (state.schedule[scheduleKey(employeeId, monthKey, day)] === 'O') {
-      entries.push(day);
-    }
-  }
+function getVacationPeriodsForYear(employeeId, year) {
+  const entries = Object.keys(state.schedule)
+    .filter((key) => key.startsWith(`${employeeId}|${year}-`) && state.schedule[key] === 'O')
+    .map((key) => {
+      const [, monthKey, dayPart] = key.split('|');
+      const day = Number(dayPart);
+      if (!monthKey || !Number.isFinite(day)) {
+        return null;
+      }
+      return `${monthKey}-${String(day).padStart(2, '0')}`;
+    })
+    .filter(Boolean)
+    .sort();
 
   if (!entries.length) {
     return '-';
@@ -3528,7 +3547,12 @@ function getVacationPeriodsForMonth(employeeId, monthKey) {
 
   for (let index = 1; index < entries.length; index += 1) {
     const current = entries[index];
-    if (current === previous + 1) {
+    const previousDate = new Date(`${previous}T00:00:00`);
+    const expectedNext = new Date(previousDate);
+    expectedNext.setDate(previousDate.getDate() + 1);
+    const expectedKey = `${expectedNext.getFullYear()}-${String(expectedNext.getMonth() + 1).padStart(2, '0')}-${String(expectedNext.getDate()).padStart(2, '0')}`;
+
+    if (current === expectedKey) {
       previous = current;
       continue;
     }
@@ -3540,11 +3564,7 @@ function getVacationPeriodsForMonth(employeeId, monthKey) {
   ranges.push([rangeStart, previous]);
 
   return ranges
-    .map(([start, end]) => {
-      const startDate = `${monthKey}-${String(start).padStart(2, '0')}`;
-      const endDate = `${monthKey}-${String(end).padStart(2, '0')}`;
-      return start === end ? startDate : `${startDate} до ${endDate}`;
-    })
+    .map(([start, end]) => (start === end ? start : `${start} до ${end}`))
     .join(', ');
 }
 
