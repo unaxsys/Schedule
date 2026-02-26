@@ -164,6 +164,7 @@
             <label class="field-inline">Начална дата <input id="startDateInput" type="date" required /></label>
             <label class="field-inline">Последен работен ден <input id="endDateInput" type="date" /></label>
             <input id="vacationAllowanceInput" type="number" min="0" value="20" required placeholder="Годишен отпуск" />
+            <small id="vacationAllowanceHint" class="vacation-allowance-hint">Полагаем за годината: 20 дни</small>
             <label class="field-inline field-checkbox">
               <input id="telkInput" type="checkbox" />
               <span>ТЕЛК (+6 дни отпуск)</span>
@@ -200,7 +201,7 @@
           <form id="vacationForm" class="row">
             <select id="vacationEmployeeSelect" required></select>
             <input id="vacationStartInput" type="date" required />
-            <input id="vacationEndInput" type="date" required />
+            <input id="vacationDaysInput" type="number" min="1" step="1" required placeholder="Брой работни дни" />
             <button type="submit">Маркирай отпуск</button>
           </form>
           <div id="vacationLedger"></div>
