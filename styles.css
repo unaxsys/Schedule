@@ -641,6 +641,8 @@ select.shift-select {
   color: #1e40af;
   font-size: 0.78rem;
   font-weight: 700;
+  display: block;
+  margin-top: 0.2rem;
 }
 
 
