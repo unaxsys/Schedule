@@ -58,11 +58,105 @@ function ensureAdmin(req, res) {
 
 const JWT_SECRET = cleanStr(process.env.JWT_SECRET);
 const JWT_EXPIRES_IN = cleanStr(process.env.JWT_EXPIRES_IN || '12h');
+const LOGIN_TOKEN_EXPIRES_IN = cleanStr(process.env.LOGIN_TOKEN_EXPIRES_IN || '5m');
 
 function createHttpError(status, message) {
   const error = new Error(message);
   error.status = status;
   return error;
+}
+
+function normalizeTenantRole(role) {
+  const normalized = cleanStr(role).toLowerCase();
+  return ['owner', 'admin', 'manager', 'user'].includes(normalized) ? normalized : 'user';
+}
+
+function normalizeTenantStatus(status) {
+  const normalized = cleanStr(status).toLowerCase();
+  return ['pending', 'approved', 'disabled'].includes(normalized) ? normalized : 'pending';
+}
+
+function mapTenantMembership(row) {
+  return {
+    id: row.tenantId,
+    name: cleanStr(row.tenantName),
+    role: normalizeTenantRole(row.role),
+    status: normalizeTenantStatus(row.status),
+  };
+}
+
+function buildUserPayload(user, tenantId = null, role = null) {
+  return {
+    id: user.id,
+    email: user.email,
+    first_name: user.first_name,
+    last_name: user.last_name,
+    is_super_admin: user.is_super_admin === true,
+    tenantId,
+    role: normalizeTenantRole(role),
+  };
+}
+
+function signAccessToken({ user, tenantId = null, role = null }) {
+  if (!JWT_SECRET) {
+    throw createHttpError(500, 'JWT secret is not configured.');
+  }
+
+  return jwt.sign(
+    {
+      id: user.id,
+      email: user.email,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      is_super_admin: user.is_super_admin === true,
+      tenant_id: tenantId,
+      active_tenant_id: tenantId,
+      role: normalizeTenantRole(role),
+    },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_IN }
+  );
+}
+
+function signLoginSelectionToken(userId) {
+  if (!JWT_SECRET) {
+    throw createHttpError(500, 'JWT secret is not configured.');
+  }
+
+  return jwt.sign(
+    {
+      sub: userId,
+      type: 'login_tenant_select',
+    },
+    JWT_SECRET,
+    { expiresIn: LOGIN_TOKEN_EXPIRES_IN }
+  );
+}
+
+function verifyLoginSelectionToken(token) {
+  if (!JWT_SECRET) {
+    throw createHttpError(500, 'JWT secret is not configured.');
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded?.type !== 'login_tenant_select') {
+      throw createHttpError(401, 'Невалиден loginToken.');
+    }
+    const userId = cleanStr(decoded.sub);
+    if (!isValidUuid(userId)) {
+      throw createHttpError(401, 'Невалиден loginToken.');
+    }
+    return userId;
+  } catch (error) {
+    if (error.status) {
+      throw error;
+    }
+    if (error.name === 'TokenExpiredError' || error.name === 'JsonWebTokenError') {
+      throw createHttpError(401, 'Невалиден loginToken.');
+    }
+    throw error;
+  }
 }
 
 function requireAuth(req, res, next) {
@@ -87,6 +181,7 @@ function requireAuth(req, res, next) {
       email: decoded.email,
       first_name: decoded.first_name,
       last_name: decoded.last_name,
+      role: cleanStr(decoded.role).toLowerCase() || null,
       is_super_admin: decoded.is_super_admin === true,
       tenant_id: cleanStr(decoded.tenant_id || decoded.tenantId) || null,
       active_tenant_id: cleanStr(decoded.active_tenant_id || decoded.activeTenantId) || null,
@@ -158,10 +253,12 @@ async function resolveTenantId(req) {
   }
 
   const membership = await pool.query(
-    `SELECT tenant_id AS "tenantId", role
-     FROM tenant_users
-     WHERE user_id = $1
-     ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, tenant_id`,
+    `SELECT tu.tenant_id AS "tenantId", tu.role
+     FROM tenant_users tu
+     JOIN tenants t ON t.id = tu.tenant_id
+     WHERE tu.user_id = $1
+       AND t.status = 'approved'
+     ORDER BY CASE tu.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, tu.tenant_id`,
     [req.user?.id]
   );
 
@@ -197,9 +294,12 @@ async function resolveActorTenant(req) {
   }
 
   const membership = await pool.query(
-    `SELECT role
-     FROM tenant_users
-     WHERE user_id = $1 AND tenant_id = $2
+    `SELECT tu.role
+     FROM tenant_users tu
+     JOIN tenants t ON t.id = tu.tenant_id
+     WHERE tu.user_id = $1
+       AND tu.tenant_id = $2
+       AND t.status = 'approved'
      LIMIT 1`,
     [req.user?.id, tenantId]
   );
@@ -1670,17 +1770,12 @@ app.post('/api/calc/summary', requireAuth, requireTenantContext, async (req, res
 app.post('/api/auth/login', async (req, res, next) => {
   const email = cleanStr(req.body?.email).toLowerCase();
   const password = cleanStr(req.body?.password);
-  const requestedTenantId = cleanStr(req.body?.tenantId || req.body?.activeTenantId);
 
   if (!email || !password) {
     return res.status(400).json({ message: 'Email and password are required.' });
   }
 
   try {
-    if (!JWT_SECRET) {
-      throw createHttpError(500, 'JWT secret is not configured.');
-    }
-
     const userResult = await pool.query(
       `SELECT id, email, password_hash, first_name, last_name, is_super_admin, is_active
        FROM users
@@ -1705,77 +1800,206 @@ app.post('/api/auth/login', async (req, res, next) => {
 
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
 
+    if (user.is_super_admin === true) {
+      const token = signAccessToken({ user, tenantId: null, role: 'admin' });
+      return res.json({
+        mode: 'ok',
+        token,
+        user: buildUserPayload(user, null, 'admin'),
+        tenant: null,
+      });
+    }
+
     const membershipsResult = await pool.query(
-      `SELECT tenant_id AS "tenantId", role
-       FROM tenant_users
-       WHERE user_id = $1
-       ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, created_at ASC`,
+      `SELECT tu.tenant_id AS "tenantId", tu.role, t.name AS "tenantName", t.status
+       FROM tenant_users tu
+       JOIN tenants t ON t.id = tu.tenant_id
+       WHERE tu.user_id = $1
+         AND t.status = 'approved'
+       ORDER BY CASE tu.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END,
+                t.name ASC,
+                tu.created_at ASC`,
       [user.id]
     );
 
-    const availableTenants = membershipsResult.rows.map((row) => ({
-      tenantId: row.tenantId,
-      role: cleanStr(row.role).toLowerCase(),
-    }));
+    const memberships = membershipsResult.rows.map(mapTenantMembership);
 
-    let activeTenantId = null;
-
-    if (user.is_super_admin !== true) {
-      if (!availableTenants.length) {
-        return res.status(403).json({ message: 'Потребителят няма достъп до организация.' });
-      }
-
-      if (requestedTenantId) {
-        if (!isValidUuid(requestedTenantId)) {
-          return res.status(400).json({ message: 'Невалиден tenantId.' });
-        }
-        const hasRequestedTenant = availableTenants.some((row) => row.tenantId === requestedTenantId);
-        if (!hasRequestedTenant) {
-          return res.status(403).json({ message: 'Нямате достъп до избрания tenant.' });
-        }
-        activeTenantId = requestedTenantId;
-      } else if (availableTenants.length === 1) {
-        activeTenantId = availableTenants[0].tenantId;
-      } else {
-        return res.status(409).json({
-          message: 'Изберете организация за вход.',
-          requiresTenantSelection: true,
-          tenants: availableTenants,
-        });
-      }
-    } else if (requestedTenantId) {
-      if (!isValidUuid(requestedTenantId)) {
-        return res.status(400).json({ message: 'Невалиден tenantId.' });
-      }
-      activeTenantId = requestedTenantId;
+    if (!memberships.length) {
+      return res.status(403).json({ message: 'Потребителят няма активен достъп до организация.' });
     }
 
-    const token = jwt.sign(
-      {
-        id: user.id,
-        email: user.email,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        is_super_admin: user.is_super_admin === true,
-        tenant_id: activeTenantId,
-        active_tenant_id: activeTenantId,
-      },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES_IN }
+    if (memberships.length === 1) {
+      const selectedTenant = memberships[0];
+      const token = signAccessToken({ user, tenantId: selectedTenant.id, role: selectedTenant.role });
+
+      return res.json({
+        mode: 'ok',
+        token,
+        user: buildUserPayload(user, selectedTenant.id, selectedTenant.role),
+        tenant: {
+          id: selectedTenant.id,
+          name: selectedTenant.name,
+        },
+      });
+    }
+
+    const loginToken = signLoginSelectionToken(user.id);
+    return res.json({
+      mode: 'choose_tenant',
+      loginToken,
+      tenants: memberships.map((tenant) => ({ id: tenant.id, name: tenant.name, role: tenant.role })),
+      user: buildUserPayload(user, null, 'user'),
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/auth/select-tenant', async (req, res, next) => {
+  const loginToken = cleanStr(req.body?.loginToken);
+  const tenantId = cleanStr(req.body?.tenantId);
+
+  if (!loginToken || !tenantId) {
+    return res.status(400).json({ message: 'loginToken и tenantId са задължителни.' });
+  }
+
+  if (!isValidUuid(tenantId)) {
+    return res.status(400).json({ message: 'Невалиден tenantId.' });
+  }
+
+  try {
+    const userId = verifyLoginSelectionToken(loginToken);
+
+    const result = await pool.query(
+      `SELECT u.id, u.email, u.first_name, u.last_name, u.is_super_admin, u.is_active,
+              tu.role,
+              t.id AS "tenantId", t.name AS "tenantName", t.status
+       FROM users u
+       JOIN tenant_users tu ON tu.user_id = u.id
+       JOIN tenants t ON t.id = tu.tenant_id
+       WHERE u.id = $1
+         AND tu.tenant_id = $2
+         AND t.status = 'approved'
+       LIMIT 1`,
+      [userId, tenantId]
+    );
+
+    if (!result.rowCount) {
+      return res.status(403).json({ message: 'Нямате достъп до избраната фирма.' });
+    }
+
+    const row = result.rows[0];
+    if (!row.is_active) {
+      return res.status(401).json({ message: 'Потребителят е неактивен.' });
+    }
+
+    const role = normalizeTenantRole(row.role);
+    const token = signAccessToken({ user: row, tenantId: row.tenantId, role });
+
+    return res.json({
+      mode: 'ok',
+      token,
+      tenant: { id: row.tenantId, name: cleanStr(row.tenantName) },
+      user: buildUserPayload(row, row.tenantId, role),
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/me/tenants', requireAuth, async (req, res, next) => {
+  try {
+    if (req.user?.is_super_admin === true) {
+      return res.json({ tenants: [] });
+    }
+
+    const membershipsResult = await pool.query(
+      `SELECT tu.tenant_id AS "tenantId", tu.role, t.name AS "tenantName", t.status
+       FROM tenant_users tu
+       JOIN tenants t ON t.id = tu.tenant_id
+       WHERE tu.user_id = $1
+       ORDER BY CASE tu.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END,
+                t.name ASC,
+                tu.created_at ASC`,
+      [req.user?.id]
     );
 
     return res.json({
+      tenants: membershipsResult.rows.map(mapTenantMembership),
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/auth/switch-tenant', requireAuth, async (req, res, next) => {
+  const tenantId = cleanStr(req.body?.tenantId);
+
+  if (!tenantId || !isValidUuid(tenantId)) {
+    return res.status(400).json({ message: 'Невалиден tenantId.' });
+  }
+
+  try {
+    if (req.user?.is_super_admin === true) {
+      const tenantResult = await pool.query(
+        `SELECT id, name
+         FROM tenants
+         WHERE id = $1
+         LIMIT 1`,
+        [tenantId]
+      );
+
+      if (!tenantResult.rowCount) {
+        return res.status(404).json({ message: 'Tenant не е намерен.' });
+      }
+
+      const currentUserResult = await pool.query(
+        `SELECT id, email, first_name, last_name, is_super_admin
+         FROM users
+         WHERE id = $1
+         LIMIT 1`,
+        [req.user?.id]
+      );
+
+      if (!currentUserResult.rowCount) {
+        return res.status(401).json({ message: 'Unauthorized' });
+      }
+
+      const token = signAccessToken({ user: currentUserResult.rows[0], tenantId, role: 'admin' });
+
+      return res.json({
+        token,
+        tenant: tenantResult.rows[0],
+      });
+    }
+
+    const membershipResult = await pool.query(
+      `SELECT u.id, u.email, u.first_name, u.last_name, u.is_super_admin,
+              tu.role,
+              t.id AS "tenantId", t.name AS "tenantName"
+       FROM users u
+       JOIN tenant_users tu ON tu.user_id = u.id
+       JOIN tenants t ON t.id = tu.tenant_id
+       WHERE u.id = $1
+         AND tu.tenant_id = $2
+       LIMIT 1`,
+      [req.user?.id, tenantId]
+    );
+
+    if (!membershipResult.rowCount) {
+      return res.status(403).json({ message: 'Нямате достъп до избраната фирма.' });
+    }
+
+    const row = membershipResult.rows[0];
+    const role = normalizeTenantRole(row.role);
+    const token = signAccessToken({ user: row, tenantId: row.tenantId, role });
+
+    return res.json({
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        is_super_admin: user.is_super_admin === true,
-        tenantId: activeTenantId,
+      tenant: {
+        id: row.tenantId,
+        name: cleanStr(row.tenantName),
       },
-      activeTenantId,
-      tenants: availableTenants,
     });
   } catch (error) {
     return next(error);
