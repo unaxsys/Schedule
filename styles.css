@@ -135,30 +135,35 @@ header p {
   display: block;
 }
 
-.row,
-.employee-form {
+.row {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
   align-items: flex-start;
 }
 
+.employee-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.5rem;
+  align-items: start;
+}
+
 .form-field {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
-  min-width: 160px;
-  flex: 1 1 170px;
+  min-width: 0;
 }
 
 .form-field--checkbox {
-  min-width: 260px;
+  grid-column: span 2;
 }
 
 .form-field--action {
+  grid-column: span 2;
   justify-content: flex-end;
-  flex: 0 0 auto;
-  min-width: 160px;
+  align-items: stretch;
 }
 
 .field-label {
@@ -207,6 +212,16 @@ select {
   border-radius: 8px;
   padding: 0.45rem 0.6rem;
   font-size: 0.95rem;
+}
+
+.employee-form input,
+.employee-form select,
+.employee-form button {
+  width: 100%;
+}
+
+.employee-form .field-inline {
+  width: 100%;
 }
 button {
   cursor: pointer;
@@ -1211,4 +1226,22 @@ html.welcome-lock, html.welcome-lock body { height: 100%; overflow: hidden; }
 
 .tenant-choice-item button {
   white-space: nowrap;
+}
+
+
+@media (max-width: 1350px) {
+  .employee-form {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+
+  .form-field--checkbox,
+  .form-field--action {
+    grid-column: span 1;
+  }
+}
+
+@media (max-width: 900px) {
+  .employee-form {
+    grid-template-columns: 1fr;
+  }
 }
