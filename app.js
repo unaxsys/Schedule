@@ -58,7 +58,8 @@ const state = {
   summaryColumnsVisibility: loadSummaryColumnsVisibility(),
   superAdminOverview: null,
   authToken: loadAuthToken(),
-  currentUser: loadCurrentUser()
+  currentUser: loadCurrentUser(),
+  platformUserEmployees: []
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -878,6 +879,12 @@ function attachSettingsSubtabs() {
       const target = btn.dataset.settingsTab;
       settingsSubtabButtons.forEach((other) => other.classList.toggle('active', other === btn));
       settingsSubtabPanels.forEach((panel) => panel.classList.toggle('active', panel.id === target));
+
+      if (target === 'usersSettingsPanel') {
+        loadPlatformUserEmployees().catch(() => {
+          renderPlatformUserEmployeeOptions();
+        });
+      }
     });
   });
 }
@@ -1325,6 +1332,33 @@ function renderAll() {
   updateCreateScheduleButtonState();
 }
 
+async function loadPlatformUserEmployees() {
+  if (!platformUserEmployeeInput) {
+    return;
+  }
+
+  if (!state.backendAvailable) {
+    state.platformUserEmployees = state.employees.slice();
+    renderPlatformUserEmployeeOptions();
+    return;
+  }
+
+  try {
+    const response = await apiFetch('/api/employees');
+    if (!response.ok) {
+      throw new Error('Employees unavailable');
+    }
+
+    const payload = await response.json();
+    const employees = Array.isArray(payload.employees) ? payload.employees : [];
+    state.platformUserEmployees = employees.map(normalizeEmployeeVacationData);
+  } catch (_error) {
+    state.platformUserEmployees = state.employees.slice();
+  }
+
+  renderPlatformUserEmployeeOptions();
+}
+
 function renderPlatformUserEmployeeOptions() {
   if (!platformUserEmployeeInput) {
     return;
@@ -1338,7 +1372,8 @@ function renderPlatformUserEmployeeOptions() {
   placeholder.textContent = 'Изберете служител';
   platformUserEmployeeInput.appendChild(placeholder);
 
-  state.employees.forEach((employee) => {
+  const sourceEmployees = state.platformUserEmployees.length ? state.platformUserEmployees : state.employees;
+  sourceEmployees.forEach((employee) => {
     const option = document.createElement('option');
     option.value = employee.id;
     option.textContent = `${employee.name} (${employee.department || 'Без отдел'})`;
