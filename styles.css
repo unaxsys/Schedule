@@ -1229,19 +1229,24 @@ html.welcome-lock, html.welcome-lock body { height: 100%; overflow: hidden; }
 }
 
 
-@media (max-width: 1500px) {
+@media (max-width: 1280px) {
   .employee-form {
     grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
   .form-field--checkbox,
   .form-field--action {
-    grid-column: span 2;
+    grid-column: span 3;
   }
 }
 
 @media (max-width: 900px) {
   .employee-form {
     grid-template-columns: 1fr;
+  }
+
+  .form-field--checkbox,
+  .form-field--action {
+    grid-column: span 1;
   }
 }
