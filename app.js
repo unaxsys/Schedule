@@ -67,7 +67,8 @@ const state = {
   platformUsers: [],
   availableTenants: [],
   pendingLoginToken: '',
-  requiresTenantSelection: false
+  requiresTenantSelection: false,
+  expandedVacationDossierEmployeeId: null
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -2470,12 +2471,57 @@ function renderVacationLedger() {
     const allowance = getVacationAllowanceForYear(employee, year);
     const periods = getVacationPeriodsForYear(employee.id, year);
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${employee.name}</td><td>${allowance}</td><td>${periods}</td><td>${used}</td><td>${allowance - used}</td>`;
+
+    const isExpanded = state.expandedVacationDossierEmployeeId === employee.id;
+    tr.innerHTML = `
+      <td>
+        <button type="button" class="vacation-dossier-toggle" data-employee-id="${employee.id}" aria-expanded="${isExpanded}">${employee.name}</button>
+      </td>
+      <td>${allowance}</td>
+      <td>${periods}</td>
+      <td>${used}</td>
+      <td>${allowance - used}</td>
+    `;
     table.appendChild(tr);
+
+    if (isExpanded) {
+      const detailRow = document.createElement('tr');
+      detailRow.className = 'vacation-dossier-row';
+      const ranges = getVacationRangesForYear(employee.id, year);
+      const rows = ranges.length
+        ? ranges.map(([start, end], index) => {
+          const formattedStart = formatDateForDisplay(start);
+          const formattedEnd = formatDateForDisplay(end);
+          const period = start === end ? formattedStart : `${formattedStart} - ${formattedEnd}`;
+          return `<tr><td>${index + 1}</td><td>${period}</td></tr>`;
+        }).join('')
+        : '<tr><td colspan="2">Няма записани отпуски за годината.</td></tr>';
+
+      detailRow.innerHTML = `
+        <td colspan="5">
+          <div class="vacation-dossier-wrap">
+            <div class="vacation-dossier-title">Период отпуск</div>
+            <table class="vacation-dossier-table">
+              <tr><th>#</th><th>Период</th></tr>
+              ${rows}
+            </table>
+          </div>
+        </td>
+      `;
+      table.appendChild(detailRow);
+    }
   });
 
   vacationLedger.innerHTML = '';
   vacationLedger.appendChild(table);
+
+  vacationLedger.querySelectorAll('.vacation-dossier-toggle').forEach((button) => {
+    button.addEventListener('click', () => {
+      const employeeId = button.dataset.employeeId || '';
+      state.expandedVacationDossierEmployeeId = state.expandedVacationDossierEmployeeId === employeeId ? null : employeeId;
+      renderVacationLedger();
+    });
+  });
 }
 
 function getActiveSchedule() {
@@ -3572,11 +3618,10 @@ function getVacationDateKeysForYear(employeeId, year) {
   return Array.from(entries).sort();
 }
 
-function getVacationPeriodsForYear(employeeId, year) {
+function getVacationRangesForYear(employeeId, year) {
   const entries = getVacationDateKeysForYear(employeeId, year);
-
   if (!entries.length) {
-    return '-';
+    return [];
   }
 
   const ranges = [];
@@ -3595,6 +3640,14 @@ function getVacationPeriodsForYear(employeeId, year) {
     previous = current;
   }
   ranges.push([rangeStart, previous]);
+  return ranges;
+}
+
+function getVacationPeriodsForYear(employeeId, year) {
+  const ranges = getVacationRangesForYear(employeeId, year);
+  if (!ranges.length) {
+    return '-';
+  }
 
   return ranges
     .map(([start, end]) => {

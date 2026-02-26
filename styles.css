@@ -410,6 +410,44 @@ select.shift-select {
   padding: 0.2rem;
   font-size: 0.85rem;
 }
+
+.vacation-dossier-toggle {
+  background: transparent;
+  border: none;
+  color: #1e3a8a;
+  font-weight: 700;
+  text-decoration: underline;
+  padding: 0;
+}
+
+.vacation-dossier-toggle:hover {
+  color: #1d4ed8;
+  background: transparent;
+}
+
+.vacation-dossier-row td {
+  background: #f8fbff;
+}
+
+.vacation-dossier-wrap {
+  text-align: left;
+}
+
+.vacation-dossier-title {
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+
+.vacation-dossier-table {
+  width: 100%;
+  min-width: 0;
+}
+
+.vacation-dossier-table th,
+.vacation-dossier-table td {
+  text-align: left;
+}
+
 .summary-col {
   background: #eff6ff;
   font-weight: 600;
