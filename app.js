@@ -125,6 +125,10 @@ const lockStatus = document.getElementById('lockStatus');
 const summarySettingsList = document.getElementById('summarySettingsList');
 const settingsSubtabButtons = document.querySelectorAll('.settings-subtab-btn');
 const settingsSubtabPanels = document.querySelectorAll('.settings-subtab-panel');
+const usersSettingsSubtabButton = document.querySelector('.settings-subtab-btn[data-settings-tab="usersSettingsPanel"]');
+const usersSettingsPanel = document.getElementById('usersSettingsPanel');
+const summarySettingsSubtabButton = document.querySelector('.settings-subtab-btn[data-settings-tab="summarySettingsPanel"]');
+const summarySettingsPanel = document.getElementById('summarySettingsPanel');
 const departmentForm = document.getElementById('departmentForm');
 const departmentNameInput = document.getElementById('departmentNameInput');
 const departmentList = document.getElementById('departmentList');
@@ -204,6 +208,7 @@ async function init() {
     userRoleSelect.value = state.userRole;
   }
   updateSuperAdminPortalVisibility();
+  updateUsersSettingsTabVisibility();
 
   attachApiControls();
   attachRoleControls();
@@ -272,6 +277,27 @@ function updateSuperAdminPortalVisibility() {
   superAdminPortalLink.classList.toggle('hidden', !isSuperAdmin);
 }
 
+function updateUsersSettingsTabVisibility() {
+  if (!usersSettingsSubtabButton || !usersSettingsPanel) {
+    return;
+  }
+
+  const canViewUsersTab = state.userRole !== 'user';
+  usersSettingsSubtabButton.classList.toggle('hidden', !canViewUsersTab);
+  usersSettingsPanel.classList.toggle('hidden', !canViewUsersTab);
+
+  if (!canViewUsersTab && usersSettingsSubtabButton.classList.contains('active')) {
+    usersSettingsSubtabButton.classList.remove('active');
+    usersSettingsPanel.classList.remove('active');
+    if (summarySettingsSubtabButton) {
+      summarySettingsSubtabButton.classList.add('active');
+    }
+    if (summarySettingsPanel) {
+      summarySettingsPanel.classList.add('active');
+    }
+  }
+}
+
 function attachRoleControls() {
   if (!userRoleSelect) {
     return;
@@ -285,6 +311,7 @@ function attachRoleControls() {
       userRoleSelect.value = state.userRole;
       saveUserRole();
       updateSuperAdminPortalVisibility();
+      updateUsersSettingsTabVisibility();
       renderEmployees();
       setStatus('Само платформеният собственик може да използва роля Супер администратор.', false);
       return;
@@ -293,6 +320,7 @@ function attachRoleControls() {
     state.userRole = selectedRole;
     saveUserRole();
     updateSuperAdminPortalVisibility();
+    updateUsersSettingsTabVisibility();
     renderEmployees();
     setStatus(`Активна роля: ${getRoleLabel(state.userRole)}.`, true);
   });
@@ -776,6 +804,7 @@ function syncRoleFromAuthenticatedUser() {
     userRoleSelect.value = state.userRole;
   }
   updateSuperAdminPortalVisibility();
+  updateUsersSettingsTabVisibility();
 }
 
 function resolveTenantIdForPlatformUserCreate() {
