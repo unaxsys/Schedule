@@ -58,7 +58,8 @@ const state = {
   summaryColumnsVisibility: loadSummaryColumnsVisibility(),
   superAdminOverview: null,
   authToken: loadAuthToken(),
-  currentUser: loadCurrentUser()
+  currentUser: loadCurrentUser(),
+  platformUserEmployees: []
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -152,10 +153,10 @@ const preAuthScreen = document.getElementById('preAuthScreen');
 const appShell = document.getElementById('appShell');
 const logoutBtn = document.getElementById('logoutBtn');
 const createPlatformUserForm = document.getElementById('createPlatformUserForm');
-const platformUserRegistrationIdInput = document.getElementById('platformUserRegistrationIdInput');
-const platformUserFullNameInput = document.getElementById('platformUserFullNameInput');
+const platformUserEmployeeInput = document.getElementById('platformUserEmployeeInput');
 const platformUserEmailInput = document.getElementById('platformUserEmailInput');
 const platformUserPasswordInput = document.getElementById('platformUserPasswordInput');
+const generatePlatformPasswordBtn = document.getElementById('generatePlatformPasswordBtn');
 const platformUserRoleInput = document.getElementById('platformUserRoleInput');
 const refreshSuperAdminBtn = document.getElementById('refreshSuperAdminBtn');
 const superAdminUsage = document.getElementById('superAdminUsage');
@@ -384,14 +385,19 @@ function attachRegistrationControls() {
   }
 
   if (createPlatformUserForm) {
+    if (generatePlatformPasswordBtn) {
+      generatePlatformPasswordBtn.addEventListener('click', () => {
+        platformUserPasswordInput.value = generateSecurePassword();
+      });
+    }
+
     createPlatformUserForm.addEventListener('submit', async (event) => {
       event.preventDefault();
       try {
         await apiRequest('/api/platform/users', {
           method: 'POST',
           body: JSON.stringify({
-            registrationId: platformUserRegistrationIdInput.value,
-            fullName: platformUserFullNameInput.value,
+            employeeId: platformUserEmployeeInput.value,
             email: platformUserEmailInput.value,
             password: platformUserPasswordInput.value,
             role: platformUserRoleInput.value,
@@ -404,6 +410,15 @@ function attachRegistrationControls() {
       }
     });
   }
+}
+
+function generateSecurePassword() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
+  let output = '';
+  for (let i = 0; i < 14; i += 1) {
+    output += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return output;
 }
 
 function updateAuthUi() {
@@ -864,6 +879,12 @@ function attachSettingsSubtabs() {
       const target = btn.dataset.settingsTab;
       settingsSubtabButtons.forEach((other) => other.classList.toggle('active', other === btn));
       settingsSubtabPanels.forEach((panel) => panel.classList.toggle('active', panel.id === target));
+
+      if (target === 'usersSettingsPanel') {
+        loadPlatformUserEmployees().catch(() => {
+          renderPlatformUserEmployeeOptions();
+        });
+      }
     });
   });
 }
@@ -1305,9 +1326,63 @@ function renderAll() {
   renderSchedule();
   renderVacationLedger();
   renderVacationEmployeeOptions();
+  renderPlatformUserEmployeeOptions();
   renderShiftList();
   renderLegend();
   updateCreateScheduleButtonState();
+}
+
+async function loadPlatformUserEmployees() {
+  if (!platformUserEmployeeInput) {
+    return;
+  }
+
+  if (!state.backendAvailable) {
+    state.platformUserEmployees = state.employees.slice();
+    renderPlatformUserEmployeeOptions();
+    return;
+  }
+
+  try {
+    const response = await apiFetch('/api/employees');
+    if (!response.ok) {
+      throw new Error('Employees unavailable');
+    }
+
+    const payload = await response.json();
+    const employees = Array.isArray(payload.employees) ? payload.employees : [];
+    state.platformUserEmployees = employees.map(normalizeEmployeeVacationData);
+  } catch (_error) {
+    state.platformUserEmployees = state.employees.slice();
+  }
+
+  renderPlatformUserEmployeeOptions();
+}
+
+function renderPlatformUserEmployeeOptions() {
+  if (!platformUserEmployeeInput) {
+    return;
+  }
+
+  const currentValue = platformUserEmployeeInput.value;
+  platformUserEmployeeInput.innerHTML = '';
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Изберете служител';
+  platformUserEmployeeInput.appendChild(placeholder);
+
+  const sourceEmployees = state.platformUserEmployees.length ? state.platformUserEmployees : state.employees;
+  sourceEmployees.forEach((employee) => {
+    const option = document.createElement('option');
+    option.value = employee.id;
+    option.textContent = `${employee.name} (${employee.department || 'Без отдел'})`;
+    platformUserEmployeeInput.appendChild(option);
+  });
+
+  if (currentValue) {
+    platformUserEmployeeInput.value = currentValue;
+  }
 }
 
 function renderLegend() {

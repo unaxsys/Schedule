@@ -120,6 +120,34 @@ function requireSuperAdmin(req, res, next) {
   });
 }
 
+async function resolveActorTenant(req, { allowSuperAdminTenantFromBody = false } = {}) {
+  if (req.user?.is_super_admin === true && allowSuperAdminTenantFromBody) {
+    const superAdminTenantId = cleanStr(req.body?.tenantId || req.body?.registrationId || req.query?.tenantId);
+    if (!isValidUuid(superAdminTenantId)) {
+      throw createHttpError(400, 'Невалиден Tenant ID.');
+    }
+    return { tenantId: superAdminTenantId, role: 'super_admin' };
+  }
+
+  const membership = await pool.query(
+    `SELECT tenant_id AS "tenantId", role
+     FROM tenant_users
+     WHERE user_id = $1
+     ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, tenant_id
+     LIMIT 1`,
+    [req.user?.id]
+  );
+
+  if (!membership.rowCount) {
+    throw createHttpError(403, 'Нямате организация за управление.');
+  }
+
+  return {
+    tenantId: membership.rows[0].tenantId,
+    role: cleanStr(membership.rows[0].role).toLowerCase(),
+  };
+}
+
 async function insertAuditLog(action, entity, payload = {}) {
   try {
     await pool.query(
@@ -367,6 +395,7 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS telk BOOLEAN NOT NULL DEFAULT FALSE`);
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS young_worker_benefit BOOLEAN NOT NULL DEFAULT FALSE`);
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS end_date DATE NULL`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
   await pool.query(`
     DO $$
     BEGIN
@@ -384,7 +413,25 @@ async function initDatabase() {
     END $$;
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_department_id ON employees(department_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employees_tenant_id ON employees(tenant_id)`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_egn_unique ON employees(egn) WHERE egn IS NOT NULL`);
+
+  // Backwards-compatible bootstrap for existing single-tenant installations:
+  // if legacy employees exist without tenant_id and there is exactly one tenant,
+  // assign them to that tenant so old data remains visible.
+  try {
+    const tenantsCountResult = await pool.query('SELECT COUNT(*)::int AS total FROM tenants');
+    const tenantsCount = tenantsCountResult.rows[0]?.total || 0;
+    if (tenantsCount === 1) {
+      await pool.query(
+        `UPDATE employees
+         SET tenant_id = (SELECT id FROM tenants ORDER BY created_at ASC LIMIT 1)
+         WHERE tenant_id IS NULL`
+      );
+    }
+  } catch (bootstrapError) {
+    console.error('EMPLOYEE TENANT BACKFILL WARN:', bootstrapError.message);
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schedules (
@@ -706,7 +753,7 @@ app.delete('/api/departments/:id', async (req, res) => {
   }
 });
 
-app.get('/api/employees', async (req, res) => {
+app.get('/api/employees', requireAuth, async (req, res) => {
   const departmentId = cleanStr(req.query.department_id);
   const monthKey = cleanStr(req.query.month_key || req.query.month);
 
@@ -718,8 +765,12 @@ app.get('/api/employees', async (req, res) => {
   }
 
   try {
+    const actor = await resolveActorTenant(req);
     const params = [];
     const where = [];
+
+    params.push(actor.tenantId);
+    where.push(`(e.tenant_id = $${params.length} OR e.tenant_id IS NULL)`);
 
     if (departmentId) {
       params.push(departmentId);
@@ -751,7 +802,7 @@ app.get('/api/employees', async (req, res) => {
   }
 });
 
-app.post('/api/employees', async (req, res) => {
+app.post('/api/employees', requireAuth, async (req, res) => {
   const validation = validateEmployeeInput(req.body);
   if (!validation.valid) {
     return res.status(400).json(validation.error);
@@ -760,6 +811,7 @@ app.post('/api/employees', async (req, res) => {
   const { name, department, departmentId, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit } = validation.value;
 
   try {
+    const actor = await resolveActorTenant(req);
     let resolvedDepartmentId = null;
     let departmentName = department;
 
@@ -782,14 +834,14 @@ app.post('/api/employees', async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO employees (name, department, department_id, position, egn, vacation_allowance, base_vacation_allowance, telk, young_worker_benefit, start_date, end_date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `INSERT INTO employees (name, department, department_id, position, egn, vacation_allowance, base_vacation_allowance, telk, young_worker_benefit, start_date, end_date, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING id, name, department_id AS "departmentId", department, position, egn,
                  base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  start_date::text AS "startDate", end_date::text AS "endDate",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
-      [name, departmentName, resolvedDepartmentId, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, startDate, endDate]
+      [name, departmentName, resolvedDepartmentId, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, startDate, endDate, actor.tenantId]
     );
 
     res.status(201).json({ ok: true, employee: result.rows[0] });
@@ -803,7 +855,7 @@ app.post('/api/employees', async (req, res) => {
 });
 
 
-app.put('/api/employees/:id', async (req, res) => {
+app.put('/api/employees/:id', requireAuth, async (req, res) => {
   const id = cleanStr(req.params.id);
   if (!isValidUuid(id)) {
     return res.status(400).json({ message: 'Невалиден employee id.' });
@@ -817,6 +869,7 @@ app.put('/api/employees/:id', async (req, res) => {
   const { name, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit } = validation.value;
 
   try {
+    const actor = await resolveActorTenant(req);
     const updated = await pool.query(
       `UPDATE employees
        SET name = $2,
@@ -827,14 +880,15 @@ app.put('/api/employees/:id', async (req, res) => {
            telk = $7,
            young_worker_benefit = $8,
            start_date = $9,
-           end_date = $10
-       WHERE id = $1
+           end_date = $10,
+           tenant_id = COALESCE(tenant_id, $11)
+       WHERE id = $1 AND (tenant_id = $11 OR tenant_id IS NULL)
        RETURNING id, name, department_id AS "departmentId", COALESCE(department, 'Без отдел') AS department,
                  position, egn, base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  start_date::text AS "startDate", end_date::text AS "endDate",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
-      [id, name, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, startDate, endDate]
+      [id, name, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, startDate, endDate, actor.tenantId]
     );
 
     if (!updated.rowCount) {
@@ -850,7 +904,7 @@ app.put('/api/employees/:id', async (req, res) => {
   }
 });
 
-app.put('/api/employees/:id/department', async (req, res) => {
+app.put('/api/employees/:id/department', requireAuth, async (req, res) => {
   const id = cleanStr(req.params.id);
   const departmentId = req.body?.department_id === null ? null : cleanStr(req.body?.department_id);
 
@@ -862,6 +916,7 @@ app.put('/api/employees/:id/department', async (req, res) => {
   }
 
   try {
+    const actor = await resolveActorTenant(req);
     let departmentName = null;
     if (departmentId) {
       const dep = await pool.query('SELECT id, name FROM departments WHERE id = $1', [departmentId]);
@@ -874,14 +929,15 @@ app.put('/api/employees/:id/department', async (req, res) => {
     const updated = await pool.query(
       `UPDATE employees
        SET department_id = $2,
-           department = $3
-       WHERE id = $1
+           department = $3,
+           tenant_id = COALESCE(tenant_id, $4)
+       WHERE id = $1 AND (tenant_id = $4 OR tenant_id IS NULL)
        RETURNING id, name, department_id AS "departmentId", COALESCE($3, 'Без отдел') AS department, position,
                  egn, base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  start_date::text AS "startDate", end_date::text AS "endDate",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
-      [id, departmentId, departmentName]
+      [id, departmentId, departmentName, actor.tenantId]
     );
 
     if (!updated.rowCount) {
@@ -903,9 +959,10 @@ async function releaseEmployee(req, res) {
   const requestedEndDate = getReleaseDateFromRequest(req);
 
   try {
+    const actor = await resolveActorTenant(req);
     const employeeResult = await pool.query(
-      'SELECT id, start_date::text AS "startDate" FROM employees WHERE id = $1',
-      [id]
+      'SELECT id, start_date::text AS "startDate" FROM employees WHERE id = $1 AND (tenant_id = $2 OR tenant_id IS NULL)',
+      [id, actor.tenantId]
     );
 
     if (!employeeResult.rowCount) {
@@ -922,9 +979,9 @@ async function releaseEmployee(req, res) {
     const updated = await pool.query(
       `UPDATE employees
        SET end_date = $2
-       WHERE id = $1
+       WHERE id = $1 AND (tenant_id = $3 OR tenant_id IS NULL)
        RETURNING id, end_date::text AS "endDate"`,
-      [id, requestedEndDate]
+      [id, requestedEndDate, actor.tenantId]
     );
 
     return res.json({ ok: true, employee: updated.rows[0] });
@@ -933,9 +990,9 @@ async function releaseEmployee(req, res) {
   }
 }
 
-app.patch('/api/employees/:id/release', releaseEmployee);
+app.patch('/api/employees/:id/release', requireAuth, releaseEmployee);
 
-app.delete('/api/employees/:id', async (req, res) => {
+app.delete('/api/employees/:id', requireAuth, async (req, res) => {
   if (!ensureAdmin(req, res)) {
     return;
   }
@@ -946,7 +1003,8 @@ app.delete('/api/employees/:id', async (req, res) => {
   }
 
   try {
-    const deleted = await pool.query('DELETE FROM employees WHERE id = $1 RETURNING id', [id]);
+    const actor = await resolveActorTenant(req);
+    const deleted = await pool.query('DELETE FROM employees WHERE id = $1 AND (tenant_id = $2 OR tenant_id IS NULL) RETURNING id', [id, actor.tenantId]);
     if (!deleted.rowCount) {
       return res.status(404).json({ message: 'Служителят не е намерен.' });
     }
@@ -1331,28 +1389,41 @@ app.post('/api/platform/register', async (req, res, next) => {
   }
 });
 
-app.post('/api/platform/users', requireSuperAdmin, async (req, res, next) => {
+app.post('/api/platform/users', requireAuth, async (req, res, next) => {
 
-  const tenantId = cleanStr(req.body?.tenantId || req.body?.registrationId);
-  const fullName = cleanStr(req.body?.fullName);
+  const employeeId = cleanStr(req.body?.employeeId);
   const email = cleanStr(req.body?.email).toLowerCase();
   const password = cleanStr(req.body?.password);
   const role = cleanStr(req.body?.role).toLowerCase();
 
-  if (!isValidUuid(tenantId) || !fullName || !email || !password || password.length < 8) {
+  if (!email || !password || password.length < 8) {
     return res.status(400).json({ message: 'Невалидни данни за потребител.' });
   }
   if (!['manager', 'user'].includes(role)) {
     return res.status(400).json({ message: 'Позволени роли за добавяне: manager и user.' });
   }
+  if (!isValidUuid(employeeId)) {
+    return res.status(400).json({ message: 'Изберете валиден служител.' });
+  }
 
   try {
-    const tenantCheck = await pool.query('SELECT id, name FROM tenants WHERE id = $1', [tenantId]);
-    if (!tenantCheck.rowCount) {
-      return res.status(404).json({ message: 'Организацията не е намерена.' });
+    const actor = await resolveActorTenant(req, { allowSuperAdminTenantFromBody: true });
+    const tenantId = actor.tenantId;
+    if (!['owner', 'admin', 'super_admin'].includes(actor.role)) {
+      return res.status(403).json({ message: 'Само owner/admin може да добавя потребители.' });
     }
 
-    const { firstName, lastName } = splitFullName(fullName);
+    const employeeCheck = await pool.query(
+      `SELECT id, name
+       FROM employees
+       WHERE id = $1 AND (tenant_id = $2 OR tenant_id IS NULL)`,
+      [employeeId, tenantId]
+    );
+    if (!employeeCheck.rowCount) {
+      return res.status(404).json({ message: 'Служителят не е намерен.' });
+    }
+
+    const { firstName, lastName } = splitFullName(employeeCheck.rows[0].name);
 
     const passwordHash = await bcrypt.hash(password, 12);
 
