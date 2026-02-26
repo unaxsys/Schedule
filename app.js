@@ -1792,7 +1792,7 @@ function getWorkingVacationDates(startDate, workingDays) {
   let remaining = Number(workingDays);
 
   while (remaining > 0) {
-    if (!isWeekend(current)) {
+    if (!isWeekend(current) && !isOfficialHoliday(current)) {
       dates.push(new Date(current));
       remaining -= 1;
     }
@@ -2353,33 +2353,89 @@ function attachVacationForm() {
     }
 
     const vacationDates = getWorkingVacationDates(start, requestedWorkingDays);
-    const outOfMonth = vacationDates.some((date) => {
-      const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-      return month !== state.month;
-    });
+    const vacationByMonth = groupDatesByMonth(vacationDates);
+    const backendPromises = [];
 
-    if (outOfMonth) {
-      setStatus('Избраният отпуск излиза извън активния месец.', false);
-      return;
+    for (const [monthKey, dates] of vacationByMonth.entries()) {
+      let scheduleId = null;
+      if (state.backendAvailable) {
+        const schedule = await ensureScheduleForMonthAndDepartment(monthKey, employee.department);
+        scheduleId = schedule?.id || null;
+      }
+
+      dates.forEach((date) => {
+        const day = date.getDate();
+        const key = scheduleKey(employeeId, monthKey, day);
+        state.schedule[key] = 'O';
+        if (scheduleId) {
+          state.scheduleEntriesById[`${scheduleId}|${employeeId}|${day}`] = 'O';
+          backendPromises.push(saveScheduleEntryBackend({ ...employee, scheduleId }, day, 'O', { monthKey, scheduleId }));
+        }
+      });
     }
 
-    const scheduleId = getEmployeeScheduleId(employee);
-    const promises = [];
-
-    vacationDates.forEach((date) => {
-      const day = date.getDate();
-      const key = scheduleKey(employeeId, state.month, day);
-      state.schedule[key] = 'O';
-      if (scheduleId) {
-        state.scheduleEntriesById[`${scheduleId}|${employeeId}|${day}`] = 'O';
-      }
-      promises.push(saveScheduleEntryBackend(employee, day, 'O'));
-    });
-
     saveScheduleLocal();
-    await Promise.all(promises);
+    await Promise.all(backendPromises);
+    await refreshMonthlyView();
     renderAll();
   });
+}
+
+
+function groupDatesByMonth(dates) {
+  const byMonth = new Map();
+  dates.forEach((date) => {
+    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    if (!byMonth.has(monthKey)) {
+      byMonth.set(monthKey, []);
+    }
+    byMonth.get(monthKey).push(date);
+  });
+  return byMonth;
+}
+
+async function ensureScheduleForMonthAndDepartment(monthKey, departmentName) {
+  const department = (departmentName || '').trim();
+  if (!department || department === 'Без отдел') {
+    return null;
+  }
+
+  const existing = findScheduleByMonthAndDepartment(monthKey, department);
+  if (existing) {
+    return existing;
+  }
+
+  if (!state.backendAvailable) {
+    return null;
+  }
+
+  const name = `График ${department} – ${monthKey}`;
+  const response = await apiFetch('/api/schedules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ month_key: monthKey, department, name })
+  });
+
+  if (!response.ok) {
+    let message = `Неуспешно автоматично създаване на график за ${monthKey}.`;
+    try {
+      const payload = await response.json();
+      if (payload?.message) {
+        message = payload.message;
+      }
+    } catch {
+      // ignore non-JSON responses
+    }
+    setStatus(message, false);
+    return null;
+  }
+
+  const payload = await response.json();
+  const created = payload.schedule || null;
+  if (created?.id) {
+    state.schedules.push(created);
+  }
+  return created;
 }
 
 function renderVacationLedger() {
@@ -2585,7 +2641,7 @@ function renderSchedule() {
           }
 
           const toShift = select.value;
-          const scheduleId = getEmployeeScheduleId(employee);
+          const scheduleId = options.scheduleId || getEmployeeScheduleId(employee);
           if (scheduleId) {
             state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = toShift;
           }
@@ -3306,13 +3362,13 @@ async function deleteEmployeeBackend(employeeId) {
   }
 }
 
-async function saveScheduleEntryBackend(employee, day, shiftCode) {
+async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) {
   if (!state.backendAvailable) {
     return;
   }
 
   try {
-    const scheduleId = getEmployeeScheduleId(employee);
+    const scheduleId = options.scheduleId || getEmployeeScheduleId(employee);
     if (!scheduleId) {
       throw new Error('Липсва график за отдела.');
     }
@@ -3320,7 +3376,7 @@ async function saveScheduleEntryBackend(employee, day, shiftCode) {
     const response = await apiFetch(`/api/schedules/${scheduleId}/entry`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ employee_id: employee.id, day, shift_code: shiftCode, month_key: state.month })
+      body: JSON.stringify({ employee_id: employee.id, day, shift_code: shiftCode, month_key: options.monthKey || state.month })
     });
 
     if (!response.ok) {
