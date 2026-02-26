@@ -2429,6 +2429,18 @@ function attachVacationForm() {
     }
 
     const vacationDates = getWorkingVacationDates(start, requestedWorkingDays);
+    const employeeStartDate = normalizeDateOnly(employee.startDate);
+    const hasDatesBeforeEmployment = vacationDates.some((date) => {
+      const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      return !isDateWithinEmployment(employee, dateKey);
+    });
+
+    if (hasDatesBeforeEmployment) {
+      const startText = employeeStartDate ? formatDateForDisplay(employeeStartDate) : 'валидната дата на назначение';
+      setStatus(`Не може да пуснете отпуск за период преди назначение. Служителят е назначен от ${startText}.`, false);
+      return;
+    }
+
     const vacationByMonth = groupDatesByMonth(vacationDates);
     const backendPromises = [];
 
@@ -2744,8 +2756,20 @@ async function correctVacationPeriod(employee, oldStartDateKey, oldEndDateKey, n
     return;
   }
 
-  const oldResult = await setVacationShiftForDateRange(employee, oldStartDateKey, oldEndDateKey, 'P', { ensureSchedule: false });
   const newDates = getWorkingVacationDates(newStart, newWorkingDays);
+  const employeeStartDate = normalizeDateOnly(employee.startDate);
+  const hasDatesBeforeEmployment = newDates.some((date) => {
+    const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    return !isDateWithinEmployment(employee, dateKey);
+  });
+
+  if (hasDatesBeforeEmployment) {
+    const startText = employeeStartDate ? formatDateForDisplay(employeeStartDate) : 'валидната дата на назначение';
+    setStatus(`Не може да пуснете отпуск за период преди назначение. Служителят е назначен от ${startText}.`, false);
+    return;
+  }
+
+  const oldResult = await setVacationShiftForDateRange(employee, oldStartDateKey, oldEndDateKey, 'P', { ensureSchedule: false });
   const newRanges = groupDatesByMonth(newDates);
 
   let inserted = 0;
