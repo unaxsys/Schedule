@@ -2692,11 +2692,20 @@ function renderVacationLedger() {
   }
 
   const year = Number((state.month || todayMonth()).split('-')[0]);
-  const table = document.createElement('table');
-  table.innerHTML =
-    '<tr><th>Служител</th><th>Полагаем</th><th>Използван за годината</th><th>Остатък</th></tr>';
-
+  const previousYear = year - 1;
   const filteredEmployees = getVacationLedgerFilteredEmployees();
+  const hasCarryoverColumn = filteredEmployees.some((employee) => {
+    const previousAllowance = getVacationAllowanceForYear(employee, previousYear);
+    const previousUsed = getVacationUsedForYear(employee.id, previousYear);
+    return Math.max(0, previousAllowance - previousUsed) > 0;
+  });
+
+  const table = document.createElement('table');
+  const allowanceHeader = hasCarryoverColumn ? `Полагаем ${year}` : 'Полагаем';
+  const carryoverHeader = hasCarryoverColumn ? `<th>Дни за ${year}</th>` : '';
+  table.innerHTML =
+    `<tr><th>Служител</th><th>${allowanceHeader}</th>${carryoverHeader}<th>Използван за годината</th><th>Остатък</th></tr>`;
+
   if (!filteredEmployees.length) {
     vacationLedger.textContent = 'Няма служители по зададения филтър.';
     return;
@@ -2705,6 +2714,10 @@ function renderVacationLedger() {
   filteredEmployees.forEach((employee) => {
     const used = getVacationUsedForYear(employee.id, year);
     const allowance = getVacationAllowanceForYear(employee, year);
+    const previousAllowance = getVacationAllowanceForYear(employee, previousYear);
+    const previousUsed = getVacationUsedForYear(employee.id, previousYear);
+    const carryoverDays = hasCarryoverColumn ? Math.max(0, previousAllowance - previousUsed) : 0;
+    const totalAllowanceForYear = allowance + carryoverDays;
     const tr = document.createElement('tr');
 
     const isExpanded = state.expandedVacationDossierEmployeeId === employee.id;
@@ -2713,8 +2726,9 @@ function renderVacationLedger() {
         <button type="button" class="vacation-dossier-toggle" data-employee-id="${employee.id}" aria-expanded="${isExpanded}">${employee.name}</button>
       </td>
       <td>${allowance}</td>
+      ${hasCarryoverColumn ? `<td>${carryoverDays}</td>` : ''}
       <td>${used}</td>
-      <td>${allowance - used}</td>
+      <td>${totalAllowanceForYear - used}</td>
     `;
     table.appendChild(tr);
 
@@ -2732,7 +2746,7 @@ function renderVacationLedger() {
         : '<tr><td colspan="3">Няма записани отпуски за годината.</td></tr>';
 
       detailRow.innerHTML = `
-        <td colspan="4">
+        <td colspan="${hasCarryoverColumn ? 5 : 4}">
           <div class="vacation-dossier-wrap">
             <div class="vacation-dossier-title">Период отпуск</div>
             <table class="vacation-dossier-table">
