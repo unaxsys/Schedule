@@ -3240,7 +3240,7 @@ function renderSchedule() {
         state.shiftTemplates.forEach((shift) => {
           const option = document.createElement('option');
           option.value = shift.code;
-          option.textContent = `${shift.label} (${shift.name})`;
+          option.textContent = shift.label || shift.code;
           option.dataset.shiftCode = shift.code;
           option.dataset.shiftId = shift.id || '';
           option.selected = shift.code === currentShift;

@@ -1869,22 +1869,16 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     const hasIsManualColumn = await tableHasColumn('schedule_entries', 'is_manual');
     const hasNotesColumn = await tableHasColumn('schedule_entries', 'notes');
     const hasUpdatedAtColumn = await tableHasColumn('schedule_entries', 'updated_at');
+    const hasShiftTemplatesBreakMinutes = await tableHasColumn('shift_templates', 'break_minutes');
+    const shiftTemplatesSelect = `SELECT id, code, name, start_time, end_time, hours${hasShiftTemplatesBreakMinutes ? ', COALESCE(break_minutes, 0) AS break_minutes' : ', 0::integer AS break_minutes'} FROM shift_templates`;
 
     let snapshot = computeSystemShiftSnapshot(resolvedShiftCode, entryDate);
 
     const shiftTemplatesForCalcResult = snapshot
       ? { rows: [] }
       : await (hasTenantId
-          ? pool.query(
-              `SELECT id, code, name, start_time, end_time, hours, COALESCE(break_minutes, 0) AS break_minutes
-               FROM shift_templates
-               WHERE tenant_id = $1`,
-              [req.tenantId]
-            )
-          : pool.query(
-              `SELECT id, code, name, start_time, end_time, hours, COALESCE(break_minutes, 0) AS break_minutes
-               FROM shift_templates`
-            ));
+          ? pool.query(`${shiftTemplatesSelect} WHERE tenant_id = $1`, [req.tenantId])
+          : pool.query(shiftTemplatesSelect));
 
     if (!snapshot) {
       const selectedShiftForSnapshot = appendSystemShiftTemplates(shiftTemplatesForCalcResult.rows).find((row) => {
@@ -1989,16 +1983,8 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
 
     const [shiftTemplatesResult, entriesResult, employeesResult] = await Promise.all([
       hasTenantId
-        ? pool.query(
-          `SELECT id, code, name, start_time, end_time, hours, COALESCE(break_minutes, 0) AS break_minutes
-           FROM shift_templates
-           WHERE tenant_id = $1`,
-          [req.tenantId]
-        )
-        : pool.query(
-          `SELECT id, code, name, start_time, end_time, hours, COALESCE(break_minutes, 0) AS break_minutes
-           FROM shift_templates`
-        ),
+        ? pool.query(`${shiftTemplatesSelect} WHERE tenant_id = $1`, [req.tenantId])
+        : pool.query(shiftTemplatesSelect),
       pool.query(
         `SELECT schedule_id, employee_id, day, shift_code${hasWorkMinutes ? ', work_minutes, night_minutes, holiday_minutes, weekend_minutes, overtime_minutes' : ''}
          FROM schedule_entries
