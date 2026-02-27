@@ -335,6 +335,18 @@
               <input id="shiftEndInput" type="time" required />
               <button type="submit">Добави смяна</button>
             </form>
+            <div class="row shift-import-row">
+              <button type="button" id="downloadShiftImportTemplateBtn">Свали шаблон</button>
+              <input id="shiftImportFileInput" type="file" accept=".csv,.xlsx" />
+              <button type="button" id="shiftImportPreviewBtn">Импорт от Excel/CSV</button>
+              <select id="shiftImportDepartmentInput">
+                <option value="">Изберете отдел</option>
+              </select>
+              <label><input type="checkbox" id="shiftImportUpdateDuplicatesInput" /> Update duplicates</label>
+              <button type="button" id="shiftImportCommitBtn">Commit</button>
+            </div>
+            <div id="shiftImportSummary" class="shift-import-summary"></div>
+            <div id="shiftImportPreview" class="shift-import-preview"></div>
             <div id="shiftList" class="shift-list"></div>
             <small>Смените „Почивка“, „Отпуск“ и „Болничен“ са системни и не се трият.</small>
           </div>
