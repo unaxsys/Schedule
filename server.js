@@ -244,12 +244,41 @@ function computeEntrySnapshot({ date, shift }) {
 }
 
 let shiftTemplatesHasTenantIdCache = null;
+let shiftTemplatesHasDepartmentIdCache = null;
 
 async function hasShiftTemplatesTenantId() {
   if (shiftTemplatesHasTenantIdCache === null) {
     shiftTemplatesHasTenantIdCache = await tableHasColumn('shift_templates', 'tenant_id');
   }
   return shiftTemplatesHasTenantIdCache;
+}
+
+async function hasShiftTemplatesDepartmentId() {
+  if (shiftTemplatesHasDepartmentIdCache === null) {
+    shiftTemplatesHasDepartmentIdCache = await tableHasColumn('shift_templates', 'department_id');
+  }
+  return shiftTemplatesHasDepartmentIdCache;
+}
+
+function buildShiftTemplateScopeCondition({ hasDepartmentId, departmentId, tenantScoped, startIndex = 1 }) {
+  const values = [];
+  const conditions = [];
+  if (tenantScoped) {
+    values.push(tenantScoped);
+    conditions.push(`tenant_id = $${startIndex + values.length - 1}`);
+  }
+  if (hasDepartmentId) {
+    if (departmentId) {
+      values.push(departmentId);
+      conditions.push(`(department_id = $${startIndex + values.length - 1} OR department_id IS NULL)`);
+    } else {
+      conditions.push('department_id IS NULL');
+    }
+  }
+  return {
+    values,
+    whereSql: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
+  };
 }
 
 async function ensureDefaultShiftTemplatesForTenant(tenantId) {
@@ -260,7 +289,7 @@ async function ensureDefaultShiftTemplatesForTenant(tenantId) {
       await pool.query(
         `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, hours)
          VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (tenant_id, code) DO NOTHING`,
+         ON CONFLICT (tenant_id, code) WHERE department_id IS NULL DO NOTHING`,
         [tenantId, shift.code, shift.name, shift.start_time, shift.end_time, shift.hours]
       );
     }
@@ -957,11 +986,40 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
   await pool.query(`ALTER TABLE departments ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
   await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
+  await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL`);
   await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS id UUID`);
   await pool.query(`UPDATE shift_templates SET id = gen_random_uuid() WHERE id IS NULL`);
   await pool.query(`ALTER TABLE shift_templates ALTER COLUMN id SET DEFAULT gen_random_uuid()`);
   await pool.query(`ALTER TABLE shift_templates ALTER COLUMN id SET NOT NULL`);
   await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
+  await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE schedule_entries ALTER COLUMN shift_code TYPE VARCHAR(16)`);
+  await pool.query(`ALTER TABLE audit_log ALTER COLUMN old_shift_code TYPE VARCHAR(16)`);
+  await pool.query(`ALTER TABLE audit_log ALTER COLUMN new_shift_code TYPE VARCHAR(16)`);
+
+  await pool.query(`
+    UPDATE schedules s
+    SET department_id = d.id
+    FROM departments d
+    WHERE s.department_id IS NULL
+      AND NULLIF(TRIM(s.department), '') IS NOT NULL
+      AND d.name = TRIM(s.department)
+      AND s.tenant_id IS NOT DISTINCT FROM d.tenant_id
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND indexname = 'idx_shift_templates_tenant_code_unique'
+      ) THEN
+        DROP INDEX idx_shift_templates_tenant_code_unique;
+      END IF;
+    END $$;
+  `);
 
   await pool.query(`
     DO $$
@@ -1093,8 +1151,10 @@ async function initDatabase() {
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_schedules_tenant_month_department_unique ON schedules(tenant_id, month_key, department)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedules_tenant_id ON schedules(tenant_id)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_entries_month_key ON schedule_entries(month_key)`);
-  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_shift_templates_tenant_code_unique ON shift_templates(tenant_id, code)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_shift_templates_tenant_department_code_unique ON shift_templates(tenant_id, department_id, code) WHERE department_id IS NOT NULL`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_shift_templates_tenant_global_code_unique ON shift_templates(tenant_id, code) WHERE department_id IS NULL`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_shift_templates_tenant_id ON shift_templates(tenant_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_shift_templates_tenant_department_id ON shift_templates(tenant_id, department_id)`);
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tenant_users_user_id ON tenant_users(user_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant_id ON tenant_users(tenant_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status)');
@@ -1142,7 +1202,7 @@ async function initDatabase() {
          FROM shift_templates st
          CROSS JOIN (SELECT id FROM tenants) AS tenant
          WHERE st.tenant_id IS NULL
-         ON CONFLICT (tenant_id, code) DO NOTHING`
+         ON CONFLICT (tenant_id, code) WHERE department_id IS NULL DO NOTHING`
       );
 
       await pool.query('DELETE FROM shift_templates WHERE tenant_id IS NULL');
@@ -1203,7 +1263,7 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
         [tenantId]
       ),
       pool.query(
-        `SELECT id, name, month_key AS month, department, status,
+        `SELECT id, name, month_key AS month, department, department_id AS "departmentId", status,
          created_at AS "createdAt"
          FROM schedules
          WHERE tenant_id = $1
@@ -1222,7 +1282,8 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
           `SELECT id, code, name,
            start_time AS start,
            end_time AS "end",
-           hours
+           hours,
+           department_id AS "departmentId"
            FROM shift_templates
            WHERE tenant_id = $1
            ORDER BY created_at, code`,
@@ -1232,7 +1293,8 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
           `SELECT id, code, name,
            start_time AS start,
            end_time AS "end",
-           hours
+           hours,
+           department_id AS "departmentId"
            FROM shift_templates
            ORDER BY created_at, code`
         ),
@@ -1668,10 +1730,10 @@ app.post('/api/schedules', requireAuth, requireTenantContext, async (req, res) =
     }
 
     const created = await pool.query(
-      `INSERT INTO schedules (tenant_id, name, month_key, department, status)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, name, month_key, department, status, created_at`,
-      [actor.tenantId, name, monthKey, department, 'draft']
+      `INSERT INTO schedules (tenant_id, name, month_key, department, department_id, status)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, name, month_key, department, department_id, status, created_at`,
+      [actor.tenantId, name, monthKey, department, departmentResult.rows[0].id, 'draft']
     );
 
     res.status(201).json({
@@ -1715,7 +1777,7 @@ app.get('/api/schedules', requireAuth, requireTenantContext, async (req, res) =>
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const schedulesResult = await pool.query(
-      `SELECT id, name, month_key, department, status, created_at
+      `SELECT id, name, month_key, department, department_id, status, created_at
        FROM schedules
        ${whereSql}
        ORDER BY created_at DESC`,
@@ -1738,7 +1800,7 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
     await ensureDefaultShiftTemplatesForTenant(req.tenantId);
 
     const scheduleResult = await pool.query(
-      `SELECT id, name, month_key, department, status, created_at
+      `SELECT id, name, month_key, department, department_id, status, created_at
        FROM schedules WHERE id = $1 AND tenant_id = $2`,
       [scheduleId, req.tenantId]
     );
@@ -1779,7 +1841,30 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
       [scheduleId, req.tenantId]
     );
 
-    res.json({ schedule, employees: employeesResult.rows, entries: entriesResult.rows });
+    const hasShiftTemplatesTenant = await hasShiftTemplatesTenantId();
+    const hasShiftTemplatesDepartment = await hasShiftTemplatesDepartmentId();
+    const scopedShiftTemplates = buildShiftTemplateScopeCondition({
+      hasDepartmentId: hasShiftTemplatesDepartment,
+      departmentId: schedule.department_id || null,
+      tenantScoped: hasShiftTemplatesTenant ? req.tenantId : null,
+    });
+    const shiftTemplatesResult = await pool.query(
+      `SELECT id, code, name,
+              start_time AS start,
+              end_time AS "end",
+              hours
+       FROM shift_templates
+       ${scopedShiftTemplates.whereSql}
+       ORDER BY created_at, code`,
+      scopedShiftTemplates.values
+    );
+
+    res.json({
+      schedule,
+      employees: employeesResult.rows,
+      entries: entriesResult.rows,
+      shiftTemplates: appendSystemShiftTemplates(shiftTemplatesResult.rows),
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -1806,7 +1891,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     await ensureDefaultShiftTemplatesForTenant(req.tenantId);
 
     const scheduleResult = await pool.query(
-      `SELECT id, department, status, month_key FROM schedules WHERE id = $1 AND tenant_id = $2`,
+      `SELECT id, department, department_id, status, month_key FROM schedules WHERE id = $1 AND tenant_id = $2`,
       [scheduleId, req.tenantId]
     );
 
@@ -1862,19 +1947,27 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     let resolvedShiftCode = requestedShiftCode;
     let resolvedShiftId = requestedShiftId || null;
 
+    const hasShiftTemplatesDepartment = await hasShiftTemplatesDepartmentId();
+    const shiftScopeForLookup = buildShiftTemplateScopeCondition({
+      hasDepartmentId: hasShiftTemplatesDepartment,
+      departmentId: schedule.department_id || null,
+      tenantScoped: hasTenantId ? req.tenantId : null,
+      startIndex: 2,
+    });
+    const shiftScope = buildShiftTemplateScopeCondition({
+      hasDepartmentId: hasShiftTemplatesDepartment,
+      departmentId: schedule.department_id || null,
+      tenantScoped: hasTenantId ? req.tenantId : null,
+    });
+
     if (requestedShiftId) {
       if (!isValidUuid(requestedShiftId)) {
         return res.status(400).json({ message: 'Невалиден shiftId.' });
       }
-      const shiftByIdQuery = hasTenantId
-        ? {
-            text: `SELECT id, code FROM shift_templates WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
-            values: [requestedShiftId, req.tenantId],
-          }
-        : {
-            text: `SELECT id, code FROM shift_templates WHERE id = $1 LIMIT 1`,
-            values: [requestedShiftId],
-          };
+      const shiftByIdQuery = {
+        text: `SELECT id, code FROM shift_templates WHERE id = $1${shiftScopeForLookup.whereSql ? ` AND ${shiftScopeForLookup.whereSql.replace(/^WHERE\s+/i, '')}` : ''} LIMIT 1`,
+        values: [requestedShiftId, ...shiftScopeForLookup.values],
+      };
       const shiftByIdResult = await pool.query(shiftByIdQuery.text, shiftByIdQuery.values);
       if (shiftByIdResult.rowCount === 0) {
         return res.status(404).json({ message: 'Смяната не е намерена.' });
@@ -1882,15 +1975,15 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       resolvedShiftCode = normalizeShiftCode(shiftByIdResult.rows[0].code);
       resolvedShiftId = shiftByIdResult.rows[0].id;
     } else if (requestedShiftCode && !['P', 'O', 'B', 'R'].includes(requestedShiftCode)) {
-      const shiftByCodeQuery = hasTenantId
-        ? {
-            text: `SELECT id, code FROM shift_templates WHERE tenant_id = $1 AND UPPER(code) = $2 LIMIT 1`,
-            values: [req.tenantId, requestedShiftCode],
-          }
-        : {
-            text: `SELECT id, code FROM shift_templates WHERE UPPER(code) = $1 LIMIT 1`,
-            values: [requestedShiftCode],
-          };
+      const codeScope = buildShiftTemplateScopeCondition({
+        hasDepartmentId: hasShiftTemplatesDepartment,
+        departmentId: schedule.department_id || null,
+        tenantScoped: hasTenantId ? req.tenantId : null,
+      });
+      const shiftByCodeQuery = {
+        text: `SELECT id, code FROM shift_templates ${codeScope.whereSql}${codeScope.whereSql ? ' AND' : ' WHERE'} UPPER(code) = $${codeScope.values.length + 1} LIMIT 1`,
+        values: [...codeScope.values, requestedShiftCode],
+      };
       const shiftByCodeResult = await pool.query(shiftByCodeQuery.text, shiftByCodeQuery.values);
       if (shiftByCodeResult.rowCount > 0) {
         resolvedShiftCode = normalizeShiftCode(shiftByCodeResult.rows[0].code);
@@ -1919,9 +2012,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
 
     const shiftTemplatesForCalcResult = snapshot
       ? { rows: [] }
-      : await (hasTenantId
-          ? pool.query(`${shiftTemplatesSelect} WHERE tenant_id = $1`, [req.tenantId])
-          : pool.query(shiftTemplatesSelect));
+      : await pool.query(`${shiftTemplatesSelect} ${shiftScope.whereSql}`, shiftScope.values);
 
     if (!snapshot) {
       const selectedShiftForSnapshot = appendSystemShiftTemplates(shiftTemplatesForCalcResult.rows).find((row) => {
@@ -2025,9 +2116,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     }
 
     const [shiftTemplatesResult, entriesResult, employeesResult] = await Promise.all([
-      hasTenantId
-        ? pool.query(`${shiftTemplatesSelect} WHERE tenant_id = $1`, [req.tenantId])
-        : pool.query(shiftTemplatesSelect),
+      pool.query(`${shiftTemplatesSelect} ${shiftScope.whereSql}`, shiftScope.values),
       pool.query(
         `SELECT schedule_id, employee_id, day, shift_code${hasWorkMinutes ? ', work_minutes, night_minutes, holiday_minutes, weekend_minutes, overtime_minutes' : ''}
          FROM schedule_entries
@@ -2143,6 +2232,8 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
   const start = cleanStr(req.body?.start);
   const end = cleanStr(req.body?.end);
   const hours = Number(req.body?.hours);
+  const departmentIdRaw = req.body?.department_id ?? req.body?.departmentId;
+  const departmentId = departmentIdRaw === null || departmentIdRaw === '' ? null : cleanStr(departmentIdRaw);
 
   if (!code || !name || !start || !end || !(hours > 0)) {
     return res.status(400).json({ message: 'Невалидни данни за смяна.' });
@@ -2150,18 +2241,62 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
 
   try {
     const hasTenantId = await hasShiftTemplatesTenantId();
-    if (hasTenantId) {
-      await pool.query(
-        `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, hours)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (tenant_id, code)
-         DO UPDATE SET
-           name = EXCLUDED.name,
-           start_time = EXCLUDED.start_time,
-           end_time = EXCLUDED.end_time,
-           hours = EXCLUDED.hours`,
-        [req.tenantId, code, name, start, end, hours]
+    const hasDepartmentId = await hasShiftTemplatesDepartmentId();
+
+    if (hasDepartmentId && departmentId && !isValidUuid(departmentId)) {
+      return res.status(400).json({ message: 'Невалиден department_id за смяната.' });
+    }
+
+    if (hasDepartmentId && departmentId) {
+      const departmentExists = await pool.query(
+        `SELECT id FROM departments WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+        [departmentId, req.tenantId]
       );
+      if (!departmentExists.rowCount) {
+        return res.status(400).json({ message: 'Избраният отдел за смяната не е намерен.' });
+      }
+    }
+
+    if (hasTenantId) {
+      if (hasDepartmentId) {
+        if (departmentId) {
+          await pool.query(
+            `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, hours)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (tenant_id, department_id, code) WHERE department_id IS NOT NULL
+             DO UPDATE SET
+               name = EXCLUDED.name,
+               start_time = EXCLUDED.start_time,
+               end_time = EXCLUDED.end_time,
+               hours = EXCLUDED.hours`,
+            [req.tenantId, departmentId, code, name, start, end, hours]
+          );
+        } else {
+          await pool.query(
+            `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, hours)
+             VALUES ($1, NULL, $2, $3, $4, $5, $6)
+             ON CONFLICT (tenant_id, code) WHERE department_id IS NULL
+             DO UPDATE SET
+               name = EXCLUDED.name,
+               start_time = EXCLUDED.start_time,
+               end_time = EXCLUDED.end_time,
+               hours = EXCLUDED.hours`,
+            [req.tenantId, code, name, start, end, hours]
+          );
+        }
+      } else {
+        await pool.query(
+          `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, hours)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (tenant_id, code)
+           DO UPDATE SET
+             name = EXCLUDED.name,
+             start_time = EXCLUDED.start_time,
+             end_time = EXCLUDED.end_time,
+             hours = EXCLUDED.hours`,
+          [req.tenantId, code, name, start, end, hours]
+        );
+      }
     } else {
       await pool.query(
         `INSERT INTO shift_templates (code, name, start_time, end_time, hours)
@@ -2185,8 +2320,24 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
 app.delete('/api/shift-template/:code', requireAuth, requireTenantContext, async (req, res) => {
   try {
     const hasTenantId = await hasShiftTemplatesTenantId();
+    const hasDepartmentId = await hasShiftTemplatesDepartmentId();
+    const departmentIdRaw = req.query?.department_id ?? req.query?.departmentId;
+    const departmentId = departmentIdRaw === null || departmentIdRaw === '' ? null : cleanStr(departmentIdRaw);
+
+    if (hasDepartmentId && departmentId && !isValidUuid(departmentId)) {
+      return res.status(400).json({ message: 'Невалиден department_id за изтриване на смяна.' });
+    }
+
     if (hasTenantId) {
-      await pool.query('DELETE FROM shift_templates WHERE tenant_id = $1 AND code = $2', [req.tenantId, req.params.code]);
+      if (hasDepartmentId) {
+        if (departmentId) {
+          await pool.query('DELETE FROM shift_templates WHERE tenant_id = $1 AND code = $2 AND department_id = $3', [req.tenantId, req.params.code, departmentId]);
+        } else {
+          await pool.query('DELETE FROM shift_templates WHERE tenant_id = $1 AND code = $2 AND department_id IS NULL', [req.tenantId, req.params.code]);
+        }
+      } else {
+        await pool.query('DELETE FROM shift_templates WHERE tenant_id = $1 AND code = $2', [req.tenantId, req.params.code]);
+      }
     } else {
       await pool.query('DELETE FROM shift_templates WHERE code = $1', [req.params.code]);
     }

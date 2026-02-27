@@ -46,6 +46,7 @@ const state = {
   sirvSchedule: {},
   scheduleEntriesById: {},
   scheduleEntrySnapshotsById: {},
+  scheduleShiftTemplatesById: {},
   schedules: [],
   selectedScheduleIds: [],
   activeScheduleId: null,
@@ -138,6 +139,7 @@ const sirvPeriodInput = document.getElementById('sirvPeriodInput');
 const shiftForm = document.getElementById('shiftForm');
 const shiftCodeInput = document.getElementById('shiftCodeInput');
 const shiftNameInput = document.getElementById('shiftNameInput');
+const shiftDepartmentInput = document.getElementById('shiftDepartmentInput');
 const shiftStartInput = document.getElementById('shiftStartInput');
 const shiftEndInput = document.getElementById('shiftEndInput');
 const shiftList = document.getElementById('shiftList');
@@ -1387,6 +1389,7 @@ function attachShiftForm() {
 
     const code = shiftCodeInput.value.trim().toUpperCase();
     const name = shiftNameInput.value.trim();
+    const departmentId = cleanStoredValue(shiftDepartmentInput?.value) || null;
     const start = shiftStartInput.value;
     const end = shiftEndInput.value;
 
@@ -1394,7 +1397,7 @@ function attachShiftForm() {
       return;
     }
 
-    if (state.shiftTemplates.some((shift) => shift.code === code)) {
+    if (state.shiftTemplates.some((shift) => shift.code === code && cleanStoredValue(shift.departmentId) === (departmentId || ''))) {
       setStatus(`Смяна с код ${code} вече съществува.`, false);
       return;
     }
@@ -1415,6 +1418,7 @@ function attachShiftForm() {
       code,
       label: code,
       name,
+      departmentId,
       type: 'work',
       start,
       end,
@@ -1423,10 +1427,37 @@ function attachShiftForm() {
     });
 
     saveShiftTemplates();
-    void saveShiftTemplateBackend({ code, name, start, end, hours });
+    void saveShiftTemplateBackend({ code, name, start, end, hours, department_id: departmentId });
     shiftForm.reset();
+    if (shiftDepartmentInput) {
+      shiftDepartmentInput.value = '';
+    }
     renderAll();
   });
+}
+
+function renderShiftDepartmentOptions() {
+  if (!shiftDepartmentInput) {
+    return;
+  }
+
+  const previous = cleanStoredValue(shiftDepartmentInput.value);
+  shiftDepartmentInput.innerHTML = '';
+
+  const globalOption = document.createElement('option');
+  globalOption.value = '';
+  globalOption.textContent = 'Всички отдели (global)';
+  shiftDepartmentInput.appendChild(globalOption);
+
+  state.departments.forEach((department) => {
+    const option = document.createElement('option');
+    option.value = department.id;
+    option.textContent = department.name;
+    shiftDepartmentInput.appendChild(option);
+  });
+
+  const hasPrevious = state.departments.some((department) => department.id === previous);
+  shiftDepartmentInput.value = hasPrevious ? previous : '';
 }
 
 function attachLockAndExport() {
@@ -2030,6 +2061,7 @@ function resolveBaseVacationAllowance(employee) {
 }
 
 function renderAll() {
+  renderShiftDepartmentOptions();
   renderEmployees();
   renderSchedule();
   renderVacationEmployeeOptions();
@@ -2225,7 +2257,13 @@ function renderPlatformUserEmployeeOptions() {
 
 function renderLegend() {
   shiftLegend.innerHTML = '';
-  state.shiftTemplates.forEach((shift) => {
+  const activeSchedule = getActiveSchedule();
+  const activeScheduleId = cleanStoredValue(activeSchedule?.id);
+  const legendShifts = activeScheduleId && Array.isArray(state.scheduleShiftTemplatesById[activeScheduleId])
+    ? state.scheduleShiftTemplatesById[activeScheduleId]
+    : state.shiftTemplates;
+
+  legendShifts.forEach((shift) => {
     const span = document.createElement('span');
     if (shift.type === 'work') {
       span.innerHTML = `<b>${shift.code}</b> - ${shift.name} (${shift.start}-${shift.end}, ${shift.hours}ч)`;
@@ -2239,11 +2277,13 @@ function renderLegend() {
 function renderShiftList() {
   shiftList.innerHTML = '';
   const table = document.createElement('table');
-  table.innerHTML = '<tr><th>Код</th><th>Име</th><th>Начало</th><th>Край</th><th>Часове</th><th>Тип</th><th>Действие</th></tr>';
+  table.innerHTML = '<tr><th>Код</th><th>Име</th><th>Отдел</th><th>Начало</th><th>Край</th><th>Часове</th><th>Тип</th><th>Действие</th></tr>';
+  const departmentNameById = new Map((state.departments || []).map((department) => [department.id, department.name]));
 
   state.shiftTemplates.forEach((shift) => {
     const row = document.createElement('tr');
-    row.innerHTML = `<td>${shift.code}</td><td>${shift.name}</td><td>${shift.start || '-'}</td><td>${shift.end || '-'}</td><td>${shift.hours}</td><td>${shift.type}</td>`;
+    const departmentLabel = shift.departmentId ? (departmentNameById.get(shift.departmentId) || 'Неизвестен отдел') : 'Global';
+    row.innerHTML = `<td>${shift.code}</td><td>${shift.name}</td><td>${departmentLabel}</td><td>${shift.start || '-'}</td><td>${shift.end || '-'}</td><td>${shift.hours}</td><td>${shift.type}</td>`;
 
     const actionCell = document.createElement('td');
     if (shift.locked) {
@@ -2254,9 +2294,9 @@ function renderShiftList() {
       removeBtn.textContent = 'Изтрий';
       removeBtn.className = 'btn-delete';
       removeBtn.addEventListener('click', async () => {
-        state.shiftTemplates = state.shiftTemplates.filter((entry) => entry.code !== shift.code);
+        state.shiftTemplates = state.shiftTemplates.filter((entry) => !(entry.code === shift.code && cleanStoredValue(entry.departmentId) === cleanStoredValue(shift.departmentId)));
         saveShiftTemplates();
-        await deleteShiftTemplateBackend(shift.code);
+        await deleteShiftTemplateBackend(shift.code, shift.departmentId || null);
         replaceDeletedShiftCodes(shift.code);
         renderAll();
       });
@@ -3340,7 +3380,12 @@ function renderSchedule() {
         }
         select.disabled = monthLocked || !inEmployment;
 
-        state.shiftTemplates.forEach((shift) => {
+        const scheduleId = getEmployeeScheduleId(employee);
+        const scopedShiftTemplates = scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
+          ? state.scheduleShiftTemplatesById[scheduleId]
+          : state.shiftTemplates;
+
+        scopedShiftTemplates.forEach((shift) => {
           const option = document.createElement('option');
           option.value = shift.code;
           option.textContent = shift.label || shift.code;
@@ -4254,6 +4299,16 @@ async function refreshMonthlyView() {
   state.scheduleEmployees = mergedEmployees.map(normalizeEmployeeVacationData);
   state.scheduleEntriesById = mappedEntries;
   state.scheduleEntrySnapshotsById = mappedEntrySnapshots;
+  state.scheduleShiftTemplatesById = {};
+
+  details.forEach((detail) => {
+    const scheduleId = cleanStoredValue(detail?.schedule?.id);
+    if (!scheduleId) {
+      return;
+    }
+    const backendShiftTemplates = Array.isArray(detail?.shiftTemplates) ? detail.shiftTemplates : [];
+    state.scheduleShiftTemplatesById[scheduleId] = mergeShiftTemplates(backendShiftTemplates);
+  });
 }
 
 async function loadFromBackend(options = {}) {
@@ -4478,13 +4533,18 @@ async function saveShiftTemplateBackend(shift) {
   }
 }
 
-async function deleteShiftTemplateBackend(code) {
+async function deleteShiftTemplateBackend(code, departmentId = null) {
   if (!state.backendAvailable) {
     return;
   }
 
   try {
-    const response = await apiFetch(`/api/shift-template/${encodeURIComponent(code)}`, { method: 'DELETE' });
+    const query = new URLSearchParams();
+    if (departmentId) {
+      query.set('department_id', String(departmentId));
+    }
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    const response = await apiFetch(`/api/shift-template/${encodeURIComponent(code)}${suffix}`, { method: 'DELETE' });
     if (!response.ok) {
       throw new Error('Delete shift template failed');
     }
@@ -4758,6 +4818,7 @@ function mergeShiftTemplates(backendShiftTemplates) {
       code,
       label: code,
       name: String(shift.name || code),
+      departmentId: cleanStoredValue(shift.departmentId || shift.department_id) || null,
       type: 'work',
       start: String(shift.start || ''),
       end: String(shift.end || ''),

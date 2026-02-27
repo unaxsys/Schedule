@@ -1,0 +1,12 @@
+BEGIN;
+
+ALTER TABLE IF EXISTS schedule_entries
+  ALTER COLUMN shift_code TYPE VARCHAR(16);
+
+ALTER TABLE IF EXISTS audit_log
+  ALTER COLUMN old_shift_code TYPE VARCHAR(16);
+
+ALTER TABLE IF EXISTS audit_log
+  ALTER COLUMN new_shift_code TYPE VARCHAR(16);
+
+COMMIT;
