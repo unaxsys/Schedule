@@ -5019,11 +5019,16 @@ async function flushPendingConnectionLogs() {
   for (let index = 0; index < queued.length; index += 1) {
     const item = queued[index];
     try {
-      await apiFetch('/api/logs/connection', {
+      const response = await apiFetch('/api/logs/connection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(item),
+        suppressConnectionLog: true,
+        skipReconnect: true,
       });
+      if (!response.ok) {
+        break;
+      }
       state.pendingConnectionLogs.shift();
       savePendingConnectionLogs();
     } catch (_error) {
@@ -5130,7 +5135,13 @@ function syncApiBaseUrl(baseUrl) {
 }
 
 async function apiFetch(path, options = {}) {
-  const headers = new Headers(options.headers || {});
+  const {
+    suppressConnectionLog = false,
+    skipReconnect = false,
+    ...fetchOptions
+  } = options;
+
+  const headers = new Headers(fetchOptions.headers || {});
   headers.set('X-User-Role', state.userRole);
   if (state.authToken) {
     headers.set('Authorization', `Bearer ${state.authToken}`);
@@ -5145,12 +5156,22 @@ async function apiFetch(path, options = {}) {
     return [sameOriginBase, fallback4000].filter((candidate, idx, arr) => candidate !== normalizedTriedBase && arr.indexOf(candidate) === idx);
   };
 
+  const reportConnectionError = (error) => {
+    updateBackendConnectionIndicator(false, getReadableConnectionError(error));
+    if (!suppressConnectionLog) {
+      pushConnectionLogEntry(error, { source: `apiFetch:${path}` });
+    }
+    if (!skipReconnect) {
+      scheduleReconnect();
+    }
+  };
+
   const fetchWithFallback = async (triedBase) => {
     const fallbackCandidates = collectFallbackCandidates(triedBase);
     for (const fallbackBase of fallbackCandidates) {
       try {
         const fallbackResponse = await fetch(buildApiUrl(fallbackBase, path), {
-          ...options,
+          ...fetchOptions,
           headers
         });
 
@@ -5172,7 +5193,7 @@ async function apiFetch(path, options = {}) {
   let response;
   try {
     response = await fetch(buildApiUrl(state.apiBaseUrl, path), {
-      ...options,
+      ...fetchOptions,
       headers
     });
 
@@ -5182,19 +5203,23 @@ async function apiFetch(path, options = {}) {
         response = fallbackResponse;
       }
     }
-
-    updateBackendConnectionIndicator(true, 'Свързан към сървъра');
-    state.lastConnectionErrorSignature = '';
   } catch (error) {
     response = await fetchWithFallback(state.apiBaseUrl);
 
     if (!response) {
-      updateBackendConnectionIndicator(false, getReadableConnectionError(error));
-      pushConnectionLogEntry(error, { source: `apiFetch:${path}` });
-      scheduleReconnect();
+      reportConnectionError(error);
       throw error;
     }
   }
+
+  if (retryableGatewayStatuses.has(response.status)) {
+    const gatewayError = new Error(`HTTP ${response.status}`);
+    reportConnectionError(gatewayError);
+    throw gatewayError;
+  }
+
+  updateBackendConnectionIndicator(true, 'Свързан към сървъра');
+  state.lastConnectionErrorSignature = '';
 
   if (response.status === 401 && state.authToken && !state.isHandlingUnauthorized) {
     state.isHandlingUnauthorized = true;
