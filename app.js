@@ -5089,7 +5089,24 @@ function normalizeApiBaseUrl(url) {
   if (!url) {
     return window.location.origin;
   }
-  return String(url).replace(/\/$/, '');
+
+  const raw = String(url).trim();
+  if (!raw) {
+    return window.location.origin;
+  }
+
+  let parsed = null;
+  try {
+    parsed = new URL(raw, window.location.origin);
+  } catch (_error) {
+    return raw.replace(/\/$/, '');
+  }
+
+  // API requests are constructed with paths like `/api/state`.
+  // If the entered base already ends with `/api`, strip it to avoid `/api/api/...`.
+  const normalizedPath = parsed.pathname.replace(/\/+$/, '').replace(/\/api$/i, '');
+  const safePath = normalizedPath && normalizedPath !== '/' ? normalizedPath : '';
+  return `${parsed.origin}${safePath}`;
 }
 
 function buildApiUrl(baseUrl, path) {
