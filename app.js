@@ -1493,7 +1493,7 @@ employeeForm.addEventListener('submit', async (event) => {
   const hasTelk = Boolean(telkInput?.checked);
   const hasYoungWorkerBenefit = Boolean(youngWorkerInput?.checked);
   const isSirv = Boolean(employeeIsSirvInput?.checked);
-  const allowedSirvPeriods = new Set([1, 2, 3, 4, 6]);
+  const allowedSirvPeriods = new Set([1, 2, 3, 4]);
   const parsedSirvPeriod = Number(employeeSirvPeriodInput?.value || 1);
   const sirvPeriodMonths = allowedSirvPeriods.has(parsedSirvPeriod) ? parsedSirvPeriod : 1;
 
@@ -2309,7 +2309,7 @@ function attachEmployeeEditModalControls() {
     const hasTelk = Boolean(editTelkInput?.checked);
     const hasYoungWorkerBenefit = Boolean(editYoungWorkerInput?.checked);
     const isSirv = Boolean(editEmployeeIsSirvInput?.checked);
-    const allowedSirvPeriods = new Set([1, 2, 3, 4, 6]);
+    const allowedSirvPeriods = new Set([1, 2, 3, 4]);
     const parsedSirvPeriod = Number(editEmployeeSirvPeriodInput?.value || 1);
     const sirvPeriodMonths = allowedSirvPeriods.has(parsedSirvPeriod) ? parsedSirvPeriod : 1;
     const startDate = (editStartDateInput?.value || '').trim();
@@ -3653,7 +3653,7 @@ function normalizeSirvPeriod(value) {
   if (Number.isNaN(parsed)) {
     return 1;
   }
-  return Math.min(6, Math.max(1, Math.trunc(parsed)));
+  return Math.min(4, Math.max(1, Math.trunc(parsed)));
 }
 
 function saveSirvPeriodMonths() {
@@ -4679,7 +4679,7 @@ function normalizeEmployeeVacationData(employee) {
   normalized.youngWorkerBenefit = Boolean(normalized.youngWorkerBenefit);
   normalized.baseVacationAllowance = resolveBaseVacationAllowance(normalized);
   normalized.isSirv = Boolean(normalized.isSirv ?? normalized.is_sirv);
-  normalized.sirvPeriodMonths = Number(normalized.sirvPeriodMonths ?? normalized.sirv_period_months ?? 1) || 1;
+  normalized.sirvPeriodMonths = normalizeSirvPeriod(Number(normalized.sirvPeriodMonths ?? normalized.sirv_period_months ?? 1) || 1);
   normalized.vacationAllowance = calculateVacationAllowance(normalized.baseVacationAllowance, normalized.telk, normalized.youngWorkerBenefit, normalized.startDate);
   return normalized;
 }

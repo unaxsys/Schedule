@@ -4,6 +4,7 @@ const DEFAULT_HOLIDAY_RATE = 2;
 const REST_BETWEEN_SHIFTS_MINUTES = 12 * 60;
 const WEEKLY_REST_MINUTES = 36 * 60;
 const MAX_SHIFT_HOURS = 12;
+const MAX_SIRV_WEEKLY_HOURS = 56;
 const MAX_CONSECUTIVE_WORK_DAYS = 5;
 const DEFAULT_WORKDAY_MINUTES = 8 * 60;
 
@@ -364,6 +365,7 @@ function computeMonthlySummary({
           shiftCode,
           hours: round2(shiftMinutes / 60),
           limit: MAX_SHIFT_HOURS,
+          severity: 'error',
         });
       }
     }
@@ -382,6 +384,7 @@ function computeMonthlySummary({
           toDate: next.dateISO,
           restHours: round2(restMinutes / 60),
           minRestHours: 12,
+          severity: 'error',
         });
       }
     }
@@ -392,13 +395,36 @@ function computeMonthlySummary({
       const restMinutes = next.startAbs - prev.endAbs;
       if (restMinutes < WEEKLY_REST_MINUTES) {
         summary.violations.push({
-          type: 'WEEKLY_REST_WARNING',
+          type: 'WEEKLY_REST_VIOLATION',
           fromDate: prev.dateISO,
           toDate: next.dateISO,
           restHours: round2(restMinutes / 60),
           minRestHours: 36,
-          severity: 'warning',
+          severity: 'error',
         });
+      }
+    }
+
+    if (isSirv) {
+      const weeklyMinutes = new Map();
+      for (const [dateISO, minutes] of perDayWorkedMinutes.entries()) {
+        const date = new Date(`${dateISO}T00:00:00Z`);
+        const day = date.getUTCDay() || 7;
+        date.setUTCDate(date.getUTCDate() + 1 - day);
+        const weekStart = date.toISOString().slice(0, 10);
+        weeklyMinutes.set(weekStart, (weeklyMinutes.get(weekStart) || 0) + minutes);
+      }
+
+      for (const [weekStart, minutes] of weeklyMinutes.entries()) {
+        if (minutes > MAX_SIRV_WEEKLY_HOURS * 60) {
+          summary.violations.push({
+            type: 'SIRV_WEEKLY_HOURS_VIOLATION',
+            weekStart,
+            hours: round2(minutes / 60),
+            limit: MAX_SIRV_WEEKLY_HOURS,
+            severity: 'error',
+          });
+        }
       }
     }
 
@@ -452,6 +478,61 @@ function computeMonthlySummary({
   return result;
 }
 
+
+function summarizeViolationStatus(violations = []) {
+  const normalized = Array.isArray(violations) ? violations : [];
+  if (normalized.some((v) => (v?.severity || 'error') === 'error')) {
+    return 'error';
+  }
+  if (normalized.some((v) => (v?.severity || 'warning') === 'warning')) {
+    return 'warning';
+  }
+  return 'ok';
+}
+
+function computeSirvPeriodSummary({
+  employee = {},
+  periodDays = [],
+  scheduleEntries = [],
+  nightHoursCoefficient = NIGHT_HOURS_COEFFICIENT,
+}) {
+  const workdayMinutes = Math.max(1, Number(employee.workday_minutes ?? employee.workdayMinutes ?? DEFAULT_WORKDAY_MINUTES));
+  const baseNormMinutes = calcNormMinutes(periodDays, workdayMinutes);
+
+  let workedMinutes = 0;
+  let nightMinutes = 0;
+  let deductedAbsenceMinutes = 0;
+
+  for (const entry of scheduleEntries) {
+    const shiftCode = String(entry.shift_code || entry.shiftCode || '').trim().toUpperCase();
+    const entryWorkMinutes = Math.max(0, Number(entry.work_minutes ?? entry.workMinutes ?? 0));
+    const entryNightMinutes = Math.max(0, Number(entry.night_minutes ?? entry.nightMinutes ?? 0));
+
+    if (shiftCode === 'O' || shiftCode === 'B') {
+      const plannedMinutes = Math.max(0, Number(entry.planned_minutes ?? entry.plannedMinutes ?? 0));
+      deductedAbsenceMinutes += plannedMinutes || entryWorkMinutes || workdayMinutes;
+      continue;
+    }
+
+    workedMinutes += entryWorkMinutes;
+    nightMinutes += entryNightMinutes;
+  }
+
+  const adjustedNormMinutes = Math.max(0, baseNormMinutes - deductedAbsenceMinutes);
+  const convertedWorkedMinutes = Math.round(workedMinutes + nightMinutes * (Number(nightHoursCoefficient) - 1));
+  const overtimeMinutes = Math.max(0, convertedWorkedMinutes - adjustedNormMinutes);
+
+  return {
+    baseNormMinutes,
+    adjustedNormMinutes,
+    deductedAbsenceMinutes,
+    workedMinutes,
+    nightMinutes,
+    convertedWorkedMinutes,
+    overtimeMinutes,
+  };
+}
+
 module.exports = {
   NIGHT_HOURS_COEFFICIENT,
   DEFAULT_WEEKEND_RATE,
@@ -464,4 +545,7 @@ module.exports = {
   calcWorkedMinutes,
   distributeOvertime,
   computeMonthlySummary,
+  summarizeViolationStatus,
+  computeSirvPeriodSummary,
+  MAX_SIRV_WEEKLY_HOURS,
 };

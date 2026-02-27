@@ -7,6 +7,8 @@ const {
   calcWorkedMinutes,
   distributeOvertime,
   computeMonthlySummary,
+  computeSirvPeriodSummary,
+  summarizeViolationStatus,
 } = require('./labor_rules');
 
 console.assert(parseTimeToMinutes('09:30') === 570, 'parseTimeToMinutes failed');
@@ -65,5 +67,42 @@ const e2 = summary28.get('e2');
 console.assert(e2 && e2.workedHours === 160, '28-day workedHours should be 160h');
 console.assert(e2 && e2.normHours === 160, '28-day normHours should be 160h');
 console.assert(e2 && e2.overtimeMinutes === 0, '28-day overtime should be 0');
+
+
+
+const restViolationSummary = computeMonthlySummary({
+  monthKey: '2026-05',
+  employees: [{ id: 'e3', start_date: '2026-01-01', end_date: null, is_sirv: true, workday_minutes: 480 }],
+  schedules: [{ id: 's3' }],
+  selectedScheduleIds: ['s3'],
+  shiftTemplates: [
+    { code: 'N', start: '20:00', end: '08:00', hours: 12 },
+    { code: 'E', start: '16:00', end: '00:00', hours: 8 },
+  ],
+  scheduleEntries: [
+    { schedule_id: 's3', employee_id: 'e3', day: 5, shift_code: 'N' },
+    { schedule_id: 's3', employee_id: 'e3', day: 6, shift_code: 'E' },
+  ],
+});
+const e3 = restViolationSummary.get('e3');
+console.assert(e3 && e3.violations.some((v) => v.type === 'DAILY_REST_VIOLATION'), 'daily rest violation expected');
+console.assert(summarizeViolationStatus(e3.violations) === 'error', 'violation status should be error');
+
+const sirvPeriod = computeSirvPeriodSummary({
+  employee: { workday_minutes: 480 },
+  periodDays: [
+    { isWeekend: false, isHoliday: false },
+    { isWeekend: false, isHoliday: false },
+    { isWeekend: false, isHoliday: false },
+  ],
+  scheduleEntries: [
+    { shift_code: 'D', work_minutes: 480, night_minutes: 0 },
+    { shift_code: 'O', planned_minutes: 480 },
+    { shift_code: 'D', work_minutes: 480, night_minutes: 420 },
+  ],
+});
+console.assert(sirvPeriod.baseNormMinutes === 1440, 'base norm should be 1440');
+console.assert(sirvPeriod.adjustedNormMinutes === 960, 'adjusted norm should deduct absence');
+console.assert(sirvPeriod.overtimeMinutes > 0, 'converted overtime should be positive');
 
 console.log('labor_rules.selftest: OK');
