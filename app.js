@@ -402,12 +402,15 @@ async function init() {
 
 function normalizeUserRole(value) {
   const normalized = String(value || '').trim().toLowerCase();
-  return ['user', 'manager', 'admin', 'super_admin'].includes(normalized) ? normalized : 'user';
+  return ['user', 'manager', 'admin', 'owner', 'super_admin'].includes(normalized) ? normalized : 'user';
 }
 
 function getRoleLabel(role) {
   if (role === 'admin') {
     return 'Администратор';
+  }
+  if (role === 'owner') {
+    return 'Собственик';
   }
   if (role === 'manager') {
     return 'Мениджър';
@@ -419,11 +422,11 @@ function getRoleLabel(role) {
 }
 
 function canDeleteEmployees() {
-  return state.userRole === 'admin';
+  return state.userRole === 'admin' || state.userRole === 'owner';
 }
 
 function canManageVacationCorrections() {
-  return state.userRole === 'manager' || state.userRole === 'admin';
+  return state.userRole === 'manager' || state.userRole === 'admin' || state.userRole === 'owner';
 }
 
 
@@ -2891,6 +2894,9 @@ function roleLabelForPlatform(role) {
   }
   if (role === 'admin') {
     return 'Администратор';
+  }
+  if (role === 'owner') {
+    return 'Собственик';
   }
   if (role === 'manager') {
     return 'Мениджър';
@@ -5883,7 +5889,7 @@ function getLeaveForCell(employeeId, month, day) {
 }
 
 function canManageLeaves() {
-  return ['admin', 'manager', 'super_admin'].includes(state.userRole);
+  return ['owner', 'admin', 'manager', 'super_admin'].includes(state.userRole);
 }
 
 function persistEmployeesLocal() {
