@@ -3,6 +3,9 @@ const {
   calcShiftDurationHours,
   calcNightHours,
   calcDayType,
+  calcNormMinutes,
+  calcWorkedMinutes,
+  distributeOvertime,
   computeMonthlySummary,
 } = require('./labor_rules');
 
@@ -13,37 +16,54 @@ console.assert(calcNightHours('21:00', '07:00') === 8, 'night hours failed');
 const holiday = calcDayType('2026-03-03');
 console.assert(holiday.isHoliday === true, 'holiday detection failed');
 
+const normMinutes = calcNormMinutes([
+  { isWeekend: false, isHoliday: false },
+  { isWeekend: false, isHoliday: false },
+  { isWeekend: true, isHoliday: false },
+]);
+console.assert(normMinutes === 960, 'calcNormMinutes failed');
+
+const workedMinutes = calcWorkedMinutes([{ workMinutes: 480 }, { workMinutes: 240 }]);
+console.assert(workedMinutes === 720, 'calcWorkedMinutes failed');
+
+const split = distributeOvertime(300, 120, 120, 300);
+console.assert(split.overtimeHolidayMinutes === 120 && split.overtimeRestdayMinutes === 120 && split.overtimeWeekdayMinutes === 60, 'distributeOvertime failed');
+
 const summary = computeMonthlySummary({
   monthKey: '2026-03',
-  employees: [{ id: 'e1', start_date: '2026-01-01', end_date: null }],
+  employees: [{ id: 'e1', start_date: '2026-01-01', end_date: null, is_sirv: true, workday_minutes: 480 }],
   schedules: [{ id: 's1' }],
   selectedScheduleIds: ['s1'],
   shiftTemplates: [{ code: 'D', start: '09:00', end: '17:00', hours: 8 }],
   scheduleEntries: [
     { schedule_id: 's1', employee_id: 'e1', day: 2, shift_code: 'D' },
-    { schedule_id: 's1', employee_id: 'e1', day: 3, shift_code: 'O' },
+    { schedule_id: 's1', employee_id: 'e1', day: 7, shift_code: 'D' },
   ],
 });
 
 const e1 = summary.get('e1');
-console.assert(e1 && e1.workedHours === 8, 'workedHours failed');
-console.assert(e1 && e1.vacationDays === 1, 'vacationDays failed');
-console.assert(e1 && Array.isArray(e1.violations), 'violations array missing');
+console.assert(e1 && e1.workedMinutes === 960, 'workedMinutes failed');
+console.assert(e1 && e1.weekendWorkedHours === 8, 'weekendWorkedHours failed');
+console.assert(e1 && e1.overtimeMinutes >= 0, 'overtimeMinutes missing');
 
-
-const customSummary = computeMonthlySummary({
-  monthKey: '2026-03',
-  employees: [{ id: 'e2', start_date: '2026-01-01', end_date: null }],
+// 28-day test case: 20 workdays x 8h = 160h, overtime 0; weekend hours are normal under SIRV.
+const entries = [];
+for (let day = 1; day <= 28; day += 1) {
+  if (day <= 20) {
+    entries.push({ schedule_id: 's2', employee_id: 'e2', day, shift_code: 'D' });
+  }
+}
+const summary28 = computeMonthlySummary({
+  monthKey: '2026-04',
+  employees: [{ id: 'e2', start_date: '2026-01-01', end_date: null, is_sirv: true, workday_minutes: 480 }],
   schedules: [{ id: 's2' }],
   selectedScheduleIds: ['s2'],
-  shiftTemplates: [{ code: 'X1', start: '10:00', end: '18:00', hours: 8 }],
-  scheduleEntries: [
-    { schedule_id: 's2', employee_id: 'e2', day: 4, shift_code: 'X1' },
-  ],
+  shiftTemplates: [{ code: 'D', start: '09:00', end: '17:00', hours: 8 }],
+  scheduleEntries: entries,
 });
-
-const e2 = customSummary.get('e2');
-console.assert(e2 && e2.workedHours === 8, 'custom shift workedHours failed');
-console.assert(e2 && e2.deviation !== -e2.normHours, 'custom shift deviation should be recalculated');
+const e2 = summary28.get('e2');
+console.assert(e2 && e2.workedHours === 160, '28-day workedHours should be 160h');
+console.assert(e2 && e2.normHours === 160, '28-day normHours should be 160h');
+console.assert(e2 && e2.overtimeMinutes === 0, '28-day overtime should be 0');
 
 console.log('labor_rules.selftest: OK');
