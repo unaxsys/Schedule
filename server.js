@@ -12,6 +12,7 @@ const {
   computeMonthlySummary,
   calcShiftDurationHours,
   calcNightHours,
+  calcDayType,
 } = require('./labor_rules');
 
 const app = express();
@@ -50,22 +51,44 @@ function cleanStr(v) {
 }
 
 function normalizeShiftCode(input) {
-  const normalized = cleanStr(input).toUpperCase();
-  if (normalized === 'Р') {
-    return 'R';
+  const raw = cleanStr(input);
+  if (!raw) {
+    return '';
   }
-  return normalized;
+
+  const latinUpper = raw.toUpperCase();
+  if (['R', 'P', 'O', 'B'].includes(latinUpper)) {
+    return latinUpper;
+  }
+
+  const cyrillicMap = {
+    'Р': 'R',
+    'р': 'R',
+    'П': 'P',
+    'п': 'P',
+    'О': 'O',
+    'о': 'O',
+    'Б': 'B',
+    'б': 'B',
+  };
+
+  if (cyrillicMap[raw]) {
+    return cyrillicMap[raw];
+  }
+
+  return latinUpper;
 }
 
 function computeSystemShiftSnapshot(shiftCode, date) {
   const normalized = normalizeShiftCode(shiftCode);
   if (normalized === 'R') {
     const workMinutes = 480;
+    const { isWeekend, isHoliday } = calcDayType(date);
     return {
       work_minutes: workMinutes,
       night_minutes: 0,
-      holiday_minutes: 0,
-      weekend_minutes: isWeekendDate(date) ? workMinutes : 0,
+      holiday_minutes: isHoliday ? workMinutes : 0,
+      weekend_minutes: isWeekend ? workMinutes : 0,
       overtime_minutes: 0,
     };
   }
@@ -1697,8 +1720,16 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
       [req.tenantId, schedule.department, bounds.monthStart, bounds.monthEnd]
     );
 
+    const hasWorkMinutes = await tableHasColumn('schedule_entries', 'work_minutes');
+    const entriesSelectExtras = hasWorkMinutes
+      ? `, se.work_minutes AS "workMinutes",
+         se.night_minutes AS "nightMinutes",
+         se.holiday_minutes AS "holidayMinutes",
+         se.weekend_minutes AS "weekendMinutes",
+         se.overtime_minutes AS "overtimeMinutes"`
+      : '';
     const entriesResult = await pool.query(
-      `SELECT se.employee_id AS "employeeId", se.day, se.shift_code AS "shiftCode"
+      `SELECT se.employee_id AS "employeeId", se.day, se.shift_code AS "shiftCode"${entriesSelectExtras}
        FROM schedule_entries se
        JOIN schedules s ON s.id = se.schedule_id
        WHERE se.schedule_id = $1 AND s.tenant_id = $2
@@ -1829,6 +1860,15 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     }
 
     const hasScheduleEntriesMonthKey = await tableHasColumn('schedule_entries', 'month_key');
+    const hasWorkMinutes = await tableHasColumn('schedule_entries', 'work_minutes');
+    const hasNightMinutes = await tableHasColumn('schedule_entries', 'night_minutes');
+    const hasHolidayMinutes = await tableHasColumn('schedule_entries', 'holiday_minutes');
+    const hasWeekendMinutes = await tableHasColumn('schedule_entries', 'weekend_minutes');
+    const hasOvertimeMinutes = await tableHasColumn('schedule_entries', 'overtime_minutes');
+    const hasShiftIdColumn = await tableHasColumn('schedule_entries', 'shift_id');
+    const hasIsManualColumn = await tableHasColumn('schedule_entries', 'is_manual');
+    const hasNotesColumn = await tableHasColumn('schedule_entries', 'notes');
+    const hasUpdatedAtColumn = await tableHasColumn('schedule_entries', 'updated_at');
 
     let snapshot = computeSystemShiftSnapshot(resolvedShiftCode, entryDate);
 
@@ -1860,26 +1900,82 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     const notes = cleanStr(req.body?.notes || '') || null;
 
     if (hasScheduleEntriesMonthKey) {
+      const columns = ['schedule_id', 'employee_id', 'day', 'shift_code', 'month_key'];
+      const values = [scheduleId, employeeId, day, resolvedShiftCode, effectiveMonth];
+
+      if (hasShiftIdColumn) {
+        columns.push('shift_id');
+        values.push(resolvedShiftId);
+      }
+      if (hasWorkMinutes) {
+        columns.push('work_minutes');
+        values.push(snapshot.work_minutes);
+      }
+      if (hasNightMinutes) {
+        columns.push('night_minutes');
+        values.push(snapshot.night_minutes);
+      }
+      if (hasHolidayMinutes) {
+        columns.push('holiday_minutes');
+        values.push(snapshot.holiday_minutes);
+      }
+      if (hasWeekendMinutes) {
+        columns.push('weekend_minutes');
+        values.push(snapshot.weekend_minutes);
+      }
+      if (hasOvertimeMinutes) {
+        columns.push('overtime_minutes');
+        values.push(snapshot.overtime_minutes);
+      }
+      if (hasIsManualColumn) {
+        columns.push('is_manual');
+        values.push(isManual);
+      }
+      if (hasNotesColumn) {
+        columns.push('notes');
+        values.push(notes);
+      }
+      if (hasUpdatedAtColumn) {
+        columns.push('updated_at');
+      }
+
+      const placeholders = columns.map((_, index) => (columns[index] === 'updated_at' ? 'NOW()' : `$${values.length >= index + 1 ? index + 1 : values.length}`));
+      const updateAssignments = ['shift_code = EXCLUDED.shift_code', 'month_key = EXCLUDED.month_key'];
+
+      if (hasShiftIdColumn) {
+        updateAssignments.push('shift_id = EXCLUDED.shift_id');
+      }
+      if (hasWorkMinutes) {
+        updateAssignments.push('work_minutes = EXCLUDED.work_minutes');
+      }
+      if (hasNightMinutes) {
+        updateAssignments.push('night_minutes = EXCLUDED.night_minutes');
+      }
+      if (hasHolidayMinutes) {
+        updateAssignments.push('holiday_minutes = EXCLUDED.holiday_minutes');
+      }
+      if (hasWeekendMinutes) {
+        updateAssignments.push('weekend_minutes = EXCLUDED.weekend_minutes');
+      }
+      if (hasOvertimeMinutes) {
+        updateAssignments.push('overtime_minutes = EXCLUDED.overtime_minutes');
+      }
+      if (hasIsManualColumn) {
+        updateAssignments.push('is_manual = EXCLUDED.is_manual');
+      }
+      if (hasNotesColumn) {
+        updateAssignments.push('notes = EXCLUDED.notes');
+      }
+      if (hasUpdatedAtColumn) {
+        updateAssignments.push('updated_at = NOW()');
+      }
+
       await pool.query(
-        `INSERT INTO schedule_entries (
-           schedule_id, employee_id, day, shift_code, month_key, shift_id,
-           work_minutes, night_minutes, holiday_minutes, weekend_minutes, overtime_minutes,
-           is_manual, notes, updated_at
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+        `INSERT INTO schedule_entries (${columns.join(', ')})
+         VALUES (${placeholders.join(', ')})
          ON CONFLICT (schedule_id, employee_id, day)
-         DO UPDATE SET shift_code = EXCLUDED.shift_code,
-                       month_key = EXCLUDED.month_key,
-                       shift_id = EXCLUDED.shift_id,
-                       work_minutes = EXCLUDED.work_minutes,
-                       night_minutes = EXCLUDED.night_minutes,
-                       holiday_minutes = EXCLUDED.holiday_minutes,
-                       weekend_minutes = EXCLUDED.weekend_minutes,
-                       overtime_minutes = EXCLUDED.overtime_minutes,
-                       is_manual = EXCLUDED.is_manual,
-                       notes = EXCLUDED.notes,
-                       updated_at = NOW()`,
-        [scheduleId, employeeId, day, resolvedShiftCode, effectiveMonth, resolvedShiftId, snapshot.work_minutes, snapshot.night_minutes, snapshot.holiday_minutes, snapshot.weekend_minutes, snapshot.overtime_minutes, isManual, notes]
+         DO UPDATE SET ${updateAssignments.join(', ')}`,
+        values
       );
     } else {
       await pool.query(
@@ -1904,7 +2000,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
            FROM shift_templates`
         ),
       pool.query(
-        `SELECT schedule_id, employee_id, day, shift_code
+        `SELECT schedule_id, employee_id, day, shift_code${hasWorkMinutes ? ', work_minutes, night_minutes, holiday_minutes, weekend_minutes, overtime_minutes' : ''}
          FROM schedule_entries
          WHERE schedule_id = $1`,
         [scheduleId]
@@ -2163,8 +2259,9 @@ app.post('/api/calc/summary', requireAuth, requireTenantContext, async (req, res
       });
     }
 
+    const hasEntrySnapshotColumns = await tableHasColumn('schedule_entries', 'work_minutes');
     const entriesQuery = await pool.query(
-      `SELECT schedule_id, employee_id, day, shift_code
+      `SELECT schedule_id, employee_id, day, shift_code${hasEntrySnapshotColumns ? ', work_minutes, night_minutes, holiday_minutes, weekend_minutes, overtime_minutes' : ''}
        FROM schedule_entries
        WHERE schedule_id = ANY($1::uuid[])
          AND employee_id = ANY($2::uuid[])
