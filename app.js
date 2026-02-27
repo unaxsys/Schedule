@@ -3438,7 +3438,12 @@ function calculateEmployeeTotals({ employee, summary, year, month, monthNormHour
   const payableHours =
     summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + summary.nightConvertedHours;
   const deviation = summary.workedHours + summary.nightConvertedHours - monthNormHours;
-  const sirvTotals = getSirvTotalsForEmployee(employee, month, state.sirvPeriodMonths);
+  const employeeSirvPeriod = Number(employee?.sirvPeriodMonths || 1) || 1;
+  const isSirvEmployee = Boolean(employee?.isSirv);
+  const sirvTotals = getSirvTotalsForEmployee(employee, month, isSirvEmployee ? employeeSirvPeriod : 1);
+  const overtimeHours = isSirvEmployee
+    ? sirvTotals.overtimeHours
+    : Math.max(0, summary.workedHours - monthNormHours);
 
   return {
     workedDays: summary.workedDays,
@@ -3447,7 +3452,7 @@ function calculateEmployeeTotals({ employee, summary, year, month, monthNormHour
     deviation,
     sirvNormHours: sirvTotals.normHours,
     sirvWorkedHours: sirvTotals.convertedWorkedHours,
-    overtimeHours: sirvTotals.overtimeHours,
+    overtimeHours,
     holidayWorkedHours: summary.holidayWorkedHours,
     weekendWorkedHours: summary.weekendWorkedHours,
     nightWorkedHours: summary.nightWorkedHours,

@@ -1476,7 +1476,7 @@ app.put('/api/employees/:id', requireAuth, requireTenantContext, async (req, res
     return res.status(400).json(validation.error);
   }
 
-  const { name, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit } = validation.value;
+  const { name, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths } = validation.value;
 
   try {
     const actor = await resolveActorTenant(req);
@@ -1489,17 +1489,19 @@ app.put('/api/employees/:id', requireAuth, requireTenantContext, async (req, res
            base_vacation_allowance = $6,
            telk = $7,
            young_worker_benefit = $8,
-           start_date = $9,
-           end_date = $10,
-           tenant_id = COALESCE(tenant_id, $11)
-       WHERE id = $1 AND tenant_id = $11
+           is_sirv = $9,
+           sirv_period_months = $10,
+           start_date = $11,
+           end_date = $12,
+           tenant_id = COALESCE(tenant_id, $13)
+       WHERE id = $1 AND tenant_id = $13
        RETURNING id, name, department_id AS "departmentId", COALESCE(department, 'Без отдел') AS department,
                  position, egn, base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  COALESCE(is_sirv, FALSE) AS "isSirv", COALESCE(sirv_period_months, 1) AS "sirvPeriodMonths", COALESCE(workday_minutes, 480) AS "workdayMinutes",
                  start_date::text AS "startDate", end_date::text AS "endDate",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
-      [id, name, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, startDate, endDate, actor.tenantId]
+      [id, name, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths, startDate, endDate, actor.tenantId]
     );
 
     if (!updated.rowCount) {

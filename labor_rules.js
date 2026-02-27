@@ -293,8 +293,17 @@ function computeMonthlySummary({
       if (hasSnapshot) {
         shiftMinutes = Math.max(0, Number(entry.work_minutes ?? entry.workMinutes ?? 0));
         nightMinutes = Math.max(0, Number(entry.night_minutes ?? entry.nightMinutes ?? 0));
-        holidayMinutes = Math.max(0, Number(entry.holiday_minutes ?? entry.holidayMinutes ?? 0));
-        weekendMinutes = Math.max(0, Number(entry.weekend_minutes ?? entry.weekendMinutes ?? 0));
+
+        const holidaySnapshot = entry.holiday_minutes ?? entry.holidayMinutes;
+        const weekendSnapshot = entry.weekend_minutes ?? entry.weekendMinutes;
+        if (holidaySnapshot === null || holidaySnapshot === undefined || weekendSnapshot === null || weekendSnapshot === undefined) {
+          const dayType = calcDayType(dateISO);
+          holidayMinutes = dayType.isHoliday ? shiftMinutes : 0;
+          weekendMinutes = dayType.isWeekend ? shiftMinutes : 0;
+        } else {
+          holidayMinutes = Math.max(0, Number(holidaySnapshot || 0));
+          weekendMinutes = Math.max(0, Number(weekendSnapshot || 0));
+        }
       } else {
         if (shiftCode === 'P' || shiftCode === 'O' || shiftCode === 'B') {
           continue;
