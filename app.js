@@ -5119,38 +5119,59 @@ async function apiFetch(path, options = {}) {
     headers.set('Authorization', `Bearer ${state.authToken}`);
   }
 
+  const retryableGatewayStatuses = new Set([502, 503, 504]);
+
+  const sameOriginBase = normalizeApiBaseUrl(window.location.origin);
+  const fallback4000 = normalizeApiBaseUrl(`${window.location.protocol}//${window.location.hostname}:4000`);
+  const collectFallbackCandidates = (triedBase) => {
+    const normalizedTriedBase = normalizeApiBaseUrl(triedBase);
+    return [sameOriginBase, fallback4000].filter((candidate, idx, arr) => candidate !== normalizedTriedBase && arr.indexOf(candidate) === idx);
+  };
+
+  const fetchWithFallback = async (triedBase) => {
+    const fallbackCandidates = collectFallbackCandidates(triedBase);
+    for (const fallbackBase of fallbackCandidates) {
+      try {
+        const fallbackResponse = await fetch(buildApiUrl(fallbackBase, path), {
+          ...options,
+          headers
+        });
+
+        if (retryableGatewayStatuses.has(fallbackResponse.status)) {
+          continue;
+        }
+
+        syncApiBaseUrl(fallbackBase);
+        updateBackendConnectionIndicator(true, `Свързан към сървъра (${fallbackBase})`);
+        setStatus(`Автоматично превключване към API: ${fallbackBase}`, true);
+        return fallbackResponse;
+      } catch (_fallbackError) {
+        // continue to next fallback candidate
+      }
+    }
+    return null;
+  };
+
   let response;
   try {
     response = await fetch(buildApiUrl(state.apiBaseUrl, path), {
       ...options,
       headers
     });
-    updateBackendConnectionIndicator(true, 'Свързан към сървъра');
-    state.lastConnectionErrorSignature = '';
-  } catch (error) {
-    const sameOriginBase = normalizeApiBaseUrl(window.location.origin);
-    const fallback4000 = normalizeApiBaseUrl(`${window.location.protocol}//${window.location.hostname}:4000`);
-    const triedBase = normalizeApiBaseUrl(state.apiBaseUrl);
-    const fallbackCandidates = [sameOriginBase, fallback4000].filter((candidate, idx, arr) => candidate !== triedBase && arr.indexOf(candidate) === idx);
 
-    let recovered = false;
-    for (const fallbackBase of fallbackCandidates) {
-      try {
-        response = await fetch(buildApiUrl(fallbackBase, path), {
-          ...options,
-          headers
-        });
-        syncApiBaseUrl(fallbackBase);
-        updateBackendConnectionIndicator(true, `Свързан към сървъра (${fallbackBase})`);
-        setStatus(`Автоматично превключване към API: ${fallbackBase}`, true);
-        recovered = true;
-        break;
-      } catch (_fallbackError) {
-        // continue to next fallback candidate
+    if (retryableGatewayStatuses.has(response.status)) {
+      const fallbackResponse = await fetchWithFallback(state.apiBaseUrl);
+      if (fallbackResponse) {
+        response = fallbackResponse;
       }
     }
 
-    if (!recovered) {
+    updateBackendConnectionIndicator(true, 'Свързан към сървъра');
+    state.lastConnectionErrorSignature = '';
+  } catch (error) {
+    response = await fetchWithFallback(state.apiBaseUrl);
+
+    if (!response) {
       updateBackendConnectionIndicator(false, getReadableConnectionError(error));
       pushConnectionLogEntry(error, { source: `apiFetch:${path}` });
       scheduleReconnect();
