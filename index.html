@@ -299,6 +299,7 @@
             <button type="button" class="settings-subtab-btn" data-settings-tab="calculationsSettingsPanel">Изчисления</button>
             <button type="button" class="settings-subtab-btn" data-settings-tab="shiftsSettingsPanel">Смени</button>
             <button type="button" class="settings-subtab-btn" data-settings-tab="usersSettingsPanel">Потребители</button>
+            <button type="button" class="settings-subtab-btn" data-settings-tab="holidaysSettingsPanel">Календар / Празници</button>
           </div>
 
           <div id="summarySettingsPanel" class="settings-subtab-panel active">
@@ -337,6 +338,30 @@
             </form>
             <div id="shiftList" class="shift-list"></div>
             <small>Смените „Почивка“, „Отпуск“ и „Болничен“ са системни и не се трият.</small>
+          </div>
+
+
+          <div id="holidaysSettingsPanel" class="settings-subtab-panel">
+            <h3>Календар / Празници</h3>
+            <div class="row" style="align-items:center; gap:8px; margin-bottom:10px;">
+              <label for="holidaysYearInput">Година:</label>
+              <input id="holidaysYearInput" type="number" min="1970" max="2100" step="1" />
+              <button id="holidaysReloadBtn" type="button">Зареди</button>
+            </div>
+            <form id="holidayForm" class="row" style="margin-bottom:10px; flex-wrap: wrap;">
+              <input name="date" type="date" required />
+              <input name="name" type="text" required placeholder="Име" />
+              <label><input name="is_company_day_off" type="checkbox" checked /> Фирмен почивен ден</label>
+              <label><input name="is_working_day_override" type="checkbox" /> Този ден е работен (override)</label>
+              <input name="note" type="text" placeholder="Бележка" />
+              <button type="submit">Запази</button>
+            </form>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Date</th><th>Name</th><th>Type</th><th>Actions</th></tr></thead>
+                <tbody id="holidaysTableBody"></tbody>
+              </table>
+            </div>
           </div>
 
           <div id="usersSettingsPanel" class="settings-subtab-panel">

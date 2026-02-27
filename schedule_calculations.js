@@ -54,7 +54,17 @@ function overlapMinutes(rangeStart, rangeEnd, winStart, winEnd) {
 }
 
 function holidayResolverFactory(holidaySet = new Set()) {
-  return (dateISO) => holidaySet.has(normalizeDate(dateISO));
+  return (dateISO) => ({ isHoliday: holidaySet.has(normalizeDate(dateISO)), type: holidaySet.has(normalizeDate(dateISO)) ? 'official' : 'none' });
+}
+
+function resolveHolidayFlag(result) {
+  if (typeof result === 'boolean') {
+    return result;
+  }
+  if (result && typeof result === 'object') {
+    return Boolean(result.isHoliday);
+  }
+  return false;
 }
 
 function computeEntryMetrics({ dateISO, shift = {}, isHoliday = () => false, dailyNormMinutes = DEFAULT_WORKDAY_MINUTES, sirvEnabled = false }) {
@@ -75,7 +85,7 @@ function computeEntryMetrics({ dateISO, shift = {}, isHoliday = () => false, dai
 
     const dayType = calcDayType(segment.dateISO);
     const isWeekend = dayType.isWeekend;
-    const isHolidayDay = isHoliday(segment.dateISO) || dayType.isHoliday;
+    const isHolidayDay = resolveHolidayFlag(isHoliday(segment.dateISO));
     if (segment.duration > 0 && workedMinutes > 0) {
       const proportionalWorked = Math.floor((workedMinutes * segment.duration) / durationMinutes);
       if (isWeekend) {
@@ -93,7 +103,7 @@ function computeEntryMetrics({ dateISO, shift = {}, isHoliday = () => false, dai
   if (remainder > 0 && segments.length) {
     const lastSegment = segments[segments.length - 1];
     const dayType = calcDayType(lastSegment.dateISO);
-    const isHolidayDay = isHoliday(lastSegment.dateISO) || dayType.isHoliday;
+    const isHolidayDay = resolveHolidayFlag(isHoliday(lastSegment.dateISO));
     if (dayType.isWeekend) {
       weekendMinutes += remainder;
     }
@@ -147,7 +157,9 @@ function countBusinessDays(startISO, endISO, isHoliday = () => false) {
   let count = 0;
   while (current <= end) {
     const day = calcDayType(current);
-    if (!day.isWeekend && !isHoliday(current) && !day.isHoliday) {
+    const holidayResult = isHoliday(current);
+    const isHolidayDay = resolveHolidayFlag(holidayResult);
+    if (!day.isWeekend && !isHolidayDay) {
       count += 1;
     }
     current = dateAdd(current, 1);
