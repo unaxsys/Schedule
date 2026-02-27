@@ -2029,7 +2029,12 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         [scheduleId]
       ),
       pool.query(
-        `SELECT e.id, e.start_date::text AS start_date, e.end_date::text AS end_date
+        `SELECT e.id,
+                e.start_date::text AS start_date,
+                e.end_date::text AS end_date,
+                COALESCE(e.is_sirv, FALSE) AS is_sirv,
+                COALESCE(e.sirv_period_months, 1) AS sirv_period_months,
+                COALESCE(e.workday_minutes, 480) AS workday_minutes
          FROM employees e
          WHERE e.tenant_id = $1 AND (
            e.id = $2 OR COALESCE(e.department, '') = COALESCE($3, '')
@@ -2205,7 +2210,10 @@ app.post('/api/calc/summary', requireAuth, requireTenantContext, async (req, res
       `SELECT id,
               department_id,
               start_date::text AS start_date,
-              end_date::text AS end_date
+              end_date::text AS end_date,
+              COALESCE(is_sirv, FALSE) AS is_sirv,
+              COALESCE(sirv_period_months, 1) AS sirv_period_months,
+              COALESCE(workday_minutes, 480) AS workday_minutes
        FROM employees
        WHERE tenant_id = $1
        ORDER BY id`,
