@@ -28,7 +28,12 @@ const {
   countBusinessDays,
   dateAdd,
 } = require('./schedule_calculations');
-const { validateShiftTemplatePayload } = require('./shift_templates_utils');
+const {
+  getDaysOfMonth,
+  buildPattern,
+  validateRest,
+  applyOverwriteMode,
+} = require('./schedule_generator');
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -2460,171 +2465,272 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
 });
 
 
-app.get('/api/departments/:id/shifts', requireAuth, requireTenantContext, async (req, res) => {
-  try {
-    const departmentId = cleanStr(req.params.id);
-    if (!isValidUuid(departmentId)) {
-      return res.status(400).json({ message: 'Невалиден department id.' });
-    }
+app.post('/api/schedules/:id/generate', requireAuth, requireTenantContext, async (req, res) => {
+  const scheduleId = cleanStr(req.params.id);
+  const departmentId = cleanStr(req.body?.department_id || req.body?.departmentId);
+  const employeeIdsRaw = Array.isArray(req.body?.employee_ids)
+    ? req.body.employee_ids
+    : (Array.isArray(req.body?.employeeIds) ? req.body.employeeIds : []);
+  const templateType = cleanStr(req.body?.template_type || req.body?.templateType);
+  const options = req.body?.options && typeof req.body.options === 'object' ? req.body.options : {};
 
-    const department = await pool.query('SELECT id FROM departments WHERE id = $1 AND tenant_id = $2 LIMIT 1', [departmentId, req.tenantId]);
-    if (!department.rowCount) {
-      return res.status(404).json({ message: 'Отделът не е намерен.' });
-    }
+  const allowedTemplates = new Set(['SIRV_12H_2_2', 'SIRV_12H_2_4', '3_SHIFT_8H', '8H_STANDARD_WEEKDAYS']);
+  const overwriteMode = ['empty_only', 'overwrite_auto_only', 'overwrite_all'].includes(cleanStr(options.overwrite_mode || options.overwriteMode))
+    ? cleanStr(options.overwrite_mode || options.overwriteMode)
+    : 'empty_only';
+  const restMinHours = Math.max(0, Number(options.rest_min_hours ?? options.restMinHours ?? 12) || 12);
+  const rotateEmployees = Boolean(options.rotate_employees ?? options.rotateEmployees ?? false);
+  const includeWeekends = Boolean(options.include_weekends ?? options.includeWeekends ?? false);
+  const startPatternDayRaw = Number(options.start_pattern_day ?? options.startPatternDay ?? 1);
+  const startPatternDay = Number.isInteger(startPatternDayRaw) && startPatternDayRaw >= 1 && startPatternDayRaw <= 31 ? startPatternDayRaw : 1;
 
-    const shifts = await getDepartmentScopedShifts({ tenantId: req.tenantId, departmentId, includeGlobal: true });
-    return res.json({ shifts });
-  } catch (error) {
-    return res.status(500).json({ message: error.message });
+  if (!isValidUuid(scheduleId) || !isValidUuid(departmentId)) {
+    return res.status(400).json({ message: 'Невалиден schedule_id или department_id.' });
   }
-});
-
-app.post('/api/departments/:id/shifts', requireAuth, requireTenantContext, async (req, res) => {
-  const validation = validateShiftTemplatePayload(req.body || {});
-  if (!validation.ok) {
-    return res.status(400).json({ message: validation.message });
-  }
-
-  try {
-    const departmentId = cleanStr(req.params.id);
-    if (!isValidUuid(departmentId)) {
-      return res.status(400).json({ message: 'Невалиден department id.' });
-    }
-    const department = await pool.query('SELECT id FROM departments WHERE id = $1 AND tenant_id = $2 LIMIT 1', [departmentId, req.tenantId]);
-    if (!department.rowCount) {
-      return res.status(404).json({ message: 'Отделът не е намерен.' });
-    }
-
-    const hasTenantId = await hasShiftTemplatesTenantId();
-    const hasDepartmentId = await hasShiftTemplatesDepartmentId();
-    const code = cleanStr(req.body?.code || validation.value.name).toUpperCase();
-    if (!code) {
-      return res.status(400).json({ message: 'Кодът на смяната е задължителен.' });
-    }
-
-    if (hasTenantId && hasDepartmentId) {
-      await pool.query(
-        `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, break_minutes, break_included, hours)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (tenant_id, department_id, code) WHERE department_id IS NOT NULL
-         DO UPDATE SET name = EXCLUDED.name,
-                       start_time = EXCLUDED.start_time,
-                       end_time = EXCLUDED.end_time,
-                       break_minutes = EXCLUDED.break_minutes,
-                       break_included = EXCLUDED.break_included,
-                       hours = EXCLUDED.hours`,
-        [req.tenantId, departmentId, code, validation.value.name, validation.value.startTime, validation.value.endTime, validation.value.breakMinutes, validation.value.breakIncluded, validation.value.hours]
-      );
-    } else {
-      await pool.query(
-        `INSERT INTO shift_templates (code, name, start_time, end_time, break_minutes, break_included, hours)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (code)
-         DO UPDATE SET name = EXCLUDED.name,
-                       start_time = EXCLUDED.start_time,
-                       end_time = EXCLUDED.end_time,
-                       break_minutes = EXCLUDED.break_minutes,
-                       break_included = EXCLUDED.break_included,
-                       hours = EXCLUDED.hours`,
-        [code, validation.value.name, validation.value.startTime, validation.value.endTime, validation.value.breakMinutes, validation.value.breakIncluded, validation.value.hours]
-      );
-    }
-
-    const shifts = await getDepartmentScopedShifts({ tenantId: req.tenantId, departmentId, includeGlobal: false });
-    return res.status(201).json({ ok: true, shifts });
-  } catch (error) {
-    return res.status(500).json({ message: error.message });
-  }
-});
-
-app.patch('/api/shifts/:shiftId', requireAuth, requireTenantContext, async (req, res) => {
-  const shiftId = cleanStr(req.params.shiftId);
-  const validation = validateShiftTemplatePayload(req.body || {});
-  if (!isValidUuid(shiftId)) {
-    return res.status(400).json({ message: 'Невалиден shift id.' });
-  }
-  if (!validation.ok) {
-    return res.status(400).json({ message: validation.message });
+  if (!allowedTemplates.has(templateType)) {
+    return res.status(400).json({ message: 'Невалиден template_type.' });
   }
 
   try {
-    const hasTenantId = await hasShiftTemplatesTenantId();
-    const hasDepartmentId = await hasShiftTemplatesDepartmentId();
-    const current = await pool.query(
-      `SELECT id, tenant_id, department_id FROM shift_templates WHERE id = $1 ${hasTenantId ? 'AND tenant_id = $2' : ''} LIMIT 1`,
-      hasTenantId ? [shiftId, req.tenantId] : [shiftId]
+    const scheduleResult = await pool.query(
+      `SELECT id, tenant_id, department_id, month_key, status
+       FROM schedules
+       WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId]
     );
-    if (!current.rowCount) {
-      return res.status(404).json({ message: 'Смяната не е намерена.' });
+
+    if (!scheduleResult.rowCount) {
+      return res.status(404).json({ message: 'Графикът не е намерен.' });
     }
 
-    const nextDepartmentIdRaw = req.body?.department_id ?? req.body?.departmentId;
-    const nextDepartmentId = nextDepartmentIdRaw === undefined
-      ? current.rows[0].department_id
-      : (nextDepartmentIdRaw === null || nextDepartmentIdRaw === '' ? null : cleanStr(nextDepartmentIdRaw));
-
-    if (nextDepartmentId && !isValidUuid(nextDepartmentId)) {
-      return res.status(400).json({ message: 'Невалиден department_id.' });
+    const schedule = scheduleResult.rows[0];
+    if (!isValidMonthKey(schedule.month_key)) {
+      return res.status(400).json({ message: 'Графикът няма валиден month_key.' });
+    }
+    if (schedule.status === 'locked') {
+      return res.status(403).json({ message: 'Графикът е заключен.' });
+    }
+    if (String(schedule.department_id || '') !== departmentId) {
+      return res.status(400).json({ message: 'Избраният отдел не съвпада с отдела на графика.' });
     }
 
-    if (hasDepartmentId && nextDepartmentId) {
-      const dep = await pool.query('SELECT id FROM departments WHERE id = $1 AND tenant_id = $2 LIMIT 1', [nextDepartmentId, req.tenantId]);
-      if (!dep.rowCount) {
-        return res.status(400).json({ message: 'Не може да преместите смяна в отдел от друг tenant.' });
+    const departmentResult = await pool.query(
+      `SELECT id, name FROM departments WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+      [departmentId, req.tenantId]
+    );
+    if (!departmentResult.rowCount) {
+      return res.status(404).json({ message: 'Отделът не е намерен.' });
+    }
+
+    const hasShiftTemplatesTenant = await hasShiftTemplatesTenantId();
+    const hasShiftTemplatesDepartment = await hasShiftTemplatesDepartmentId();
+    const shiftScope = buildShiftTemplateScopeCondition({
+      hasDepartmentId: hasShiftTemplatesDepartment,
+      departmentId,
+      tenantScoped: hasShiftTemplatesTenant ? req.tenantId : null,
+    });
+
+    const shiftTemplatesResult = await pool.query(
+      `SELECT id, code, name, start_time, end_time, hours, break_minutes, break_included
+       FROM shift_templates
+       ${shiftScope.whereSql}
+       ORDER BY created_at, code`,
+      shiftScope.values
+    );
+    const shiftTemplates = appendSystemShiftTemplates(shiftTemplatesResult.rows);
+    const byCode = new Map(shiftTemplates.map((row) => [normalizeShiftCode(row.code), row]));
+
+    const shiftIds = {
+      day12ShiftId: byCode.get('D')?.id || null,
+      night12ShiftId: byCode.get('N')?.id || null,
+      morning8ShiftId: byCode.get('M')?.id || byCode.get('R')?.id || null,
+      evening8ShiftId: byCode.get('E')?.id || null,
+      night8ShiftId: byCode.get('N8')?.id || byCode.get('N')?.id || null,
+    };
+
+    const missing = [];
+    if (templateType === 'SIRV_12H_2_2' || templateType === 'SIRV_12H_2_4') {
+      if (!shiftIds.day12ShiftId) missing.push('day12ShiftId (code D)');
+      if (!shiftIds.night12ShiftId) missing.push('night12ShiftId (code N)');
+    }
+    if (templateType === '3_SHIFT_8H') {
+      if (!shiftIds.morning8ShiftId) missing.push('morning8ShiftId (code M или R)');
+      if (!shiftIds.evening8ShiftId) missing.push('evening8ShiftId (code E)');
+      if (!shiftIds.night8ShiftId) missing.push('night8ShiftId (code N8 или N)');
+    }
+    if (templateType === '8H_STANDARD_WEEKDAYS' && !shiftIds.morning8ShiftId) {
+      missing.push('morning8ShiftId (code M или R)');
+    }
+
+    if (missing.length) {
+      return res.status(400).json({
+        message: `Липсват смени за този отдел: ${missing.join(', ')}`,
+        missingShifts: missing,
+      });
+    }
+
+    const monthDays = getDaysOfMonth(schedule.month_key);
+    if (!monthDays.length) {
+      return res.status(400).json({ message: 'Невалиден month_key.' });
+    }
+
+    const employeeIds = employeeIdsRaw
+      .map((id) => cleanStr(id))
+      .filter((id) => isValidUuid(id));
+
+    const employeeParams = [req.tenantId, departmentId];
+    let employeeSql = `SELECT e.id, e.name
+      FROM employees e
+      WHERE e.tenant_id = $1 AND e.department_id = $2`;
+    if (employeeIds.length) {
+      employeeParams.push(employeeIds);
+      employeeSql += ` AND e.id = ANY($3::uuid[])`;
+    }
+    employeeSql += ' ORDER BY e.name';
+
+    const employeesResult = await pool.query(employeeSql, employeeParams);
+    const employees = employeesResult.rows;
+    if (!employees.length) {
+      return res.status(400).json({ message: 'Няма служители за генерация в избрания отдел.' });
+    }
+
+    const existingEntriesResult = await pool.query(
+      `SELECT schedule_id, employee_id, day, shift_id, shift_code, is_manual
+       FROM schedule_entries
+       WHERE schedule_id = $1 AND employee_id = ANY($2::uuid[])`,
+      [scheduleId, employees.map((e) => e.id)]
+    );
+    const existingMap = new Map(existingEntriesResult.rows.map((row) => [`${row.employee_id}|${row.day}`, row]));
+
+    const byShiftId = new Map(shiftTemplates.map((row) => [String(row.id || ''), row]));
+    const pattern = buildPattern(templateType, shiftIds, { include_weekends: includeWeekends });
+    if (!pattern) {
+      return res.status(400).json({ message: 'Невалиден шаблон за генерация.' });
+    }
+
+    const hasScheduleEntriesMonthKey = await tableHasColumn('schedule_entries', 'month_key');
+    const hasWorkMinutes = await tableHasColumn('schedule_entries', 'work_minutes');
+    const hasNightMinutes = await tableHasColumn('schedule_entries', 'night_minutes');
+    const hasHolidayMinutes = await tableHasColumn('schedule_entries', 'holiday_minutes');
+    const hasWeekendMinutes = await tableHasColumn('schedule_entries', 'weekend_minutes');
+    const hasOvertimeMinutes = await tableHasColumn('schedule_entries', 'overtime_minutes');
+    const hasWorkMinutesTotal = await tableHasColumn('schedule_entries', 'work_minutes_total');
+    const hasBreakMinutesApplied = await tableHasColumn('schedule_entries', 'break_minutes_applied');
+    const hasShiftIdColumn = await tableHasColumn('schedule_entries', 'shift_id');
+    const hasIsManualColumn = await tableHasColumn('schedule_entries', 'is_manual');
+    const hasUpdatedAtColumn = await tableHasColumn('schedule_entries', 'updated_at');
+
+    let generatedCount = 0;
+    let skippedCount = 0;
+    const warnings = [];
+    const errors = [];
+
+    for (let employeeIndex = 0; employeeIndex < employees.length; employeeIndex += 1) {
+      const employee = employees[employeeIndex];
+      let prevAssigned = null;
+
+      for (let dayIdx = 0; dayIdx < monthDays.length; dayIdx += 1) {
+        const dateISO = monthDays[dayIdx];
+        const dayNumber = Number(dateISO.slice(-2));
+        const cycleDayIndex = dayNumber - startPatternDay;
+        const employeeOffset = rotateEmployees ? employeeIndex : 0;
+        const nextShiftId = pattern({ dayIndex: cycleDayIndex, employeeOffset, dateISO }) || null;
+
+        const existingEntry = existingMap.get(`${employee.id}|${dayNumber}`) || null;
+        if (!applyOverwriteMode(existingEntry, overwriteMode)) {
+          skippedCount += 1;
+          continue;
+        }
+
+        const shiftTemplate = nextShiftId ? byShiftId.get(String(nextShiftId)) : null;
+        if (nextShiftId && !shiftTemplate) {
+          skippedCount += 1;
+          errors.push({ employee_id: employee.id, date: dateISO, msg: 'Липсва shift template за избраната смяна.' });
+          continue;
+        }
+
+        const enforce24 = options.enforce_24h_after_12h === undefined
+          ? (templateType.startsWith('SIRV_12H'))
+          : Boolean(options.enforce_24h_after_12h);
+
+        if (prevAssigned && shiftTemplate) {
+          const restCheck = validateRest(
+            { dateISO: prevAssigned.dateISO, shift: prevAssigned.shift },
+            { dateISO, shift: shiftTemplate },
+            restMinHours,
+            enforce24
+          );
+          if (!restCheck.ok) {
+            warnings.push({ employee_id: employee.id, date: dateISO, msg: restCheck.reason });
+            skippedCount += 1;
+            continue;
+          }
+        }
+
+        const snapshot = shiftTemplate
+          ? await computeEntrySnapshot({ date: dateISO, shift: shiftTemplate, isHoliday: null, sirvEnabled: false, dailyNormMinutes: 480 })
+          : {
+              work_minutes: 0,
+              work_minutes_total: 0,
+              night_minutes: 0,
+              holiday_minutes: 0,
+              weekend_minutes: 0,
+              overtime_minutes: 0,
+              break_minutes_applied: 0,
+            };
+
+        const values = [scheduleId, employee.id, dayNumber, shiftTemplate ? normalizeShiftCode(shiftTemplate.code) : null];
+        const columns = ['schedule_id', 'employee_id', 'day', 'shift_code'];
+
+        if (hasScheduleEntriesMonthKey) {
+          columns.push('month_key');
+          values.push(schedule.month_key);
+        }
+        if (hasShiftIdColumn) {
+          columns.push('shift_id');
+          values.push(shiftTemplate ? shiftTemplate.id : null);
+        }
+        if (hasWorkMinutes) { columns.push('work_minutes'); values.push(snapshot.work_minutes); }
+        if (hasWorkMinutesTotal) { columns.push('work_minutes_total'); values.push(snapshot.work_minutes_total); }
+        if (hasNightMinutes) { columns.push('night_minutes'); values.push(snapshot.night_minutes); }
+        if (hasHolidayMinutes) { columns.push('holiday_minutes'); values.push(snapshot.holiday_minutes); }
+        if (hasWeekendMinutes) { columns.push('weekend_minutes'); values.push(snapshot.weekend_minutes); }
+        if (hasOvertimeMinutes) { columns.push('overtime_minutes'); values.push(snapshot.overtime_minutes); }
+        if (hasBreakMinutesApplied) { columns.push('break_minutes_applied'); values.push(snapshot.break_minutes_applied); }
+        if (hasIsManualColumn) { columns.push('is_manual'); values.push(false); }
+
+        const placeholders = columns.map((_, index) => `$${index + 1}`);
+        const updates = columns
+          .filter((col) => !['schedule_id', 'employee_id', 'day'].includes(col))
+          .map((col) => `${col} = EXCLUDED.${col}`);
+        if (hasUpdatedAtColumn) {
+          updates.push('updated_at = NOW()');
+        }
+
+        await pool.query(
+          `INSERT INTO schedule_entries (${columns.join(', ')})
+           VALUES (${placeholders.join(', ')})
+           ON CONFLICT (schedule_id, employee_id, day)
+           DO UPDATE SET ${updates.join(', ')}`,
+          values
+        );
+
+        existingMap.set(`${employee.id}|${dayNumber}`, {
+          employee_id: employee.id,
+          day: dayNumber,
+          shift_id: shiftTemplate ? shiftTemplate.id : null,
+          shift_code: shiftTemplate ? normalizeShiftCode(shiftTemplate.code) : null,
+          is_manual: false,
+        });
+
+        if (shiftTemplate) {
+          prevAssigned = { dateISO, shift: shiftTemplate };
+        }
+        generatedCount += 1;
       }
     }
 
-    await pool.query(
-      `UPDATE shift_templates
-       SET name = $1,
-           start_time = $2,
-           end_time = $3,
-           break_minutes = $4,
-           break_included = $5,
-           hours = $6${hasDepartmentId ? ', department_id = $7' : ''}
-       WHERE id = $${hasDepartmentId ? '8' : '7'}${hasTenantId ? ` AND tenant_id = $${hasDepartmentId ? '9' : '8'}` : ''}`,
-      hasDepartmentId
-        ? (hasTenantId
-          ? [validation.value.name, validation.value.startTime, validation.value.endTime, validation.value.breakMinutes, validation.value.breakIncluded, validation.value.hours, nextDepartmentId, shiftId, req.tenantId]
-          : [validation.value.name, validation.value.startTime, validation.value.endTime, validation.value.breakMinutes, validation.value.breakIncluded, validation.value.hours, nextDepartmentId, shiftId])
-        : (hasTenantId
-          ? [validation.value.name, validation.value.startTime, validation.value.endTime, validation.value.breakMinutes, validation.value.breakIncluded, validation.value.hours, shiftId, req.tenantId]
-          : [validation.value.name, validation.value.startTime, validation.value.endTime, validation.value.breakMinutes, validation.value.breakIncluded, validation.value.hours, shiftId])
-    );
-
-    return res.json({ ok: true });
-  } catch (error) {
-    return res.status(500).json({ message: error.message });
-  }
-});
-
-app.delete('/api/shifts/:shiftId', requireAuth, requireTenantContext, async (req, res) => {
-  try {
-    const shiftId = cleanStr(req.params.shiftId);
-    if (!isValidUuid(shiftId)) {
-      return res.status(400).json({ message: 'Невалиден shift id.' });
-    }
-
-    const hasTenantId = await hasShiftTemplatesTenantId();
-    const shiftExists = await pool.query(
-      `SELECT id FROM shift_templates WHERE id = $1 ${hasTenantId ? 'AND tenant_id = $2' : ''} LIMIT 1`,
-      hasTenantId ? [shiftId, req.tenantId] : [shiftId]
-    );
-    if (!shiftExists.rowCount) {
-      return res.status(404).json({ message: 'Смяната не е намерена.' });
-    }
-
-    const used = await pool.query('SELECT 1 FROM schedule_entries WHERE shift_id = $1 LIMIT 1', [shiftId]);
-    if (used.rowCount) {
-      return res.status(409).json({ message: 'Смяната се използва в график и не може да бъде изтрита.' });
-    }
-
-    await pool.query(
-      `DELETE FROM shift_templates WHERE id = $1 ${hasTenantId ? 'AND tenant_id = $2' : ''}`,
-      hasTenantId ? [shiftId, req.tenantId] : [shiftId]
-    );
-
-    return res.json({ ok: true });
+    return res.json({ generatedCount, skippedCount, warnings, errors });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }
