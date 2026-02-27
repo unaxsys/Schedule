@@ -226,6 +226,22 @@
               </label>
               <small class="field-help">Добавя допълнителни 6 дни за непълнолетни служители.</small>
             </div>
+            <div class="form-field form-field--checkbox">
+              <label class="field-inline field-checkbox">
+                <input id="employeeIsSirvInput" type="checkbox" />
+                <span>Работи на СИРВ (сумирано изчисляване на работното време)</span>
+              </label>
+            </div>
+            <div id="employeeSirvPeriodField" class="form-field form-field--checkbox hidden">
+              <label for="employeeSirvPeriodInput" class="field-label">Отчетен период (месеци)</label>
+              <select id="employeeSirvPeriodInput">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="6">6</option>
+              </select>
+            </div>
             <div class="form-field form-field--action">
               <button type="submit" class="btn-add">Добави служител</button>
               <small class="field-help">Записва служителя и го добавя в графика.</small>
@@ -487,22 +503,38 @@
           <label class="field-inline">Начална дата <input id="editStartDateInput" type="date" required /></label>
           <label class="field-inline">Последен работен ден <input id="editEndDateInput" type="date" /></label>
           <input id="editVacationAllowanceInput" type="number" min="0" required placeholder="Годишен отпуск" />
-          <label class="field-inline field-checkbox">
-            <input id="editTelkInput" type="checkbox" />
-            <span>ТЕЛК (+6 дни отпуск)</span>
-            <span class="hover-tooltip" tabindex="0" aria-label="Инфо за ТЕЛК">
-              ?
-              <span class="hover-tooltip__text">с 50% и над 50%</span>
-            </span>
-          </label>
-          <label class="field-inline field-checkbox">
-            <input id="editYoungWorkerInput" type="checkbox" />
-            <span>Служители от 16 - 18 г. (+6 дни отпуск)</span>
-            <span class="hover-tooltip" tabindex="0" aria-label="Инфо за служители от 16 до 18 години">
-              ?
-              <span class="hover-tooltip__text">с разрешение от родител и ИТ</span>
-            </span>
-          </label>
+          <div class="employee-edit-checkboxes employee-edit-form__full-row">
+            <label class="field-inline field-checkbox employee-edit-checkbox-item">
+              <input id="editTelkInput" type="checkbox" />
+              <span>ТЕЛК (+6 дни отпуск)</span>
+              <span class="hover-tooltip" tabindex="0" aria-label="Инфо за ТЕЛК">
+                ?
+                <span class="hover-tooltip__text">с 50% и над 50%</span>
+              </span>
+            </label>
+            <label class="field-inline field-checkbox employee-edit-checkbox-item">
+              <input id="editYoungWorkerInput" type="checkbox" />
+              <span>Служители от 16 - 18 г. (+6 дни отпуск)</span>
+              <span class="hover-tooltip" tabindex="0" aria-label="Инфо за служители от 16 до 18 години">
+                ?
+                <span class="hover-tooltip__text">с разрешение от родител и ИТ</span>
+              </span>
+            </label>
+            <label class="field-inline field-checkbox employee-edit-checkbox-item employee-edit-checkbox-item--sirv">
+              <input id="editEmployeeIsSirvInput" type="checkbox" />
+              <span>Работи на СИРВ (сумирано изчисляване на работното време)</span>
+            </label>
+          </div>
+          <div id="editEmployeeSirvPeriodField" class="employee-edit-form__full-row hidden">
+            <label for="editEmployeeSirvPeriodInput" class="field-label">Отчетен период (месеци)</label>
+            <select id="editEmployeeSirvPeriodInput">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="6">6</option>
+            </select>
+          </div>
           <div class="modal-actions">
             <button type="submit">Запази</button>
             <button id="cancelEmployeeEditBtn" type="button">Отказ</button>

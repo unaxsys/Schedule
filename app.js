@@ -98,6 +98,9 @@ const vacationAllowanceInput = document.getElementById('vacationAllowanceInput')
 const vacationAllowanceHint = document.getElementById('vacationAllowanceHint');
 const telkInput = document.getElementById('telkInput');
 const youngWorkerInput = document.getElementById('youngWorkerInput');
+const employeeIsSirvInput = document.getElementById('employeeIsSirvInput');
+const employeeSirvPeriodField = document.getElementById('employeeSirvPeriodField');
+const employeeSirvPeriodInput = document.getElementById('employeeSirvPeriodInput');
 const employeeList = document.getElementById('employeeList');
 const scheduleTable = document.getElementById('scheduleTable');
 const storageStatus = document.getElementById('storageStatus');
@@ -166,6 +169,9 @@ const editEndDateInput = document.getElementById('editEndDateInput');
 const editVacationAllowanceInput = document.getElementById('editVacationAllowanceInput');
 const editTelkInput = document.getElementById('editTelkInput');
 const editYoungWorkerInput = document.getElementById('editYoungWorkerInput');
+const editEmployeeIsSirvInput = document.getElementById('editEmployeeIsSirvInput');
+const editEmployeeSirvPeriodField = document.getElementById('editEmployeeSirvPeriodField');
+const editEmployeeSirvPeriodInput = document.getElementById('editEmployeeSirvPeriodInput');
 const cancelEmployeeEditBtn = document.getElementById('cancelEmployeeEditBtn');
 const registrationForm = document.getElementById('registrationForm');
 const companyNameInput = document.getElementById('companyNameInput');
@@ -1485,6 +1491,10 @@ employeeForm.addEventListener('submit', async (event) => {
   const enteredVacationAllowance = Number(vacationAllowanceInput.value);
   const hasTelk = Boolean(telkInput?.checked);
   const hasYoungWorkerBenefit = Boolean(youngWorkerInput?.checked);
+  const isSirv = Boolean(employeeIsSirvInput?.checked);
+  const allowedSirvPeriods = new Set([1, 2, 3, 4, 6]);
+  const parsedSirvPeriod = Number(employeeSirvPeriodInput?.value || 1);
+  const sirvPeriodMonths = allowedSirvPeriods.has(parsedSirvPeriod) ? parsedSirvPeriod : 1;
 
   const employee = {
     id: createEmployeeId(),
@@ -1498,7 +1508,9 @@ employeeForm.addEventListener('submit', async (event) => {
     vacationAllowance: enteredVacationAllowance,
     telk: hasTelk,
     youngWorkerBenefit: hasYoungWorkerBenefit,
-    baseVacationAllowance: DEFAULT_BASE_VACATION_ALLOWANCE
+    baseVacationAllowance: DEFAULT_BASE_VACATION_ALLOWANCE,
+    isSirv,
+    sirvPeriodMonths
   };
 
   if (!firstName || !middleName || !lastName || !employee.position || !/^\d{10}$/.test(employee.egn) || !Number.isFinite(enteredVacationAllowance) || enteredVacationAllowance < 0 || !isValidEmploymentDates(employee.startDate, employee.endDate)) {
@@ -1545,6 +1557,13 @@ employeeForm.addEventListener('submit', async (event) => {
   if (youngWorkerInput) {
     youngWorkerInput.checked = false;
   }
+  if (employeeIsSirvInput) {
+    employeeIsSirvInput.checked = false;
+  }
+  if (employeeSirvPeriodInput) {
+    employeeSirvPeriodInput.value = '1';
+  }
+  toggleEmployeeSirvPeriod();
   if (startDateInput) {
     startDateInput.value = '';
   }
@@ -1558,6 +1577,15 @@ employeeForm.addEventListener('submit', async (event) => {
 startDateInput?.addEventListener('change', updateVacationAllowanceHint);
 telkInput?.addEventListener('change', updateVacationAllowanceHint);
 youngWorkerInput?.addEventListener('change', updateVacationAllowanceHint);
+function toggleEmployeeSirvPeriod() {
+  if (!employeeSirvPeriodField) {
+    return;
+  }
+  const active = Boolean(employeeIsSirvInput?.checked);
+  employeeSirvPeriodField.classList.toggle('hidden', !active);
+}
+employeeIsSirvInput?.addEventListener('change', toggleEmployeeSirvPeriod);
+toggleEmployeeSirvPeriod();
 updateVacationAllowanceHint();
 
 async function attachEmployeeToDepartment(employeeId, departmentId) {
@@ -2249,6 +2277,14 @@ function replaceDeletedShiftCodes(deletedCode) {
   saveScheduleLocal();
 }
 
+function toggleEditEmployeeSirvPeriod() {
+  if (!editEmployeeSirvPeriodField) {
+    return;
+  }
+  const isSirvEnabled = Boolean(editEmployeeIsSirvInput?.checked);
+  editEmployeeSirvPeriodField.classList.toggle('hidden', !isSirvEnabled);
+}
+
 function attachEmployeeEditModalControls() {
   if (!employeeEditForm || !employeeEditModal) {
     return;
@@ -2271,6 +2307,10 @@ function attachEmployeeEditModalControls() {
     const baseVacationAllowance = Number(editVacationAllowanceInput.value);
     const hasTelk = Boolean(editTelkInput?.checked);
     const hasYoungWorkerBenefit = Boolean(editYoungWorkerInput?.checked);
+    const isSirv = Boolean(editEmployeeIsSirvInput?.checked);
+    const allowedSirvPeriods = new Set([1, 2, 3, 4, 6]);
+    const parsedSirvPeriod = Number(editEmployeeSirvPeriodInput?.value || 1);
+    const sirvPeriodMonths = allowedSirvPeriods.has(parsedSirvPeriod) ? parsedSirvPeriod : 1;
     const startDate = (editStartDateInput?.value || '').trim();
     const vacationAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit);
     const endDate = (editEndDateInput?.value || '').trim() || null;
@@ -2291,6 +2331,8 @@ function attachEmployeeEditModalControls() {
         telk: hasTelk,
         youngWorkerBenefit: hasYoungWorkerBenefit,
         baseVacationAllowance,
+        is_sirv: isSirv,
+        sirv_period_months: sirvPeriodMonths,
         startDate,
         endDate
       });
@@ -2306,7 +2348,9 @@ function attachEmployeeEditModalControls() {
             endDate,
             telk: hasTelk,
             youngWorkerBenefit: hasYoungWorkerBenefit,
-            baseVacationAllowance
+            baseVacationAllowance,
+            isSirv,
+            sirvPeriodMonths
           }
           : entry));
 
@@ -2320,6 +2364,9 @@ function attachEmployeeEditModalControls() {
       setStatus(error.message, false);
     }
   });
+
+  editEmployeeIsSirvInput?.addEventListener('change', toggleEditEmployeeSirvPeriod);
+  toggleEditEmployeeSirvPeriod();
 
   cancelEmployeeEditBtn?.addEventListener('click', () => {
     closeEmployeeEditModal();
@@ -2353,6 +2400,13 @@ function openEmployeeEditModal(employee) {
   if (editYoungWorkerInput) {
     editYoungWorkerInput.checked = Boolean(employee.youngWorkerBenefit);
   }
+  if (editEmployeeIsSirvInput) {
+    editEmployeeIsSirvInput.checked = Boolean(employee.isSirv);
+  }
+  if (editEmployeeSirvPeriodInput) {
+    editEmployeeSirvPeriodInput.value = String(Number(employee.sirvPeriodMonths || 1) || 1);
+  }
+  toggleEditEmployeeSirvPeriod();
 
   editDepartmentInput.innerHTML = '';
   const emptyOption = document.createElement('option');
@@ -2377,6 +2431,10 @@ function closeEmployeeEditModal() {
   }
 
   employeeEditForm.reset();
+  if (editEmployeeSirvPeriodInput) {
+    editEmployeeSirvPeriodInput.value = '1';
+  }
+  toggleEditEmployeeSirvPeriod();
   delete employeeEditForm.dataset.employeeId;
   employeeEditModal.classList.add('hidden');
 }
@@ -3409,11 +3467,18 @@ function getVisibleSummaryColumns() {
 function calculateEmployeeTotals({ employee, summary, year, month, monthNormHours }) {
   const remainingVacation = getVacationAllowanceForYear(employee, year) - getVacationUsedForYear(employee.id, year);
   const normalizedHolidayHours = summary.holidayWorkedHours * state.rates.holiday;
-  const normalizedWeekendHours = summary.weekendWorkedHours * state.rates.weekend;
+  const isSirvEmployee = Boolean(employee?.isSirv);
+  const normalizedWeekendHours = isSirvEmployee
+    ? summary.weekendWorkedHours
+    : summary.weekendWorkedHours * state.rates.weekend;
   const payableHours =
     summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + summary.nightConvertedHours;
   const deviation = summary.workedHours + summary.nightConvertedHours - monthNormHours;
-  const sirvTotals = getSirvTotalsForEmployee(employee, month, state.sirvPeriodMonths);
+  const employeeSirvPeriod = Number(employee?.sirvPeriodMonths || 1) || 1;
+  const sirvTotals = getSirvTotalsForEmployee(employee, month, isSirvEmployee ? employeeSirvPeriod : 1);
+  const overtimeHours = isSirvEmployee
+    ? sirvTotals.overtimeHours
+    : Math.max(0, summary.workedHours - monthNormHours);
 
   return {
     workedDays: summary.workedDays,
@@ -3422,7 +3487,7 @@ function calculateEmployeeTotals({ employee, summary, year, month, monthNormHour
     deviation,
     sirvNormHours: sirvTotals.normHours,
     sirvWorkedHours: sirvTotals.convertedWorkedHours,
-    overtimeHours: sirvTotals.overtimeHours,
+    overtimeHours,
     holidayWorkedHours: summary.holidayWorkedHours,
     weekendWorkedHours: summary.weekendWorkedHours,
     nightWorkedHours: summary.nightWorkedHours,
@@ -4213,7 +4278,9 @@ async function saveEmployeeBackend(employee) {
         vacationAllowance: employee.vacationAllowance,
         telk: Boolean(employee.telk),
         youngWorkerBenefit: Boolean(employee.youngWorkerBenefit),
-        baseVacationAllowance: resolveBaseVacationAllowance(employee)
+        baseVacationAllowance: resolveBaseVacationAllowance(employee),
+        is_sirv: Boolean(employee.isSirv),
+        sirv_period_months: Number(employee.sirvPeriodMonths) || 1
       })
     });
 
@@ -4555,6 +4622,8 @@ function normalizeEmployeeVacationData(employee) {
   normalized.telk = Boolean(normalized.telk);
   normalized.youngWorkerBenefit = Boolean(normalized.youngWorkerBenefit);
   normalized.baseVacationAllowance = resolveBaseVacationAllowance(normalized);
+  normalized.isSirv = Boolean(normalized.isSirv ?? normalized.is_sirv);
+  normalized.sirvPeriodMonths = Number(normalized.sirvPeriodMonths ?? normalized.sirv_period_months ?? 1) || 1;
   normalized.vacationAllowance = calculateVacationAllowance(normalized.baseVacationAllowance, normalized.telk, normalized.youngWorkerBenefit, normalized.startDate);
   return normalized;
 }

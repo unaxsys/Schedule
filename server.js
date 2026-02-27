@@ -170,6 +170,15 @@ function emptyComputedSummary() {
     vacationDays: 0,
     sickDays: 0,
     violations: [],
+    workedMinutes: 0,
+    normMinutes: 0,
+    overtimeMinutes: 0,
+    normalMinutes: 0,
+    nightMinutes: 0,
+    holidayMinutes: 0,
+    overtimeWeekdayMinutes: 0,
+    overtimeRestdayMinutes: 0,
+    overtimeHolidayMinutes: 0,
   };
 }
 
@@ -187,6 +196,15 @@ function addSummaries(target, source) {
     'payableHours',
     'vacationDays',
     'sickDays',
+    'workedMinutes',
+    'normMinutes',
+    'overtimeMinutes',
+    'normalMinutes',
+    'nightMinutes',
+    'holidayMinutes',
+    'overtimeWeekdayMinutes',
+    'overtimeRestdayMinutes',
+    'overtimeHolidayMinutes',
   ];
   for (const key of keys) {
     result[key] = Number(result[key] || 0) + Number(source[key] || 0);
@@ -659,6 +677,9 @@ const EMPLOYEE_SELECT_FIELDS = `e.id,
               e.base_vacation_allowance AS "baseVacationAllowance",
               e.telk,
               e.young_worker_benefit AS "youngWorkerBenefit",
+              COALESCE(e.is_sirv, FALSE) AS "isSirv",
+              COALESCE(e.sirv_period_months, 1) AS "sirvPeriodMonths",
+              COALESCE(e.workday_minutes, 480) AS "workdayMinutes",
               e.start_date::text AS "startDate",
               e.end_date::text AS "endDate",
               (e.base_vacation_allowance + CASE WHEN e.telk THEN 6 ELSE 0 END + CASE WHEN e.young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
@@ -752,6 +773,10 @@ function validateEmployeeInput(data = {}) {
 
   const startDate = normalizeDateOnly(data.startDate || data.start_date);
   const endDate = normalizeDateOnly(data.endDate || data.end_date);
+  const isSirv = Boolean(data.is_sirv ?? data.isSirv);
+  const allowedPeriods = new Set([1, 2, 3, 4, 6]);
+  const parsedSirvPeriod = Number(data.sirv_period_months ?? data.sirvPeriodMonths ?? 1);
+  const sirvPeriodMonths = allowedPeriods.has(parsedSirvPeriod) ? parsedSirvPeriod : 1;
   if (!isValidEmploymentRange(startDate, endDate)) {
     return {
       valid: false,
@@ -777,6 +802,8 @@ function validateEmployeeInput(data = {}) {
       baseVacationAllowance,
       telk,
       youngWorkerBenefit,
+      isSirv,
+      sirvPeriodMonths,
     },
   };
 }
@@ -840,6 +867,9 @@ async function initDatabase() {
       base_vacation_allowance INTEGER NOT NULL DEFAULT 20,
       telk BOOLEAN NOT NULL DEFAULT FALSE,
       young_worker_benefit BOOLEAN NOT NULL DEFAULT FALSE,
+      is_sirv BOOLEAN NOT NULL DEFAULT FALSE,
+      sirv_period_months INTEGER NOT NULL DEFAULT 1,
+      workday_minutes INTEGER NOT NULL DEFAULT 480,
       start_date DATE NOT NULL DEFAULT CURRENT_DATE,
       end_date DATE NULL,
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -916,6 +946,9 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS base_vacation_allowance INTEGER NOT NULL DEFAULT 20`);
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS telk BOOLEAN NOT NULL DEFAULT FALSE`);
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS young_worker_benefit BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_sirv BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS sirv_period_months INTEGER NOT NULL DEFAULT 1`);
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS workday_minutes INTEGER NOT NULL DEFAULT 480`);
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS end_date DATE NULL`);
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
   await pool.query(`ALTER TABLE departments ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
@@ -1384,7 +1417,7 @@ app.post('/api/employees', requireAuth, requireTenantContext, async (req, res) =
     return res.status(400).json(validation.error);
   }
 
-  const { name, department, departmentId, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit } = validation.value;
+  const { name, department, departmentId, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths } = validation.value;
 
   try {
     const actor = await resolveActorTenant(req);
@@ -1410,14 +1443,15 @@ app.post('/api/employees', requireAuth, requireTenantContext, async (req, res) =
     }
 
     const result = await pool.query(
-      `INSERT INTO employees (name, department, department_id, position, egn, vacation_allowance, base_vacation_allowance, telk, young_worker_benefit, start_date, end_date, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `INSERT INTO employees (name, department, department_id, position, egn, vacation_allowance, base_vacation_allowance, telk, young_worker_benefit, is_sirv, sirv_period_months, start_date, end_date, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING id, name, department_id AS "departmentId", department, position, egn,
                  base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
+                 COALESCE(is_sirv, FALSE) AS "isSirv", COALESCE(sirv_period_months, 1) AS "sirvPeriodMonths", COALESCE(workday_minutes, 480) AS "workdayMinutes",
                  start_date::text AS "startDate", end_date::text AS "endDate",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
-      [name, departmentName, resolvedDepartmentId, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, startDate, endDate, actor.tenantId]
+      [name, departmentName, resolvedDepartmentId, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths, startDate, endDate, actor.tenantId]
     );
 
     res.status(201).json({ ok: true, employee: result.rows[0] });
@@ -1442,7 +1476,7 @@ app.put('/api/employees/:id', requireAuth, requireTenantContext, async (req, res
     return res.status(400).json(validation.error);
   }
 
-  const { name, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit } = validation.value;
+  const { name, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths } = validation.value;
 
   try {
     const actor = await resolveActorTenant(req);
@@ -1455,16 +1489,19 @@ app.put('/api/employees/:id', requireAuth, requireTenantContext, async (req, res
            base_vacation_allowance = $6,
            telk = $7,
            young_worker_benefit = $8,
-           start_date = $9,
-           end_date = $10,
-           tenant_id = COALESCE(tenant_id, $11)
-       WHERE id = $1 AND tenant_id = $11
+           is_sirv = $9,
+           sirv_period_months = $10,
+           start_date = $11,
+           end_date = $12,
+           tenant_id = COALESCE(tenant_id, $13)
+       WHERE id = $1 AND tenant_id = $13
        RETURNING id, name, department_id AS "departmentId", COALESCE(department, 'Без отдел') AS department,
                  position, egn, base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
+                 COALESCE(is_sirv, FALSE) AS "isSirv", COALESCE(sirv_period_months, 1) AS "sirvPeriodMonths", COALESCE(workday_minutes, 480) AS "workdayMinutes",
                  start_date::text AS "startDate", end_date::text AS "endDate",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
-      [id, name, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, startDate, endDate, actor.tenantId]
+      [id, name, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths, startDate, endDate, actor.tenantId]
     );
 
     if (!updated.rowCount) {
