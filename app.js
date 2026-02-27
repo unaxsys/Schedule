@@ -343,14 +343,32 @@ function appendSnapshotTotalsColumns(row, totals, isTotalsRow = false) {
 init();
 
 async function init() {
-  monthPicker.value = state.month;
-
   const loadedSchedule = loadScheduleState();
   state.month = loadedSchedule.month || todayMonth();
   loadScheduleReviewPreferences();
   state.schedule = loadedSchedule.schedule || {};
   state.employees = loadEmployees().map(normalizeEmployeeVacationData);
   state.apiBaseUrl = detectApiBaseUrl();
+
+  const hasCoreSchedulerUi = Boolean(
+    monthPicker &&
+    weekendRateInput &&
+    holidayRateInput &&
+    sirvPeriodInput &&
+    apiUrlInput
+  );
+
+  if (!hasCoreSchedulerUi) {
+    console.warn('Core scheduler controls are missing from DOM. Running auth-only mode.');
+    attachRegistrationControls();
+    attachTenantSwitcherControls();
+    syncRoleFromAuthenticatedUser();
+    updateAuthUi();
+    updateAuthGate();
+    return;
+  }
+
+  monthPicker.value = state.month;
 
   weekendRateInput.value = String(state.rates.weekend);
   holidayRateInput.value = String(state.rates.holiday);
@@ -398,7 +416,9 @@ async function init() {
     }
   }
 
-  monthPicker.value = state.month;
+  if (monthPicker) {
+    monthPicker.value = state.month;
+  }
   await refreshMonthlyView();
   renderAll();
 }
