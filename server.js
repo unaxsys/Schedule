@@ -1,3 +1,14 @@
+
+function getYearBounds(yearRaw) {
+  const y = Number(yearRaw);
+  if (!Number.isInteger(y) || y < 1900 || y > 3000) {
+    return null;
+  }
+  const from = `${y}-01-01`;
+  const to = `${y}-12-31`;
+  return { year: y, from, to };
+}
+
 require('dotenv').config();
 
 const { createHolidayService } = require('./holidayService');
@@ -35,6 +46,7 @@ const {
   computeAdjustedNormMinutes,
   computeLeaveMinutesForRange,
 } = require('./leave_utils');
+const { createHolidayService } = require('./holidayService');
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
