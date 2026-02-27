@@ -56,6 +56,9 @@ const state = {
   selectedDepartmentId: 'all',
   selectedDepartmentIds: [],
   scheduleViewMode: 'combined',
+  generatorDepartmentId: '',
+  generatorTemplateType: 'SIRV_12H_2_2',
+  generatorSelectedEmployeeIds: [],
   hasManualScheduleSelection: false,
   backendAvailable: true,
   apiBaseUrl: '',
@@ -82,7 +85,8 @@ const state = {
   backendConnectionOnline: null,
   backendReconnectInFlight: false,
   pendingConnectionLogs: loadPendingConnectionLogs(),
-  lastConnectionErrorSignature: ''
+  lastConnectionErrorSignature: '',
+  departmentShiftsCache: {}
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -120,6 +124,15 @@ const monthInfo = document.getElementById('monthInfo');
 const scheduleOverviewPanel = document.getElementById('scheduleOverviewPanel');
 const scheduleFilterDepartmentSelect = document.getElementById('scheduleFilterDepartmentSelect');
 const scheduleDepartmentSelect = document.getElementById('scheduleDepartmentSelect');
+const generateDepartmentSelect = document.getElementById('generateDepartmentSelect');
+const generateTemplateSelect = document.getElementById('generateTemplateSelect');
+const generateEmployeesSelect = document.getElementById('generateEmployeesSelect');
+const generateScheduleByTemplateBtn = document.getElementById('generateScheduleByTemplateBtn');
+const generateWarnings = document.getElementById('generateWarnings');
+const generateRotateEmployees = document.getElementById('generateRotateEmployees');
+const generateIncludeWeekends = document.getElementById('generateIncludeWeekends');
+const generateEnforce24h = document.getElementById('generateEnforce24h');
+const generateRestHoursInput = document.getElementById('generateRestHoursInput');
 const scheduleDepartmentMultiSelect = document.getElementById('scheduleDepartmentMultiSelect');
 const scheduleDepartmentChips = document.getElementById('scheduleDepartmentChips');
 const scheduleSelectAllDepartmentsBtn = document.getElementById('scheduleSelectAllDepartmentsBtn');
@@ -151,7 +164,18 @@ const shiftNameInput = document.getElementById('shiftNameInput');
 const shiftDepartmentInput = document.getElementById('shiftDepartmentInput');
 const shiftStartInput = document.getElementById('shiftStartInput');
 const shiftEndInput = document.getElementById('shiftEndInput');
+const shiftBreakMinutesInput = document.getElementById('shiftBreakMinutesInput');
+const shiftBreakIncludedInput = document.getElementById('shiftBreakIncludedInput');
+const shiftListDepartmentFilter = document.getElementById('shiftListDepartmentFilter');
 const shiftList = document.getElementById('shiftList');
+const shiftImportFileInput = document.getElementById('shiftImportFileInput');
+const shiftImportPreviewBtn = document.getElementById('shiftImportPreviewBtn');
+const shiftImportCommitBtn = document.getElementById('shiftImportCommitBtn');
+const shiftImportDepartmentInput = document.getElementById('shiftImportDepartmentInput');
+const shiftImportUpdateDuplicatesInput = document.getElementById('shiftImportUpdateDuplicatesInput');
+const shiftImportPreview = document.getElementById('shiftImportPreview');
+const shiftImportSummary = document.getElementById('shiftImportSummary');
+const downloadShiftImportTemplateBtn = document.getElementById('downloadShiftImportTemplateBtn');
 const shiftLegend = document.getElementById('shiftLegend');
 const lockScheduleBtn = document.getElementById('lockScheduleBtn');
 const unlockScheduleBtn = document.getElementById('unlockScheduleBtn');
@@ -227,6 +251,7 @@ const inspectTableNameInput = document.getElementById('inspectTableNameInput');
 const inspectTableOutput = document.getElementById('inspectTableOutput');
 
 let statusToastTimer = null;
+let lastShiftImportPreviewPayload = null;
 
 
 const safeNum = window.ScheduleTotals?.safeNum || ((value, fallback = 0) => {
@@ -330,6 +355,7 @@ async function init() {
   attachVacationCorrectionModalControls();
   attachVacationDateValidationControls();
   attachShiftForm();
+  attachShiftImportControls();
   attachLockAndExport();
   attachSettingsControls();
   attachSettingsSubtabs();
@@ -1343,6 +1369,26 @@ function attachDepartmentControls() {
       await createScheduleForCurrentMonth();
     });
   }
+
+  if (generateDepartmentSelect) {
+    generateDepartmentSelect.addEventListener('change', () => {
+      state.generatorDepartmentId = generateDepartmentSelect.value || '';
+      state.generatorSelectedEmployeeIds = [];
+      renderGeneratorControls();
+    });
+  }
+
+  if (generateTemplateSelect) {
+    generateTemplateSelect.addEventListener('change', () => {
+      state.generatorTemplateType = generateTemplateSelect.value || 'SIRV_12H_2_2';
+    });
+  }
+
+  if (generateScheduleByTemplateBtn) {
+    generateScheduleByTemplateBtn.addEventListener('click', async () => {
+      await generateScheduleByTemplate();
+    });
+  }
 }
 
 function renderDepartmentOptions() {
@@ -1391,6 +1437,7 @@ function renderDepartmentOptions() {
 
   renderDepartmentList();
   renderEmployeeDepartmentOptions();
+  renderGeneratorControls();
   updateScheduleNameSuggestion();
 }
 
@@ -1416,6 +1463,115 @@ function renderEmployeeDepartmentOptions() {
 
   const hasCurrent = state.departments.some((department) => department.id === currentValue);
   departmentInput.value = hasCurrent ? currentValue : '';
+}
+
+function renderGeneratorControls() {
+  if (!generateDepartmentSelect) {
+    return;
+  }
+
+  const prev = state.generatorDepartmentId;
+  generateDepartmentSelect.innerHTML = '';
+  state.departments.forEach((department) => {
+    const option = document.createElement('option');
+    option.value = department.id;
+    option.textContent = department.name;
+    generateDepartmentSelect.appendChild(option);
+  });
+
+  const hasPrev = state.departments.some((department) => department.id === prev);
+  state.generatorDepartmentId = hasPrev ? prev : (state.departments[0]?.id || '');
+  generateDepartmentSelect.value = state.generatorDepartmentId;
+
+  if (generateTemplateSelect) {
+    generateTemplateSelect.value = state.generatorTemplateType || 'SIRV_12H_2_2';
+  }
+
+  const departmentEmployees = state.employees.filter((employee) => employee.departmentId === state.generatorDepartmentId);
+  const selectedSet = new Set(state.generatorSelectedEmployeeIds || []);
+  if (generateEmployeesSelect) {
+    generateEmployeesSelect.innerHTML = '';
+    departmentEmployees.forEach((employee) => {
+      const row = document.createElement('label');
+      row.className = 'settings-checkbox';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.value = employee.id;
+      checkbox.checked = selectedSet.has(employee.id);
+      checkbox.addEventListener('change', () => {
+        const current = new Set(state.generatorSelectedEmployeeIds || []);
+        if (checkbox.checked) current.add(employee.id);
+        else current.delete(employee.id);
+        state.generatorSelectedEmployeeIds = Array.from(current);
+      });
+      row.appendChild(checkbox);
+      row.appendChild(document.createTextNode(employee.name));
+      generateEmployeesSelect.appendChild(row);
+    });
+  }
+}
+
+function getSelectedOverwriteMode() {
+  const selected = document.querySelector('input[name="generateOverwriteMode"]:checked');
+  return selected ? selected.value : 'empty_only';
+}
+
+async function generateScheduleByTemplate() {
+  const active = getActiveSchedule();
+  if (!active?.id) {
+    setStatus('Изберете активен график.', false);
+    return;
+  }
+
+  const departmentId = cleanStoredValue(generateDepartmentSelect?.value);
+  if (!departmentId) {
+    setStatus('Изберете отдел за генерация.', false);
+    return;
+  }
+
+  const templateType = cleanStoredValue(generateTemplateSelect?.value) || 'SIRV_12H_2_2';
+  state.generatorTemplateType = templateType;
+
+  const response = await apiFetch(`/api/schedules/${active.id}/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      department_id: departmentId,
+      employee_ids: state.generatorSelectedEmployeeIds,
+      template_type: templateType,
+      options: {
+        rotate_employees: Boolean(generateRotateEmployees?.checked),
+        include_weekends: Boolean(generateIncludeWeekends?.checked),
+        overwrite_mode: getSelectedOverwriteMode(),
+        rest_min_hours: Number(generateRestHoursInput?.value || 12),
+        enforce_24h_after_12h: Boolean(generateEnforce24h?.checked),
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = payload.message || 'Неуспешна генерация на график.';
+    setStatus(message, false);
+    if (generateWarnings) {
+      const missing = Array.isArray(payload.missingShifts) ? payload.missingShifts.join(', ') : '';
+      generateWarnings.textContent = missing ? `Липсват смени за този отдел: ${missing}` : '';
+    }
+    return;
+  }
+
+  await refreshMonthlyView();
+  renderAll();
+  const generatedCount = Number(payload.generatedCount || 0);
+  const skippedCount = Number(payload.skippedCount || 0);
+  setStatus(`Генерацията завърши: генерирани ${generatedCount}, пропуснати ${skippedCount}.`, true);
+
+  if (generateWarnings) {
+    const warnings = Array.isArray(payload.warnings) ? payload.warnings.slice(0, 6) : [];
+    generateWarnings.textContent = warnings.length
+      ? warnings.map((item) => `${item.date}: ${item.msg}`).join(' | ')
+      : '';
+  }
 }
 
 function updateScheduleNameSuggestion() {
@@ -1641,6 +1797,10 @@ function attachRatesForm() {
 }
 
 function attachShiftForm() {
+  if (shiftListDepartmentFilter && !shiftListDepartmentFilter.dataset.bound) {
+    shiftListDepartmentFilter.dataset.bound = '1';
+    shiftListDepartmentFilter.addEventListener('change', () => renderShiftList());
+  }
   shiftForm.addEventListener('submit', (event) => {
     event.preventDefault();
 
@@ -1649,6 +1809,8 @@ function attachShiftForm() {
     const departmentId = cleanStoredValue(shiftDepartmentInput?.value) || null;
     const start = shiftStartInput.value;
     const end = shiftEndInput.value;
+    const breakMinutes = Math.max(0, Number(shiftBreakMinutesInput?.value || 0));
+    const breakIncluded = Boolean(shiftBreakIncludedInput?.checked);
 
     if (!code || !name || !start || !end) {
       return;
@@ -1680,14 +1842,27 @@ function attachShiftForm() {
       start,
       end,
       hours,
-      locked: false
+      locked: false,
+      break_minutes: breakMinutes,
+      break_included: breakIncluded
     });
 
     saveShiftTemplates();
-    void saveShiftTemplateBackend({ code, name, start, end, hours, department_id: departmentId });
+    if (departmentId) {
+      void saveDepartmentShiftBackend(departmentId, { code, name, start_time: start, end_time: end, break_minutes: breakMinutes, break_included: breakIncluded });
+      void loadDepartmentShifts(departmentId, { force: true });
+    } else {
+      void saveShiftTemplateBackend({ code, name, start, end, hours, department_id: departmentId, break_minutes: breakMinutes, break_included: breakIncluded });
+    }
     shiftForm.reset();
     if (shiftDepartmentInput) {
       shiftDepartmentInput.value = '';
+    }
+    if (shiftBreakMinutesInput) {
+      shiftBreakMinutesInput.value = '0';
+    }
+    if (shiftBreakIncludedInput) {
+      shiftBreakIncludedInput.checked = false;
     }
     renderAll();
   });
@@ -1715,6 +1890,262 @@ function renderShiftDepartmentOptions() {
 
   const hasPrevious = state.departments.some((department) => department.id === previous);
   shiftDepartmentInput.value = hasPrevious ? previous : '';
+
+  if (shiftImportDepartmentInput) {
+    const importPrev = cleanStoredValue(shiftImportDepartmentInput.value);
+    shiftImportDepartmentInput.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Изберете отдел';
+    shiftImportDepartmentInput.appendChild(placeholder);
+    state.departments.forEach((department) => {
+      const option = document.createElement('option');
+      option.value = department.id;
+      option.textContent = department.name;
+      shiftImportDepartmentInput.appendChild(option);
+    });
+    const hasImportPrev = state.departments.some((department) => department.id === importPrev);
+    shiftImportDepartmentInput.value = hasImportPrev ? importPrev : '';
+  }
+}
+
+function renderShiftImportPreview(payload) {
+  if (!shiftImportPreview || !shiftImportSummary) {
+    return;
+  }
+
+  if (!payload) {
+    shiftImportSummary.textContent = '';
+    shiftImportPreview.innerHTML = '';
+    return;
+  }
+
+  const invalidCount = Array.isArray(payload.invalid_rows) ? payload.invalid_rows.length : 0;
+  const duplicatesCount = Array.isArray(payload.duplicates) ? payload.duplicates.length : 0;
+  shiftImportSummary.textContent = `Общо: ${payload.total_rows || 0} • За създаване: ${payload.valid_rows || 0} • Невалидни: ${invalidCount} • Дубликати: ${duplicatesCount}`;
+
+  const rows = [];
+  (payload.to_create || []).forEach((item) => {
+    rows.push({
+      status: 'valid',
+      rowIndex: item.rowIndex,
+      message: 'OK',
+      row: item.normalizedRow,
+    });
+  });
+  (payload.invalid_rows || []).forEach((item) => {
+    rows.push({
+      status: 'invalid',
+      rowIndex: item.rowIndex,
+      message: (item.errors || []).join('; '),
+      row: item.row,
+    });
+  });
+  (payload.duplicates || []).forEach((item) => {
+    rows.push({
+      status: 'duplicate',
+      rowIndex: item.rowIndex,
+      message: `${item.reason}${item.existingShiftId ? ` (#${item.existingShiftId})` : ''}`,
+      row: item.row,
+    });
+  });
+
+  rows.sort((a, b) => (a.rowIndex || 0) - (b.rowIndex || 0));
+  const table = document.createElement('table');
+  table.innerHTML = '<tr><th>Row</th><th>Status</th><th>Детайл</th><th>Данни</th></tr>';
+  rows.forEach((item) => {
+    const tr = document.createElement('tr');
+    const statusLabel = item.status === 'valid' ? 'Valid' : (item.status === 'invalid' ? 'Invalid' : 'Duplicate');
+    tr.className = `shift-import-${item.status}`;
+    tr.innerHTML = `<td>${item.rowIndex || '-'}</td><td>${statusLabel}</td><td>${item.message}</td><td><pre>${JSON.stringify(item.row || {}, null, 2)}</pre></td>`;
+    table.appendChild(tr);
+  });
+
+  shiftImportPreview.innerHTML = '';
+  shiftImportPreview.appendChild(table);
+}
+
+function downloadShiftImportTemplate() {
+  const sample = [
+    'name,code,start_time,end_time,break_minutes,break_included',
+    'Дневна,,08:00,17:00,60,false',
+    'Дневна 12,,07:00,19:00,60,true',
+    'Нощна 12,,19:00,07:00,60,true',
+  ].join('\n');
+  const blob = new Blob([sample], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'shift-import-template.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function parseCsvToRows(text) {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (!lines.length) {
+    return [];
+  }
+
+  const parseLine = (line) => {
+    const out = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i += 1) {
+      const char = line[i];
+      const next = line[i + 1];
+      if (char === '"') {
+        if (inQuotes && next === '"') {
+          current += '"';
+          i += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        out.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    out.push(current.trim());
+    return out;
+  };
+
+  const headers = parseLine(lines[0]);
+  return lines.slice(1).map((line) => {
+    const cells = parseLine(line);
+    const row = {};
+    headers.forEach((header, index) => {
+      row[header] = cells[index] ?? '';
+    });
+    return row;
+  });
+}
+
+async function parseShiftImportFile(file) {
+  const name = String(file?.name || '').toLowerCase();
+  if (name.endsWith('.csv')) {
+    const text = await file.text();
+    return parseCsvToRows(text);
+  }
+
+  if (name.endsWith('.xlsx')) {
+    await ensureXlsxLibrary();
+    const buffer = await file.arrayBuffer();
+    const workbook = window.XLSX.read(buffer, { type: 'array' });
+    const firstSheetName = workbook.SheetNames?.[0];
+    if (!firstSheetName) {
+      return [];
+    }
+    return window.XLSX.utils.sheet_to_json(workbook.Sheets[firstSheetName], { defval: '' });
+  }
+
+  throw new Error('Неподдържан файл. Използвайте CSV или XLSX.');
+}
+
+async function ensureXlsxLibrary() {
+  if (window.XLSX) {
+    return;
+  }
+
+  const sources = [
+    'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+    'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',
+  ];
+
+  for (const src of sources) {
+    try {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.async = true;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Неуспешно зареждане на XLSX библиотека.'));
+        document.head.appendChild(script);
+      });
+      if (window.XLSX) {
+        return;
+      }
+    } catch {
+      // try next CDN
+    }
+  }
+
+  throw new Error('XLSX parser не е наличен. Използвайте CSV или осигурете достъп до CDN.');
+}
+
+function attachShiftImportControls() {
+  if (!shiftImportPreviewBtn || !shiftImportCommitBtn || !downloadShiftImportTemplateBtn) {
+    return;
+  }
+
+  downloadShiftImportTemplateBtn.addEventListener('click', downloadShiftImportTemplate);
+
+  shiftImportPreviewBtn.addEventListener('click', async () => {
+    const departmentId = cleanStoredValue(shiftImportDepartmentInput?.value);
+    if (!departmentId) {
+      setStatus('Изберете отдел за импорт.', false);
+      return;
+    }
+    if (!shiftImportFileInput?.files?.length) {
+      setStatus('Изберете CSV/XLSX файл.', false);
+      return;
+    }
+
+    let rows = [];
+    try {
+      rows = await parseShiftImportFile(shiftImportFileInput.files[0]);
+    } catch (error) {
+      setStatus(error.message || 'Грешка при четене на файла.', false);
+      return;
+    }
+
+    const response = await apiFetch(`/api/departments/${encodeURIComponent(departmentId)}/shifts/import/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows }),
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setStatus(payload.message || 'Грешка при preview.', false);
+      return;
+    }
+
+    lastShiftImportPreviewPayload = payload;
+    renderShiftImportPreview(payload);
+    setStatus('Preview е готов.', true);
+  });
+
+  shiftImportCommitBtn.addEventListener('click', async () => {
+    const departmentId = cleanStoredValue(shiftImportDepartmentInput?.value);
+    if (!departmentId) {
+      setStatus('Изберете отдел за commit.', false);
+      return;
+    }
+    const toCreate = (lastShiftImportPreviewPayload?.to_create || []).map((entry) => entry.normalizedRow);
+    const mode = shiftImportUpdateDuplicatesInput?.checked ? 'updateDuplicates' : 'skipDuplicates';
+
+    const response = await apiFetch(`/api/departments/${encodeURIComponent(departmentId)}/shifts/import/commit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toCreate, mode }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setStatus(payload.message || 'Грешка при commit.', false);
+      return;
+    }
+
+    setStatus(`Импорт приключи: +${payload.createdCount || 0}, обновени ${payload.updatedCount || 0}, пропуснати ${payload.skippedCount || 0}.`, true);
+    await loadFromBackend();
+    renderAll();
+  });
 }
 
 function attachLockAndExport() {
@@ -2337,6 +2768,7 @@ function renderAll() {
   renderPlatformUserEmployeeOptions();
   renderShiftList();
   renderLegend();
+  renderGeneratorControls();
   updateCreateScheduleButtonState();
 }
 
@@ -2547,7 +2979,14 @@ function renderShiftList() {
   table.innerHTML = '<tr><th>Код</th><th>Име</th><th>Отдел</th><th>Начало</th><th>Край</th><th>Часове</th><th>Тип</th><th>Действие</th></tr>';
   const departmentNameById = new Map((state.departments || []).map((department) => [department.id, department.name]));
 
-  state.shiftTemplates.forEach((shift) => {
+  const shiftFilter = cleanStoredValue(shiftListDepartmentFilter?.value) || 'all';
+  const visibleShifts = state.shiftTemplates.filter((shift) => {
+    if (shiftFilter === 'all') return true;
+    if (shiftFilter === 'global') return !cleanStoredValue(shift.departmentId);
+    return cleanStoredValue(shift.departmentId) === shiftFilter;
+  });
+
+  visibleShifts.forEach((shift) => {
     const row = document.createElement('tr');
     const departmentLabel = shift.departmentId ? (departmentNameById.get(shift.departmentId) || 'Неизвестен отдел') : 'Global';
     row.innerHTML = `<td>${shift.code}</td><td>${shift.name}</td><td>${departmentLabel}</td><td>${shift.start || '-'}</td><td>${shift.end || '-'}</td><td>${shift.hours}</td><td>${shift.type}</td>`;
@@ -3579,9 +4018,16 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
     }
 
     const scheduleId = getEmployeeScheduleId(employee);
-    const scopedShiftTemplates = scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
-      ? state.scheduleShiftTemplatesById[scheduleId]
-      : state.shiftTemplates;
+    const employeeDepartmentId = cleanStoredValue(employee.departmentId || employee.department_id) || null;
+    const scopedShiftTemplates = employeeDepartmentId && Array.isArray(state.departmentShiftsCache[employeeDepartmentId])
+      ? state.departmentShiftsCache[employeeDepartmentId]
+      : (scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
+        ? state.scheduleShiftTemplatesById[scheduleId]
+        : state.shiftTemplates);
+
+    if (employeeDepartmentId && !Array.isArray(state.departmentShiftsCache[employeeDepartmentId])) {
+      void loadDepartmentShifts(employeeDepartmentId).then(() => renderSchedule());
+    }
 
     scopedShiftTemplates.forEach((shift) => {
       const option = document.createElement('option');
@@ -5205,7 +5651,9 @@ function mergeShiftTemplates(backendShiftTemplates) {
       start: String(shift.start || ''),
       end: String(shift.end || ''),
       hours: getStoredShiftHours(shift),
-      locked: false
+      locked: false,
+      break_minutes: breakMinutes,
+      break_included: breakIncluded
     });
   });
 
@@ -5346,4 +5794,51 @@ function orthodoxEaster(year) {
   const julianDate = new Date(year, month - 1, day);
   julianDate.setDate(julianDate.getDate() + 13);
   return julianDate;
+}
+
+
+async function saveDepartmentShiftBackend(departmentId, payload) {
+  if (!state.backendAvailable) return;
+  try {
+    const response = await apiFetch(`/api/departments/${encodeURIComponent(departmentId)}/shifts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) throw new Error('Create department shift failed');
+  } catch (error) {
+    setStatus(error.message || 'Неуспешно добавяне на смяна към отдел.', false);
+  }
+}
+
+async function loadDepartmentShifts(departmentId, options = {}) {
+  if (!departmentId || !state.backendAvailable) return [];
+  if (!options.force && Array.isArray(state.departmentShiftsCache[departmentId])) {
+    return state.departmentShiftsCache[departmentId];
+  }
+
+  try {
+    const response = await apiFetch(`/api/departments/${encodeURIComponent(departmentId)}/shifts`);
+    if (!response.ok) throw new Error('Неуспешно зареждане на смени за отдел.');
+    const payload = await response.json();
+    const mapped = Array.isArray(payload.shifts) ? payload.shifts.map((shift) => ({
+      id: shift.id || null,
+      code: String(shift.code || '').toUpperCase(),
+      label: String(shift.code || '').toUpperCase(),
+      name: String(shift.name || shift.code || ''),
+      departmentId: cleanStoredValue(shift.departmentId || shift.department_id) || null,
+      type: 'work',
+      start: String(shift.start || shift.start_time || ''),
+      end: String(shift.end || shift.end_time || ''),
+      hours: Number(shift.hours || calcShiftHours(shift.start || shift.start_time || '', shift.end || shift.end_time || '')) || 0,
+      break_minutes: Number(shift.break_minutes || 0),
+      break_included: Boolean(shift.break_included),
+      locked: ['P', 'O', 'B', 'R'].includes(String(shift.code || '').toUpperCase())
+    })) : [];
+    state.departmentShiftsCache[departmentId] = mergeShiftTemplates(mapped);
+    return state.departmentShiftsCache[departmentId];
+  } catch (error) {
+    setStatus(error.message || 'Неуспешно зареждане на departmental смени. Ползва се fallback.', false);
+    return state.shiftTemplates.filter((shift) => !cleanStoredValue(shift.departmentId) || cleanStoredValue(shift.departmentId) === cleanStoredValue(departmentId));
+  }
 }

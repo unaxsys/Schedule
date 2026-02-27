@@ -56,3 +56,47 @@
 
 ## SaaS модел
 - Базата за платформен слой използва `tenants`, `users`, `tenant_users`, `audit_log`, `request_log`.
+
+## Department-scoped shifts (tenant-safe)
+
+### cURL examples
+
+```bash
+curl -X POST "http://localhost:4000/api/departments/<department_id>/shifts" \
+  -H "Authorization: Bearer <JWT_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Дневна смяна",
+    "code": "D1",
+    "start_time": "08:00",
+    "end_time": "17:00",
+    "break_minutes": 60,
+    "break_included": false
+  }'
+```
+
+```bash
+curl -X GET "http://localhost:4000/api/departments/<department_id>/shifts" \
+  -H "Authorization: Bearer <JWT_TOKEN>"
+```
+
+```bash
+curl -X PATCH "http://localhost:4000/api/shifts/<shift_id>" \
+  -H "Authorization: Bearer <JWT_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Дневна смяна (редакция)",
+    "start_time": "09:00",
+    "end_time": "18:00",
+    "break_minutes": 60,
+    "break_included": false
+  }'
+```
+
+### UI тест (5 стъпки)
+
+1. Отвори **Настройки → Смени** и избери отдел от полето за отдел.
+2. Добави смяна с начало/край и почивка; потвърди, че се появява в списъка за този отдел.
+3. Смени филтъра „Покажи смени за отдел“ и провери, че виждаш само смени за избрания отдел (или global).
+4. Отвори **График**, кликни клетка за служител от този отдел и провери, че dropdown-ът показва department + global смени.
+5. Избери смяна в клетката и провери, че записът се пази и при refresh остава същият.
