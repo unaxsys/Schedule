@@ -46,6 +46,7 @@ const state = {
   sirvSchedule: {},
   scheduleEntriesById: {},
   scheduleEntrySnapshotsById: {},
+  scheduleShiftTemplatesById: {},
   schedules: [],
   selectedScheduleIds: [],
   activeScheduleId: null,
@@ -2225,7 +2226,13 @@ function renderPlatformUserEmployeeOptions() {
 
 function renderLegend() {
   shiftLegend.innerHTML = '';
-  state.shiftTemplates.forEach((shift) => {
+  const activeSchedule = getActiveSchedule();
+  const activeScheduleId = cleanStoredValue(activeSchedule?.id);
+  const legendShifts = activeScheduleId && Array.isArray(state.scheduleShiftTemplatesById[activeScheduleId])
+    ? state.scheduleShiftTemplatesById[activeScheduleId]
+    : state.shiftTemplates;
+
+  legendShifts.forEach((shift) => {
     const span = document.createElement('span');
     if (shift.type === 'work') {
       span.innerHTML = `<b>${shift.code}</b> - ${shift.name} (${shift.start}-${shift.end}, ${shift.hours}ч)`;
@@ -3340,7 +3347,12 @@ function renderSchedule() {
         }
         select.disabled = monthLocked || !inEmployment;
 
-        state.shiftTemplates.forEach((shift) => {
+        const scheduleId = getEmployeeScheduleId(employee);
+        const scopedShiftTemplates = scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
+          ? state.scheduleShiftTemplatesById[scheduleId]
+          : state.shiftTemplates;
+
+        scopedShiftTemplates.forEach((shift) => {
           const option = document.createElement('option');
           option.value = shift.code;
           option.textContent = shift.label || shift.code;
@@ -4254,6 +4266,16 @@ async function refreshMonthlyView() {
   state.scheduleEmployees = mergedEmployees.map(normalizeEmployeeVacationData);
   state.scheduleEntriesById = mappedEntries;
   state.scheduleEntrySnapshotsById = mappedEntrySnapshots;
+  state.scheduleShiftTemplatesById = {};
+
+  details.forEach((detail) => {
+    const scheduleId = cleanStoredValue(detail?.schedule?.id);
+    if (!scheduleId) {
+      return;
+    }
+    const backendShiftTemplates = Array.isArray(detail?.shiftTemplates) ? detail.shiftTemplates : [];
+    state.scheduleShiftTemplatesById[scheduleId] = mergeShiftTemplates(backendShiftTemplates);
+  });
 }
 
 async function loadFromBackend(options = {}) {
