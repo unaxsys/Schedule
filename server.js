@@ -7,6 +7,12 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 const {
+  parseCsvText,
+  normalizeImportRow,
+  buildDuplicateKey,
+  buildImportPreview,
+} = require('./shift_import');
+const {
   DEFAULT_WEEKEND_RATE,
   DEFAULT_HOLIDAY_RATE,
   computeMonthlySummary,
@@ -46,7 +52,7 @@ app.use(
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 function isValidUuid(v) {
   return (
@@ -57,6 +63,61 @@ function isValidUuid(v) {
 
 function cleanStr(v) {
   return String(v ?? '').trim();
+}
+
+function normalizeShiftImportRowsPayload(payload) {
+  if (Array.isArray(payload?.rows)) {
+    return payload.rows;
+  }
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+  return null;
+}
+
+async function resolveTenantDepartmentOrThrow({ departmentId, tenantId }) {
+  if (!isValidUuid(departmentId)) {
+    throw createHttpError(400, 'Невалиден department_id.');
+  }
+
+  const result = await pool.query(
+    'SELECT id FROM departments WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+    [departmentId, tenantId]
+  );
+
+  if (!result.rowCount) {
+    throw createHttpError(404, 'Отделът не е намерен или е извън tenant scope.');
+  }
+
+  return result.rows[0].id;
+}
+
+function readRowsFromImportRequest(req) {
+  const rowsPayload = normalizeShiftImportRowsPayload(req.body);
+  if (rowsPayload) {
+    return rowsPayload;
+  }
+
+  const csvText = cleanStr(req.body?.csv || req.body?.csvText || req.body?.rawCsv || '');
+  if (csvText) {
+    return parseCsvText(csvText);
+  }
+  return null;
+}
+
+async function loadDepartmentShiftDuplicates({ departmentId, tenantId }) {
+  const rows = await pool.query(
+    `SELECT id, code, name, start_time, end_time, break_minutes, break_included
+     FROM shift_templates
+     WHERE tenant_id = $1 AND department_id = $2`,
+    [tenantId, departmentId]
+  );
+
+  const byKey = new Map();
+  rows.rows.forEach((row) => {
+    byKey.set(buildDuplicateKey(row), row);
+  });
+  return byKey;
 }
 
 function normalizeShiftCode(input) {
@@ -2676,6 +2737,118 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/api/departments/:id/shifts/import/preview', requireAuth, requireTenantContext, async (req, res) => {
+  try {
+    const departmentId = await resolveTenantDepartmentOrThrow({ departmentId: req.params.id, tenantId: req.tenantId });
+    const sourceRows = readRowsFromImportRequest(req);
+    if (!sourceRows) {
+      return res.status(400).json({ message: 'Липсват rows/csv/file за import preview.' });
+    }
+
+    const existingShiftsByKey = await loadDepartmentShiftDuplicates({ departmentId, tenantId: req.tenantId });
+    const preview = buildImportPreview({ rows: sourceRows, existingShifts: Array.from(existingShiftsByKey.values()) });
+    const toCreate = preview.to_create.map((entry) => ({
+      ...entry,
+      normalizedRow: {
+        ...entry.normalizedRow,
+        department_id: departmentId,
+      },
+    }));
+
+    return res.json({
+      department_id: departmentId,
+      total_rows: preview.total_rows,
+      valid_rows: preview.valid_rows,
+      invalid_rows: preview.invalid_rows,
+      duplicates: preview.duplicates,
+      to_create: toCreate,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    return res.status(status).json({ message: error.message });
+  }
+});
+
+app.post('/api/departments/:id/shifts/import/commit', requireAuth, requireTenantContext, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const departmentId = await resolveTenantDepartmentOrThrow({ departmentId: req.params.id, tenantId: req.tenantId });
+    const mode = cleanStr(req.body?.mode || 'skipDuplicates') || 'skipDuplicates';
+    const supportedModes = new Set(['skipDuplicates', 'updateDuplicates']);
+    if (!supportedModes.has(mode)) {
+      return res.status(400).json({ message: 'Невалиден mode. Използвайте skipDuplicates или updateDuplicates.' });
+    }
+
+    const toCreate = Array.isArray(req.body?.toCreate) ? req.body.toCreate : [];
+    if (!toCreate.length) {
+      return res.json({ createdCount: 0, updatedCount: 0, skippedCount: 0, createdIds: [] });
+    }
+
+    await client.query('BEGIN');
+
+    const existingByKey = await loadDepartmentShiftDuplicates({ departmentId, tenantId: req.tenantId });
+    const createdIds = [];
+    let createdCount = 0;
+    let updatedCount = 0;
+    let skippedCount = 0;
+
+    for (const item of toCreate) {
+      const normalizedResult = normalizeImportRow(item || {});
+      const normalized = normalizedResult.normalizedRow;
+      const validationErrors = normalizedResult.errors;
+      if (validationErrors.length) {
+        skippedCount += 1;
+        continue;
+      }
+
+      const duplicateKey = buildDuplicateKey(normalized);
+      const existing = existingByKey.get(duplicateKey);
+
+      if (existing && mode === 'skipDuplicates') {
+        skippedCount += 1;
+        continue;
+      }
+
+      if (existing && mode === 'updateDuplicates') {
+        await client.query(
+          `UPDATE shift_templates
+           SET name = $1,
+               start_time = $2,
+               end_time = $3,
+               break_minutes = $4,
+               break_included = $5,
+               hours = $6
+           WHERE id = $7 AND tenant_id = $8 AND department_id = $9`,
+          [normalized.name, normalized.start_time, normalized.end_time, normalized.break_minutes, normalized.break_included, normalized.hours, existing.id, req.tenantId, departmentId]
+        );
+        updatedCount += 1;
+        continue;
+      }
+
+      const nextCode = cleanStr(normalized.code) || `IMP${String(Date.now()).slice(-6)}${Math.floor(Math.random() * 999)}`;
+      const inserted = await client.query(
+        `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, break_minutes, break_included, hours)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id`,
+        [req.tenantId, departmentId, nextCode, normalized.name, normalized.start_time, normalized.end_time, normalized.break_minutes, normalized.break_included, normalized.hours]
+      );
+
+      createdCount += 1;
+      createdIds.push(inserted.rows[0].id);
+      existingByKey.set(duplicateKey, { id: inserted.rows[0].id, ...normalized, code: nextCode });
+    }
+
+    await client.query('COMMIT');
+    return res.json({ createdCount, updatedCount, skippedCount, createdIds });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    const status = error.status || 500;
+    return res.status(status).json({ message: error.message });
+  } finally {
+    client.release();
   }
 });
 

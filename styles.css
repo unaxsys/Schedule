@@ -501,6 +501,48 @@ select.shift-select {
   margin-top: 0.7rem;
 }
 
+.shift-import-row {
+  margin: 10px 0;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.shift-import-summary {
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.shift-import-preview table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.shift-import-preview td,
+.shift-import-preview th {
+  border: 1px solid #d8dbe3;
+  padding: 6px;
+  vertical-align: top;
+}
+
+.shift-import-valid {
+  background: #e8f7eb;
+}
+
+.shift-import-invalid {
+  background: #fdeaea;
+}
+
+.shift-import-duplicate {
+  background: #fff7df;
+}
+
+.shift-import-preview pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+
 
 .settings-subtabs {
   display: flex;
