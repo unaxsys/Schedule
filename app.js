@@ -3192,28 +3192,47 @@ function renderSchedule() {
 
         state.shiftTemplates.forEach((shift) => {
           const option = document.createElement('option');
-          option.value = shift.code;
+          option.value = shift.id || `code:${shift.code}`;
           option.textContent = shift.label;
+          option.dataset.shiftCode = shift.code;
+          option.dataset.shiftId = shift.id || '';
           option.selected = shift.code === currentShift;
           select.appendChild(option);
         });
 
-        select.addEventListener('change', () => {
+        select.addEventListener('change', async () => {
           if (monthLocked) {
             return;
           }
 
-          const toShift = select.value;
+          const selectedOption = select.options[select.selectedIndex];
+          const toShift = selectedOption?.dataset.shiftCode || currentShift;
+          const toShiftId = selectedOption?.dataset.shiftId || null;
           const scheduleId = options.scheduleId || getEmployeeScheduleId(employee);
+          const key = scheduleKey(employee.id, month, day);
+          const previousShift = state.schedule[key] || currentShift;
+
           if (scheduleId) {
             state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = toShift;
           }
-
-          state.schedule[scheduleKey(employee.id, month, day)] = toShift;
+          state.schedule[key] = toShift;
           saveScheduleLocal();
+
+          const saveResult = await saveScheduleEntryBackend(employee, day, toShift, {
+            scheduleId,
+            shiftId: toShiftId,
+            monthKey: month,
+          });
+
+          if (!saveResult || saveResult.ok !== true) {
+            state.schedule[key] = previousShift;
+            if (scheduleId) {
+              state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = previousShift;
+            }
+          }
+
           renderSchedule();
           renderVacationLedger();
-          void saveScheduleEntryBackend(employee, day, toShift);
         });
 
         cell.appendChild(select);
@@ -3956,7 +3975,7 @@ async function deleteEmployeeBackend(employeeId) {
 
 async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) {
   if (!state.backendAvailable) {
-    return;
+    return { ok: false };
   }
 
   try {
@@ -3965,18 +3984,37 @@ async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) 
       throw new Error('Липсва график за отдела.');
     }
 
+    const payload = {
+      employee_id: employee.id,
+      day,
+      shift_code: shiftCode,
+      month_key: options.monthKey || state.month,
+    };
+    if (options.shiftId) {
+      payload.shift_id = options.shiftId;
+    }
+
     const response = await apiFetch(`/api/schedules/${scheduleId}/entry`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ employee_id: employee.id, day, shift_code: shiftCode, month_key: options.monthKey || state.month })
+      body: JSON.stringify(payload)
     });
 
+    const responsePayload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error('Save schedule entry failed');
+      throw new Error(responsePayload.message || 'Save schedule entry failed');
     }
-  } catch {
-    setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
-    state.backendAvailable = false;
+
+    if (responsePayload?.entry) {
+      state.schedule[scheduleKey(employee.id, options.monthKey || state.month, day)] = responsePayload.entry.shiftCode || shiftCode;
+      state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = responsePayload.entry.shiftCode || shiftCode;
+      saveScheduleLocal();
+    }
+
+    return { ok: true, data: responsePayload };
+  } catch (error) {
+    setStatus(error.message || `Грешка към бекенд (${state.apiBaseUrl}).`, false);
+    return { ok: false, error };
   }
 }
 
@@ -4264,7 +4302,10 @@ function saveShiftTemplates() {
 }
 
 function mergeShiftTemplates(backendShiftTemplates) {
-  const merged = [...SYSTEM_SHIFTS, DEFAULT_WORK_SHIFT];
+  const merged = [
+    ...SYSTEM_SHIFTS.map((shift) => ({ ...shift, id: null })),
+    { ...DEFAULT_WORK_SHIFT, id: null }
+  ];
 
   backendShiftTemplates.forEach((shift) => {
     const code = String(shift.code || '').trim().toUpperCase();
@@ -4273,6 +4314,7 @@ function mergeShiftTemplates(backendShiftTemplates) {
     }
 
     merged.push({
+      id: shift.id || null,
       code,
       label: code,
       name: String(shift.name || code),

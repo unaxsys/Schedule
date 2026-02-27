@@ -30,4 +30,20 @@ console.assert(e1 && e1.workedHours === 8, 'workedHours failed');
 console.assert(e1 && e1.vacationDays === 1, 'vacationDays failed');
 console.assert(e1 && Array.isArray(e1.violations), 'violations array missing');
 
+
+const customSummary = computeMonthlySummary({
+  monthKey: '2026-03',
+  employees: [{ id: 'e2', start_date: '2026-01-01', end_date: null }],
+  schedules: [{ id: 's2' }],
+  selectedScheduleIds: ['s2'],
+  shiftTemplates: [{ code: 'X1', start: '10:00', end: '18:00', hours: 8 }],
+  scheduleEntries: [
+    { schedule_id: 's2', employee_id: 'e2', day: 4, shift_code: 'X1' },
+  ],
+});
+
+const e2 = customSummary.get('e2');
+console.assert(e2 && e2.workedHours === 8, 'custom shift workedHours failed');
+console.assert(e2 && e2.deviation !== -e2.normHours, 'custom shift deviation should be recalculated');
+
 console.log('labor_rules.selftest: OK');
