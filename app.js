@@ -71,7 +71,8 @@ const state = {
   expandedVacationDossierEmployeeId: null,
   vacationLedgerDepartmentFilter: 'all',
   vacationLedgerSearchQuery: '',
-  vacationCorrectionContext: null
+  vacationCorrectionContext: null,
+  isHandlingUnauthorized: false
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -3662,6 +3663,18 @@ async function apiFetch(path, options = {}) {
     ...options,
     headers
   });
+
+  if (response.status === 401 && state.authToken && !state.isHandlingUnauthorized) {
+    state.isHandlingUnauthorized = true;
+    clearAuthSession();
+    resetTenantScopedState({ clearLocalStorage: true });
+    updateAuthUi();
+    updateAuthGate();
+    renderAll();
+    setStatus('Сесията е изтекла. Моля, влезте отново.', false);
+    state.isHandlingUnauthorized = false;
+  }
+
   return response;
 }
 
