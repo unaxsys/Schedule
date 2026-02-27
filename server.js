@@ -1279,7 +1279,8 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
           `SELECT id, code, name,
            start_time AS start,
            end_time AS "end",
-           hours
+           hours,
+           department_id AS "departmentId"
            FROM shift_templates
            WHERE tenant_id = $1
            ORDER BY created_at, code`,
@@ -1289,7 +1290,8 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
           `SELECT id, code, name,
            start_time AS start,
            end_time AS "end",
-           hours
+           hours,
+           department_id AS "departmentId"
            FROM shift_templates
            ORDER BY created_at, code`
         ),
@@ -2222,6 +2224,8 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
   const start = cleanStr(req.body?.start);
   const end = cleanStr(req.body?.end);
   const hours = Number(req.body?.hours);
+  const departmentIdRaw = req.body?.department_id ?? req.body?.departmentId;
+  const departmentId = departmentIdRaw === null || departmentIdRaw === '' ? null : cleanStr(departmentIdRaw);
 
   if (!code || !name || !start || !end || !(hours > 0)) {
     return res.status(400).json({ message: 'Невалидни данни за смяна.' });
@@ -2229,18 +2233,62 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
 
   try {
     const hasTenantId = await hasShiftTemplatesTenantId();
-    if (hasTenantId) {
-      await pool.query(
-        `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, hours)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (tenant_id, code) WHERE department_id IS NULL
-         DO UPDATE SET
-           name = EXCLUDED.name,
-           start_time = EXCLUDED.start_time,
-           end_time = EXCLUDED.end_time,
-           hours = EXCLUDED.hours`,
-        [req.tenantId, code, name, start, end, hours]
+    const hasDepartmentId = await hasShiftTemplatesDepartmentId();
+
+    if (hasDepartmentId && departmentId && !isValidUuid(departmentId)) {
+      return res.status(400).json({ message: 'Невалиден department_id за смяната.' });
+    }
+
+    if (hasDepartmentId && departmentId) {
+      const departmentExists = await pool.query(
+        `SELECT id FROM departments WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+        [departmentId, req.tenantId]
       );
+      if (!departmentExists.rowCount) {
+        return res.status(400).json({ message: 'Избраният отдел за смяната не е намерен.' });
+      }
+    }
+
+    if (hasTenantId) {
+      if (hasDepartmentId) {
+        if (departmentId) {
+          await pool.query(
+            `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, hours)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (tenant_id, department_id, code) WHERE department_id IS NOT NULL
+             DO UPDATE SET
+               name = EXCLUDED.name,
+               start_time = EXCLUDED.start_time,
+               end_time = EXCLUDED.end_time,
+               hours = EXCLUDED.hours`,
+            [req.tenantId, departmentId, code, name, start, end, hours]
+          );
+        } else {
+          await pool.query(
+            `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, hours)
+             VALUES ($1, NULL, $2, $3, $4, $5, $6)
+             ON CONFLICT (tenant_id, code) WHERE department_id IS NULL
+             DO UPDATE SET
+               name = EXCLUDED.name,
+               start_time = EXCLUDED.start_time,
+               end_time = EXCLUDED.end_time,
+               hours = EXCLUDED.hours`,
+            [req.tenantId, code, name, start, end, hours]
+          );
+        }
+      } else {
+        await pool.query(
+          `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, hours)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (tenant_id, code)
+           DO UPDATE SET
+             name = EXCLUDED.name,
+             start_time = EXCLUDED.start_time,
+             end_time = EXCLUDED.end_time,
+             hours = EXCLUDED.hours`,
+          [req.tenantId, code, name, start, end, hours]
+        );
+      }
     } else {
       await pool.query(
         `INSERT INTO shift_templates (code, name, start_time, end_time, hours)
@@ -2264,8 +2312,24 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
 app.delete('/api/shift-template/:code', requireAuth, requireTenantContext, async (req, res) => {
   try {
     const hasTenantId = await hasShiftTemplatesTenantId();
+    const hasDepartmentId = await hasShiftTemplatesDepartmentId();
+    const departmentIdRaw = req.query?.department_id ?? req.query?.departmentId;
+    const departmentId = departmentIdRaw === null || departmentIdRaw === '' ? null : cleanStr(departmentIdRaw);
+
+    if (hasDepartmentId && departmentId && !isValidUuid(departmentId)) {
+      return res.status(400).json({ message: 'Невалиден department_id за изтриване на смяна.' });
+    }
+
     if (hasTenantId) {
-      await pool.query('DELETE FROM shift_templates WHERE tenant_id = $1 AND code = $2', [req.tenantId, req.params.code]);
+      if (hasDepartmentId) {
+        if (departmentId) {
+          await pool.query('DELETE FROM shift_templates WHERE tenant_id = $1 AND code = $2 AND department_id = $3', [req.tenantId, req.params.code, departmentId]);
+        } else {
+          await pool.query('DELETE FROM shift_templates WHERE tenant_id = $1 AND code = $2 AND department_id IS NULL', [req.tenantId, req.params.code]);
+        }
+      } else {
+        await pool.query('DELETE FROM shift_templates WHERE tenant_id = $1 AND code = $2', [req.tenantId, req.params.code]);
+      }
     } else {
       await pool.query('DELETE FROM shift_templates WHERE code = $1', [req.params.code]);
     }
