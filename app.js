@@ -3255,7 +3255,7 @@ function renderSchedule() {
           const selectedOption = select.options[select.selectedIndex];
           const toShift = normalizeShiftCodeForApi(selectedOption?.value || selectedOption?.dataset.shiftCode || currentShift);
           const toShiftId = selectedOption?.dataset.shiftId || null;
-          const scheduleId = options.scheduleId || getEmployeeScheduleId(employee);
+          const scheduleId = getEmployeeScheduleId(employee);
           const key = scheduleKey(employee.id, month, day);
           const previousShift = state.schedule[key] || currentShift;
 
@@ -3284,7 +3284,7 @@ function renderSchedule() {
 
         cell.appendChild(select);
         row.appendChild(cell);
-        const scheduleIdForSnapshot = options.scheduleId || getEmployeeScheduleId(employee);
+        const scheduleIdForSnapshot = getEmployeeScheduleId(employee);
         const entrySnapshot = scheduleIdForSnapshot
           ? state.scheduleEntrySnapshotsById[`${scheduleIdForSnapshot}|${employee.id}|${day}`] || null
           : null;
