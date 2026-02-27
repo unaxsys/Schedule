@@ -49,6 +49,40 @@ function cleanStr(v) {
   return String(v ?? '').trim();
 }
 
+function normalizeShiftCode(input) {
+  const normalized = cleanStr(input).toUpperCase();
+  if (normalized === 'Р') {
+    return 'R';
+  }
+  return normalized;
+}
+
+function computeSystemShiftSnapshot(shiftCode, date) {
+  const normalized = normalizeShiftCode(shiftCode);
+  if (normalized === 'R') {
+    const workMinutes = 480;
+    return {
+      work_minutes: workMinutes,
+      night_minutes: 0,
+      holiday_minutes: 0,
+      weekend_minutes: isWeekendDate(date) ? workMinutes : 0,
+      overtime_minutes: 0,
+    };
+  }
+
+  if (['P', 'O', 'B'].includes(normalized)) {
+    return {
+      work_minutes: 0,
+      night_minutes: 0,
+      holiday_minutes: 0,
+      weekend_minutes: 0,
+      overtime_minutes: 0,
+    };
+  }
+
+  return null;
+}
+
 function ensureAdmin(req, res) {
   const role = cleanStr(req.get('x-user-role')).toLowerCase();
   if (!['admin', 'super_admin'].includes(role)) {
@@ -140,11 +174,32 @@ function addSummaries(target, source) {
 
 
 const SYSTEM_SHIFT_TEMPLATES = [
-  { code: 'R', name: 'Редовна', start_time: '08:00', end_time: '17:00', hours: 8 },
+  { code: 'R', name: 'Редовна', start_time: '08:00', end_time: '17:00', break_minutes: 60, hours: 8 },
   { code: 'P', name: 'Почивка', start_time: '00:00', end_time: '00:00', hours: 0 },
   { code: 'O', name: 'Отпуск', start_time: '00:00', end_time: '00:00', hours: 0 },
   { code: 'B', name: 'Болничен', start_time: '00:00', end_time: '00:00', hours: 0 },
 ];
+
+function isWeekendDate(dateText) {
+  const date = new Date(`${dateText}T00:00:00Z`);
+  const day = date.getUTCDay();
+  return day === 0 || day === 6;
+}
+
+function computeEntrySnapshot({ date, shift }) {
+  const workedHours = calcShiftDurationHours(shift.start_time, shift.end_time, shift.hours || 0);
+  const breakMinutes = Number(shift.break_minutes || 0);
+  const workMinutes = Math.max(0, Math.round(workedHours * 60) - breakMinutes);
+  const nightMinutes = Math.round(calcNightHours(shift.start_time, shift.end_time) * 60);
+  const isWeekend = isWeekendDate(date);
+  return {
+    work_minutes: workMinutes,
+    night_minutes: nightMinutes,
+    holiday_minutes: 0,
+    weekend_minutes: isWeekend ? workMinutes : 0,
+    overtime_minutes: Math.max(0, workMinutes - 480),
+  };
+}
 
 let shiftTemplatesHasTenantIdCache = null;
 
@@ -444,6 +499,37 @@ async function requireTenantContext(req, res, next) {
 
 async function insertAuditLog(action, entity, payload = {}) {
   try {
+    const hasScheduleId = await tableHasColumn('audit_log', 'schedule_id');
+    if (hasScheduleId) {
+      await pool.query(
+        `INSERT INTO audit_log (
+          tenant_id, actor_user_id, schedule_id, employee_id, entry_date,
+          old_shift_code, new_shift_code, old_shift_id, new_shift_id, action, metadata
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,
+        [
+          payload.tenantId || null,
+          payload.actorUserId || null,
+          payload.scheduleId || null,
+          payload.employeeId || null,
+          payload.entryDate || null,
+          payload.oldShiftCode || null,
+          payload.newShiftCode || null,
+          payload.oldShiftId || null,
+          payload.newShiftId || null,
+          action,
+          JSON.stringify({
+            entity: entity || null,
+            entityId: payload.entityId || null,
+            before: payload.before || null,
+            after: payload.after || null,
+            ip: payload.ip || null,
+            userAgent: payload.userAgent || null,
+          }),
+        ]
+      );
+      return;
+    }
+
     await pool.query(
       `INSERT INTO audit_log (tenant_id, actor_user_id, action, entity, entity_id, before_json, after_json, ip, user_agent)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)`,
@@ -1632,7 +1718,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
   const day = Number(req.body?.day);
   const monthKey = cleanStr(req.body?.month_key || req.body?.monthKey);
   const requestedShiftId = cleanStr(req.body?.shift_id || req.body?.shiftId);
-  const requestedShiftCode = cleanStr(req.body?.shift_code || req.body?.shiftCode).toUpperCase();
+  const requestedShiftCode = normalizeShiftCode(req.body?.shift_code || req.body?.shiftCode);
 
   if (!isValidUuid(scheduleId) || !isValidUuid(employeeId)) {
     return res.status(400).json({ message: 'Невалиден scheduleId или employeeId.' });
@@ -1657,8 +1743,14 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
 
     const schedule = scheduleResult.rows[0];
     if (schedule.status === 'locked') {
-      return res.status(409).json({ message: 'Графикът е заключен.' });
+      return res.status(403).json({ message: 'Графикът е заключен.' });
     }
+
+    const existingEntryResult = await pool.query(
+      `SELECT shift_code, shift_id FROM schedule_entries WHERE schedule_id = $1 AND employee_id = $2 AND day = $3 LIMIT 1`,
+      [scheduleId, employeeId, day]
+    );
+    const existingEntry = existingEntryResult.rows[0] || null;
 
     const employeeResult = await pool.query(
       `SELECT e.id, COALESCE(d.name, e.department) AS department,
@@ -1713,7 +1805,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       if (shiftByIdResult.rowCount === 0) {
         return res.status(404).json({ message: 'Смяната не е намерена.' });
       }
-      resolvedShiftCode = cleanStr(shiftByIdResult.rows[0].code).toUpperCase();
+      resolvedShiftCode = normalizeShiftCode(shiftByIdResult.rows[0].code);
       resolvedShiftId = shiftByIdResult.rows[0].id;
     } else if (requestedShiftCode && !['P', 'O', 'B', 'R'].includes(requestedShiftCode)) {
       const shiftByCodeQuery = hasTenantId
@@ -1727,7 +1819,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
           };
       const shiftByCodeResult = await pool.query(shiftByCodeQuery.text, shiftByCodeQuery.values);
       if (shiftByCodeResult.rowCount > 0) {
-        resolvedShiftCode = cleanStr(shiftByCodeResult.rows[0].code).toUpperCase();
+        resolvedShiftCode = normalizeShiftCode(shiftByCodeResult.rows[0].code);
         resolvedShiftId = shiftByCodeResult.rows[0].id;
       }
     }
@@ -1738,14 +1830,56 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
 
     const hasScheduleEntriesMonthKey = await tableHasColumn('schedule_entries', 'month_key');
 
+    let snapshot = computeSystemShiftSnapshot(resolvedShiftCode, entryDate);
+
+    const shiftTemplatesForCalcResult = snapshot
+      ? { rows: [] }
+      : await (hasTenantId
+          ? pool.query(
+              `SELECT id, code, name, start_time, end_time, hours, COALESCE(break_minutes, 0) AS break_minutes
+               FROM shift_templates
+               WHERE tenant_id = $1`,
+              [req.tenantId]
+            )
+          : pool.query(
+              `SELECT id, code, name, start_time, end_time, hours, COALESCE(break_minutes, 0) AS break_minutes
+               FROM shift_templates`
+            ));
+
+    if (!snapshot) {
+      const selectedShiftForSnapshot = appendSystemShiftTemplates(shiftTemplatesForCalcResult.rows).find((row) => {
+        if (resolvedShiftId) {
+          return String(row.id) === String(resolvedShiftId);
+        }
+        return normalizeShiftCode(row.code) === resolvedShiftCode;
+      }) || { code: resolvedShiftCode, start_time: '00:00', end_time: '00:00', hours: 0, break_minutes: 0 };
+
+      snapshot = computeEntrySnapshot({ date: entryDate, shift: selectedShiftForSnapshot });
+    }
+    const isManual = Boolean(req.body?.is_manual ?? req.body?.isManual ?? false);
+    const notes = cleanStr(req.body?.notes || '') || null;
+
     if (hasScheduleEntriesMonthKey) {
       await pool.query(
-        `INSERT INTO schedule_entries (schedule_id, employee_id, day, shift_code, month_key)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO schedule_entries (
+           schedule_id, employee_id, day, shift_code, month_key, shift_id,
+           work_minutes, night_minutes, holiday_minutes, weekend_minutes, overtime_minutes,
+           is_manual, notes, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
          ON CONFLICT (schedule_id, employee_id, day)
          DO UPDATE SET shift_code = EXCLUDED.shift_code,
-                       month_key = EXCLUDED.month_key`,
-        [scheduleId, employeeId, day, resolvedShiftCode, effectiveMonth]
+                       month_key = EXCLUDED.month_key,
+                       shift_id = EXCLUDED.shift_id,
+                       work_minutes = EXCLUDED.work_minutes,
+                       night_minutes = EXCLUDED.night_minutes,
+                       holiday_minutes = EXCLUDED.holiday_minutes,
+                       weekend_minutes = EXCLUDED.weekend_minutes,
+                       overtime_minutes = EXCLUDED.overtime_minutes,
+                       is_manual = EXCLUDED.is_manual,
+                       notes = EXCLUDED.notes,
+                       updated_at = NOW()`,
+        [scheduleId, employeeId, day, resolvedShiftCode, effectiveMonth, resolvedShiftId, snapshot.work_minutes, snapshot.night_minutes, snapshot.holiday_minutes, snapshot.weekend_minutes, snapshot.overtime_minutes, isManual, notes]
       );
     } else {
       await pool.query(
@@ -1760,13 +1894,13 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     const [shiftTemplatesResult, entriesResult, employeesResult] = await Promise.all([
       hasTenantId
         ? pool.query(
-          `SELECT id, code, name, start_time, end_time, hours
+          `SELECT id, code, name, start_time, end_time, hours, COALESCE(break_minutes, 0) AS break_minutes
            FROM shift_templates
            WHERE tenant_id = $1`,
           [req.tenantId]
         )
         : pool.query(
-          `SELECT id, code, name, start_time, end_time, hours
+          `SELECT id, code, name, start_time, end_time, hours, COALESCE(break_minutes, 0) AS break_minutes
            FROM shift_templates`
         ),
       pool.query(
@@ -1814,13 +1948,36 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       shiftCode: resolvedShiftCode,
       shiftId: resolvedShiftId,
       date: entryDate,
+      workMinutes: snapshot.work_minutes,
+      nightMinutes: snapshot.night_minutes,
+      holidayMinutes: snapshot.holiday_minutes,
+      weekendMinutes: snapshot.weekend_minutes,
+      overtimeMinutes: snapshot.overtime_minutes,
+      isManual,
+      notes,
     };
+
+    await insertAuditLog('set_shift', 'schedule_entry', {
+      tenantId: req.tenantId,
+      actorUserId: req.user?.id,
+      scheduleId,
+      employeeId,
+      entryDate,
+      oldShiftCode: existingEntry?.shift_code || null,
+      newShiftCode: resolvedShiftCode,
+      oldShiftId: existingEntry?.shift_id || null,
+      newShiftId: resolvedShiftId,
+      before: existingEntry,
+      after: updatedEntry,
+      ip: req.ip,
+      userAgent: req.get('user-agent') || null,
+    });
 
     const selectedShift = appendSystemShiftTemplates(shiftTemplatesResult.rows).find((row) => {
       if (resolvedShiftId) {
         return String(row.id) === String(resolvedShiftId);
       }
-      return cleanStr(row.code).toUpperCase() === resolvedShiftCode;
+      return normalizeShiftCode(row.code) === resolvedShiftCode;
     }) || null;
     const shiftHours = selectedShift
       ? calcShiftDurationHours(selectedShift.start_time || selectedShift.start, selectedShift.end_time || selectedShift.end, selectedShift.hours)
@@ -2959,3 +3116,77 @@ initDatabase()
     console.error('Database init error:', error);
     process.exit(1);
   });
+
+app.post('/api/schedules/:id/lock', requireAuth, requireTenantContext, async (req, res) => {
+  const scheduleId = req.params.id;
+  if (!isValidUuid(scheduleId)) {
+    return res.status(400).json({ message: 'Невалиден schedule id.' });
+  }
+  try {
+    const result = await pool.query(
+      `UPDATE schedules
+       SET status = 'locked', locked_at = NOW(), locked_by = $3
+       WHERE id = $1 AND tenant_id = $2 AND status <> 'locked'
+       RETURNING id, status, locked_at, locked_by`,
+      [scheduleId, req.tenantId, req.user?.id || null]
+    );
+    if (!result.rowCount) {
+      return res.status(409).json({ message: 'Графикът е вече заключен или липсва.' });
+    }
+
+    await insertAuditLog('lock_schedule', 'schedule', {
+      tenantId: req.tenantId,
+      actorUserId: req.user?.id,
+      scheduleId,
+      employeeId: req.user?.id,
+      entryDate: normalizeDateOnly(new Date().toISOString().slice(0, 10)),
+      after: result.rows[0],
+      ip: req.ip,
+      userAgent: req.get('user-agent') || null,
+    });
+
+    return res.json({ ok: true, schedule: result.rows[0] });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/api/schedules/:id/unlock', requireAuth, requireTenantContext, async (req, res) => {
+  const scheduleId = req.params.id;
+  if (!isValidUuid(scheduleId)) {
+    return res.status(400).json({ message: 'Невалиден schedule id.' });
+  }
+
+  const role = cleanStr(req.user?.role || req.get('x-user-role')).toLowerCase();
+  if (!['owner', 'super_admin'].includes(role) && req.user?.is_super_admin !== true) {
+    return res.status(403).json({ message: 'Само owner/superadmin може да отключва.' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE schedules
+       SET status = 'draft', locked_at = NULL, locked_by = NULL
+       WHERE id = $1 AND tenant_id = $2 AND status <> 'draft'
+       RETURNING id, status, locked_at, locked_by`,
+      [scheduleId, req.tenantId]
+    );
+    if (!result.rowCount) {
+      return res.status(409).json({ message: 'Графикът е вече отключен или липсва.' });
+    }
+
+    await insertAuditLog('unlock_schedule', 'schedule', {
+      tenantId: req.tenantId,
+      actorUserId: req.user?.id,
+      scheduleId,
+      employeeId: req.user?.id,
+      entryDate: normalizeDateOnly(new Date().toISOString().slice(0, 10)),
+      after: result.rows[0],
+      ip: req.ip,
+      userAgent: req.get('user-agent') || null,
+    });
+
+    return res.json({ ok: true, schedule: result.rows[0] });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
