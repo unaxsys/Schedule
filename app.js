@@ -3467,12 +3467,14 @@ function getVisibleSummaryColumns() {
 function calculateEmployeeTotals({ employee, summary, year, month, monthNormHours }) {
   const remainingVacation = getVacationAllowanceForYear(employee, year) - getVacationUsedForYear(employee.id, year);
   const normalizedHolidayHours = summary.holidayWorkedHours * state.rates.holiday;
-  const normalizedWeekendHours = summary.weekendWorkedHours * state.rates.weekend;
+  const isSirvEmployee = Boolean(employee?.isSirv);
+  const normalizedWeekendHours = isSirvEmployee
+    ? summary.weekendWorkedHours
+    : summary.weekendWorkedHours * state.rates.weekend;
   const payableHours =
     summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + summary.nightConvertedHours;
   const deviation = summary.workedHours + summary.nightConvertedHours - monthNormHours;
   const employeeSirvPeriod = Number(employee?.sirvPeriodMonths || 1) || 1;
-  const isSirvEmployee = Boolean(employee?.isSirv);
   const sirvTotals = getSirvTotalsForEmployee(employee, month, isSirvEmployee ? employeeSirvPeriod : 1);
   const overtimeHours = isSirvEmployee
     ? sirvTotals.overtimeHours
