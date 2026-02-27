@@ -46,7 +46,6 @@ const {
   computeAdjustedNormMinutes,
   computeLeaveMinutesForRange,
 } = require('./leave_utils');
-const { createHolidayService } = require('./holidayService');
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
