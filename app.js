@@ -169,6 +169,9 @@ const editEndDateInput = document.getElementById('editEndDateInput');
 const editVacationAllowanceInput = document.getElementById('editVacationAllowanceInput');
 const editTelkInput = document.getElementById('editTelkInput');
 const editYoungWorkerInput = document.getElementById('editYoungWorkerInput');
+const editEmployeeIsSirvInput = document.getElementById('editEmployeeIsSirvInput');
+const editEmployeeSirvPeriodField = document.getElementById('editEmployeeSirvPeriodField');
+const editEmployeeSirvPeriodInput = document.getElementById('editEmployeeSirvPeriodInput');
 const cancelEmployeeEditBtn = document.getElementById('cancelEmployeeEditBtn');
 const registrationForm = document.getElementById('registrationForm');
 const companyNameInput = document.getElementById('companyNameInput');
@@ -2274,6 +2277,14 @@ function replaceDeletedShiftCodes(deletedCode) {
   saveScheduleLocal();
 }
 
+function toggleEditEmployeeSirvPeriod() {
+  if (!editEmployeeSirvPeriodField) {
+    return;
+  }
+  const isSirvEnabled = Boolean(editEmployeeIsSirvInput?.checked);
+  editEmployeeSirvPeriodField.classList.toggle('hidden', !isSirvEnabled);
+}
+
 function attachEmployeeEditModalControls() {
   if (!employeeEditForm || !employeeEditModal) {
     return;
@@ -2296,6 +2307,10 @@ function attachEmployeeEditModalControls() {
     const baseVacationAllowance = Number(editVacationAllowanceInput.value);
     const hasTelk = Boolean(editTelkInput?.checked);
     const hasYoungWorkerBenefit = Boolean(editYoungWorkerInput?.checked);
+    const isSirv = Boolean(editEmployeeIsSirvInput?.checked);
+    const allowedSirvPeriods = new Set([1, 2, 3, 4, 6]);
+    const parsedSirvPeriod = Number(editEmployeeSirvPeriodInput?.value || 1);
+    const sirvPeriodMonths = allowedSirvPeriods.has(parsedSirvPeriod) ? parsedSirvPeriod : 1;
     const startDate = (editStartDateInput?.value || '').trim();
     const vacationAllowance = calculateVacationAllowance(baseVacationAllowance, hasTelk, hasYoungWorkerBenefit);
     const endDate = (editEndDateInput?.value || '').trim() || null;
@@ -2316,6 +2331,8 @@ function attachEmployeeEditModalControls() {
         telk: hasTelk,
         youngWorkerBenefit: hasYoungWorkerBenefit,
         baseVacationAllowance,
+        is_sirv: isSirv,
+        sirv_period_months: sirvPeriodMonths,
         startDate,
         endDate
       });
@@ -2331,7 +2348,9 @@ function attachEmployeeEditModalControls() {
             endDate,
             telk: hasTelk,
             youngWorkerBenefit: hasYoungWorkerBenefit,
-            baseVacationAllowance
+            baseVacationAllowance,
+            isSirv,
+            sirvPeriodMonths
           }
           : entry));
 
@@ -2345,6 +2364,9 @@ function attachEmployeeEditModalControls() {
       setStatus(error.message, false);
     }
   });
+
+  editEmployeeIsSirvInput?.addEventListener('change', toggleEditEmployeeSirvPeriod);
+  toggleEditEmployeeSirvPeriod();
 
   cancelEmployeeEditBtn?.addEventListener('click', () => {
     closeEmployeeEditModal();
@@ -2378,6 +2400,13 @@ function openEmployeeEditModal(employee) {
   if (editYoungWorkerInput) {
     editYoungWorkerInput.checked = Boolean(employee.youngWorkerBenefit);
   }
+  if (editEmployeeIsSirvInput) {
+    editEmployeeIsSirvInput.checked = Boolean(employee.isSirv);
+  }
+  if (editEmployeeSirvPeriodInput) {
+    editEmployeeSirvPeriodInput.value = String(Number(employee.sirvPeriodMonths || 1) || 1);
+  }
+  toggleEditEmployeeSirvPeriod();
 
   editDepartmentInput.innerHTML = '';
   const emptyOption = document.createElement('option');
@@ -2402,6 +2431,10 @@ function closeEmployeeEditModal() {
   }
 
   employeeEditForm.reset();
+  if (editEmployeeSirvPeriodInput) {
+    editEmployeeSirvPeriodInput.value = '1';
+  }
+  toggleEditEmployeeSirvPeriod();
   delete employeeEditForm.dataset.employeeId;
   employeeEditModal.classList.add('hidden');
 }

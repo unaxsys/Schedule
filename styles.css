@@ -273,7 +273,7 @@ select {
 
 .employee-form .form-field--action button {
   width: auto;
-  min-width: 210px;
+  min-width: 150px;
   justify-self: start;
 }
 button {
@@ -673,6 +673,14 @@ select.shift-select {
 .employee-edit-form select {
   width: 100%;
   max-width: 100%;
+}
+
+.employee-edit-form__full-row {
+  grid-column: 1 / -1;
+}
+
+.employee-edit-form__full-row select {
+  width: 100%;
 }
 
 .employee-edit-form .modal-actions {
