@@ -313,6 +313,9 @@
             <form id="shiftForm" class="row">
               <input id="shiftCodeInput" maxlength="4" required placeholder="Код (напр. D1)" />
               <input id="shiftNameInput" required placeholder="Име на смяна" />
+              <select id="shiftDepartmentInput">
+                <option value="">Всички отдели (global)</option>
+              </select>
               <input id="shiftStartInput" type="time" required />
               <input id="shiftEndInput" type="time" required />
               <button type="submit">Добави смяна</button>
