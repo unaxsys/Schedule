@@ -5150,10 +5150,18 @@ async function apiFetch(path, options = {}) {
   const retryableGatewayStatuses = new Set([502, 503, 504]);
 
   const sameOriginBase = normalizeApiBaseUrl(window.location.origin);
-  const fallback4000 = normalizeApiBaseUrl(`${window.location.protocol}//${window.location.hostname}:4000`);
+  const canProbeDirectBackendPort = (() => {
+    const hostname = String(window.location.hostname || '').toLowerCase();
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  })();
+  const fallback4000 = canProbeDirectBackendPort
+    ? normalizeApiBaseUrl(`${window.location.protocol}//${window.location.hostname}:4000`)
+    : null;
   const collectFallbackCandidates = (triedBase) => {
     const normalizedTriedBase = normalizeApiBaseUrl(triedBase);
-    return [sameOriginBase, fallback4000].filter((candidate, idx, arr) => candidate !== normalizedTriedBase && arr.indexOf(candidate) === idx);
+    return [sameOriginBase, fallback4000]
+      .filter(Boolean)
+      .filter((candidate, idx, arr) => candidate !== normalizedTriedBase && arr.indexOf(candidate) === idx);
   };
 
   const reportConnectionError = (error) => {
