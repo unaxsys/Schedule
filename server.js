@@ -49,6 +49,40 @@ function cleanStr(v) {
   return String(v ?? '').trim();
 }
 
+function normalizeShiftCode(input) {
+  const normalized = cleanStr(input).toUpperCase();
+  if (normalized === 'Р') {
+    return 'R';
+  }
+  return normalized;
+}
+
+function computeSystemShiftSnapshot(shiftCode, date) {
+  const normalized = normalizeShiftCode(shiftCode);
+  if (normalized === 'R') {
+    const workMinutes = 480;
+    return {
+      work_minutes: workMinutes,
+      night_minutes: 0,
+      holiday_minutes: 0,
+      weekend_minutes: isWeekendDate(date) ? workMinutes : 0,
+      overtime_minutes: 0,
+    };
+  }
+
+  if (['P', 'O', 'B'].includes(normalized)) {
+    return {
+      work_minutes: 0,
+      night_minutes: 0,
+      holiday_minutes: 0,
+      weekend_minutes: 0,
+      overtime_minutes: 0,
+    };
+  }
+
+  return null;
+}
+
 function ensureAdmin(req, res) {
   const role = cleanStr(req.get('x-user-role')).toLowerCase();
   if (!['admin', 'super_admin'].includes(role)) {
@@ -1684,7 +1718,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
   const day = Number(req.body?.day);
   const monthKey = cleanStr(req.body?.month_key || req.body?.monthKey);
   const requestedShiftId = cleanStr(req.body?.shift_id || req.body?.shiftId);
-  const requestedShiftCode = cleanStr(req.body?.shift_code || req.body?.shiftCode).toUpperCase();
+  const requestedShiftCode = normalizeShiftCode(req.body?.shift_code || req.body?.shiftCode);
 
   if (!isValidUuid(scheduleId) || !isValidUuid(employeeId)) {
     return res.status(400).json({ message: 'Невалиден scheduleId или employeeId.' });
@@ -1771,7 +1805,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       if (shiftByIdResult.rowCount === 0) {
         return res.status(404).json({ message: 'Смяната не е намерена.' });
       }
-      resolvedShiftCode = cleanStr(shiftByIdResult.rows[0].code).toUpperCase();
+      resolvedShiftCode = normalizeShiftCode(shiftByIdResult.rows[0].code);
       resolvedShiftId = shiftByIdResult.rows[0].id;
     } else if (requestedShiftCode && !['P', 'O', 'B', 'R'].includes(requestedShiftCode)) {
       const shiftByCodeQuery = hasTenantId
@@ -1785,7 +1819,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
           };
       const shiftByCodeResult = await pool.query(shiftByCodeQuery.text, shiftByCodeQuery.values);
       if (shiftByCodeResult.rowCount > 0) {
-        resolvedShiftCode = cleanStr(shiftByCodeResult.rows[0].code).toUpperCase();
+        resolvedShiftCode = normalizeShiftCode(shiftByCodeResult.rows[0].code);
         resolvedShiftId = shiftByCodeResult.rows[0].id;
       }
     }
@@ -1796,26 +1830,32 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
 
     const hasScheduleEntriesMonthKey = await tableHasColumn('schedule_entries', 'month_key');
 
-    const shiftTemplatesForCalcResult = await (hasTenantId
-      ? pool.query(
-          `SELECT id, code, name, start_time, end_time, hours, COALESCE(break_minutes, 0) AS break_minutes
-           FROM shift_templates
-           WHERE tenant_id = $1`,
-          [req.tenantId]
-        )
-      : pool.query(
-          `SELECT id, code, name, start_time, end_time, hours, COALESCE(break_minutes, 0) AS break_minutes
-           FROM shift_templates`
-        ));
+    let snapshot = computeSystemShiftSnapshot(resolvedShiftCode, entryDate);
 
-    const selectedShiftForSnapshot = appendSystemShiftTemplates(shiftTemplatesForCalcResult.rows).find((row) => {
-      if (resolvedShiftId) {
-        return String(row.id) === String(resolvedShiftId);
-      }
-      return cleanStr(row.code).toUpperCase() === resolvedShiftCode;
-    }) || { code: resolvedShiftCode, start_time: '00:00', end_time: '00:00', hours: 0, break_minutes: 0 };
+    const shiftTemplatesForCalcResult = snapshot
+      ? { rows: [] }
+      : await (hasTenantId
+          ? pool.query(
+              `SELECT id, code, name, start_time, end_time, hours, COALESCE(break_minutes, 0) AS break_minutes
+               FROM shift_templates
+               WHERE tenant_id = $1`,
+              [req.tenantId]
+            )
+          : pool.query(
+              `SELECT id, code, name, start_time, end_time, hours, COALESCE(break_minutes, 0) AS break_minutes
+               FROM shift_templates`
+            ));
 
-    const snapshot = computeEntrySnapshot({ date: entryDate, shift: selectedShiftForSnapshot });
+    if (!snapshot) {
+      const selectedShiftForSnapshot = appendSystemShiftTemplates(shiftTemplatesForCalcResult.rows).find((row) => {
+        if (resolvedShiftId) {
+          return String(row.id) === String(resolvedShiftId);
+        }
+        return normalizeShiftCode(row.code) === resolvedShiftCode;
+      }) || { code: resolvedShiftCode, start_time: '00:00', end_time: '00:00', hours: 0, break_minutes: 0 };
+
+      snapshot = computeEntrySnapshot({ date: entryDate, shift: selectedShiftForSnapshot });
+    }
     const isManual = Boolean(req.body?.is_manual ?? req.body?.isManual ?? false);
     const notes = cleanStr(req.body?.notes || '') || null;
 
@@ -1937,7 +1977,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       if (resolvedShiftId) {
         return String(row.id) === String(resolvedShiftId);
       }
-      return cleanStr(row.code).toUpperCase() === resolvedShiftCode;
+      return normalizeShiftCode(row.code) === resolvedShiftCode;
     }) || null;
     const shiftHours = selectedShift
       ? calcShiftDurationHours(selectedShift.start_time || selectedShift.start, selectedShift.end_time || selectedShift.end, selectedShift.hours)
