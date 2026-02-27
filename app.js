@@ -94,6 +94,9 @@ const state = {
 const DEPARTMENT_VIEW_ALL = 'all';
 const DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS = 'all_by_departments';
 
+const API_FALLBACK_COOLDOWN_MS = 60 * 1000;
+const apiFallbackBlockedUntilByBase = new Map();
+
 const monthPicker = document.getElementById('monthPicker');
 const generateBtn = document.getElementById('generateBtn');
 const employeeForm = document.getElementById('employeeForm');
@@ -5151,9 +5154,29 @@ async function apiFetch(path, options = {}) {
 
   const sameOriginBase = normalizeApiBaseUrl(window.location.origin);
   const fallback4000 = normalizeApiBaseUrl(`${window.location.protocol}//${window.location.hostname}:4000`);
+  const blockFallbackBase = (base) => {
+    apiFallbackBlockedUntilByBase.set(normalizeApiBaseUrl(base), Date.now() + API_FALLBACK_COOLDOWN_MS);
+  };
+  const unblockFallbackBase = (base) => {
+    apiFallbackBlockedUntilByBase.delete(normalizeApiBaseUrl(base));
+  };
   const collectFallbackCandidates = (triedBase) => {
     const normalizedTriedBase = normalizeApiBaseUrl(triedBase);
-    return [sameOriginBase, fallback4000].filter((candidate, idx, arr) => candidate !== normalizedTriedBase && arr.indexOf(candidate) === idx);
+    const now = Date.now();
+    return [sameOriginBase, fallback4000]
+      .filter(Boolean)
+      .filter((candidate, idx, arr) => candidate !== normalizedTriedBase && arr.indexOf(candidate) === idx)
+      .filter((candidate) => {
+        const blockedUntil = apiFallbackBlockedUntilByBase.get(candidate);
+        if (!blockedUntil) {
+          return true;
+        }
+        if (blockedUntil <= now) {
+          apiFallbackBlockedUntilByBase.delete(candidate);
+          return true;
+        }
+        return false;
+      });
   };
 
   const reportConnectionError = (error) => {
@@ -5176,14 +5199,17 @@ async function apiFetch(path, options = {}) {
         });
 
         if (retryableGatewayStatuses.has(fallbackResponse.status)) {
+          blockFallbackBase(fallbackBase);
           continue;
         }
 
+        unblockFallbackBase(fallbackBase);
         syncApiBaseUrl(fallbackBase);
         updateBackendConnectionIndicator(true, `Свързан към сървъра (${fallbackBase})`);
         setStatus(`Автоматично превключване към API: ${fallbackBase}`, true);
         return fallbackResponse;
       } catch (_fallbackError) {
+        blockFallbackBase(fallbackBase);
         // continue to next fallback candidate
       }
     }
