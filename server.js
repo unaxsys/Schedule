@@ -10,6 +10,8 @@ const {
   DEFAULT_WEEKEND_RATE,
   DEFAULT_HOLIDAY_RATE,
   computeMonthlySummary,
+  calcShiftDurationHours,
+  calcNightHours,
 } = require('./labor_rules');
 
 const app = express();
@@ -95,6 +97,55 @@ function buildUserPayload(user, tenantId = null, role = null) {
     tenantId,
     role: normalizeTenantRole(role),
   };
+}
+
+function emptyComputedSummary() {
+  return {
+    workedDays: 0,
+    workedHours: 0,
+    normHours: 0,
+    deviation: 0,
+    holidayWorkedHours: 0,
+    weekendWorkedHours: 0,
+    nightWorkedHours: 0,
+    nightConvertedHours: 0,
+    payableHours: 0,
+    vacationDays: 0,
+    sickDays: 0,
+    violations: [],
+  };
+}
+
+function addSummaries(target, source) {
+  const result = { ...target };
+  const keys = [
+    'workedDays',
+    'workedHours',
+    'normHours',
+    'deviation',
+    'holidayWorkedHours',
+    'weekendWorkedHours',
+    'nightWorkedHours',
+    'nightConvertedHours',
+    'payableHours',
+    'vacationDays',
+    'sickDays',
+  ];
+  for (const key of keys) {
+    result[key] = Number(result[key] || 0) + Number(source[key] || 0);
+  }
+  result.violations = [...(target.violations || []), ...(source.violations || [])];
+  return result;
+}
+
+
+async function ensureDefaultShiftTemplatesForTenant(tenantId) {
+  await pool.query(
+    `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, hours)
+     VALUES ($1, 'R', 'Редовна', '08:00', '17:00', 8)
+     ON CONFLICT (tenant_id, code) DO NOTHING`,
+    [tenantId]
+  );
 }
 
 function signAccessToken({ user, tenantId = null, role = null }) {
@@ -937,6 +988,7 @@ app.get('/api/health', async (_req, res) => {
 app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
   try {
     const tenantId = req.tenantId;
+    await ensureDefaultShiftTemplatesForTenant(tenantId);
     const [employees, schedules, scheduleEntries, shiftTemplates, departments] = await Promise.all([
       pool.query(
         `SELECT ${EMPLOYEE_SELECT_FIELDS}
@@ -962,7 +1014,7 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
         [tenantId]
       ),
       pool.query(
-        `SELECT code, name,
+        `SELECT id, code, name,
          start_time AS start,
          end_time AS "end",
          hours
@@ -1465,6 +1517,8 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
   }
 
   try {
+    await ensureDefaultShiftTemplatesForTenant(req.tenantId);
+
     const scheduleResult = await pool.query(
       `SELECT id, name, month_key, department, status, created_at
        FROM schedules WHERE id = $1 AND tenant_id = $2`,
@@ -1509,18 +1563,21 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
   const scheduleId = req.params.id;
   const employeeId = cleanStr(req.body?.employee_id || req.body?.employeeId);
   const day = Number(req.body?.day);
-  const shiftCode = cleanStr(req.body?.shift_code || req.body?.shiftCode);
   const monthKey = cleanStr(req.body?.month_key || req.body?.monthKey);
+  const requestedShiftId = cleanStr(req.body?.shift_id || req.body?.shiftId);
+  const requestedShiftCode = cleanStr(req.body?.shift_code || req.body?.shiftCode).toUpperCase();
 
   if (!isValidUuid(scheduleId) || !isValidUuid(employeeId)) {
     return res.status(400).json({ message: 'Невалиден scheduleId или employeeId.' });
   }
 
-  if (!Number.isInteger(day) || day < 1 || day > 31 || !shiftCode || (monthKey && !isValidMonthKey(monthKey))) {
+  if (!Number.isInteger(day) || day < 1 || day > 31 || (monthKey && !isValidMonthKey(monthKey))) {
     return res.status(400).json({ message: 'Невалидни данни за запис в график.' });
   }
 
   try {
+    await ensureDefaultShiftTemplatesForTenant(req.tenantId);
+
     const scheduleResult = await pool.query(
       `SELECT id, department, status, month_key FROM schedules WHERE id = $1 AND tenant_id = $2`,
       [scheduleId, req.tenantId]
@@ -1568,6 +1625,37 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       return res.status(409).json({ message: 'Денят е извън периода на заетост на служителя.' });
     }
 
+    let resolvedShiftCode = requestedShiftCode;
+    let resolvedShiftId = requestedShiftId || null;
+
+    if (requestedShiftId) {
+      if (!isValidUuid(requestedShiftId)) {
+        return res.status(400).json({ message: 'Невалиден shiftId.' });
+      }
+      const shiftByIdResult = await pool.query(
+        `SELECT id, code FROM shift_templates WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+        [requestedShiftId, req.tenantId]
+      );
+      if (shiftByIdResult.rowCount === 0) {
+        return res.status(404).json({ message: 'Смяната не е намерена.' });
+      }
+      resolvedShiftCode = cleanStr(shiftByIdResult.rows[0].code).toUpperCase();
+      resolvedShiftId = shiftByIdResult.rows[0].id;
+    } else if (requestedShiftCode && !['P', 'O', 'B', 'R'].includes(requestedShiftCode)) {
+      const shiftByCodeResult = await pool.query(
+        `SELECT id, code FROM shift_templates WHERE tenant_id = $1 AND UPPER(code) = $2 LIMIT 1`,
+        [req.tenantId, requestedShiftCode]
+      );
+      if (shiftByCodeResult.rowCount > 0) {
+        resolvedShiftCode = cleanStr(shiftByCodeResult.rows[0].code).toUpperCase();
+        resolvedShiftId = shiftByCodeResult.rows[0].id;
+      }
+    }
+
+    if (!resolvedShiftCode) {
+      return res.status(400).json({ message: 'Липсва shift_code/shift_id.' });
+    }
+
     const hasScheduleEntriesMonthKey = await tableHasColumn('schedule_entries', 'month_key');
 
     if (hasScheduleEntriesMonthKey) {
@@ -1577,7 +1665,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
          ON CONFLICT (schedule_id, employee_id, day)
          DO UPDATE SET shift_code = EXCLUDED.shift_code,
                        month_key = EXCLUDED.month_key`,
-        [scheduleId, employeeId, day, shiftCode, effectiveMonth]
+        [scheduleId, employeeId, day, resolvedShiftCode, effectiveMonth]
       );
     } else {
       await pool.query(
@@ -1585,13 +1673,82 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (schedule_id, employee_id, day)
          DO UPDATE SET shift_code = EXCLUDED.shift_code`,
-        [scheduleId, employeeId, day, shiftCode]
+        [scheduleId, employeeId, day, resolvedShiftCode]
       );
     }
 
-    res.json({ ok: true });
+    const [shiftTemplatesResult, entriesResult, employeesResult] = await Promise.all([
+      pool.query(
+        `SELECT id, code, name, start_time, end_time, hours
+         FROM shift_templates
+         WHERE tenant_id = $1`,
+        [req.tenantId]
+      ),
+      pool.query(
+        `SELECT schedule_id, employee_id, day, shift_code
+         FROM schedule_entries
+         WHERE schedule_id = $1`,
+        [scheduleId]
+      ),
+      pool.query(
+        `SELECT e.id, e.start_date::text AS start_date, e.end_date::text AS end_date
+         FROM employees e
+         WHERE e.tenant_id = $1 AND (
+           e.id = $2 OR COALESCE(e.department, '') = COALESCE($3, '')
+         )`,
+        [req.tenantId, employeeId, schedule.department]
+      )
+    ]);
+
+    const summaryMap = computeMonthlySummary({
+      monthKey: effectiveMonth,
+      employees: employeesResult.rows,
+      schedules: [{ id: scheduleId }],
+      scheduleEntries: entriesResult.rows,
+      shiftTemplates: shiftTemplatesResult.rows.map((row) => ({
+        code: row.code,
+        start: row.start_time,
+        end: row.end_time,
+        hours: row.hours,
+      })),
+      selectedScheduleIds: [scheduleId],
+      weekendRate: DEFAULT_WEEKEND_RATE,
+      holidayRate: DEFAULT_HOLIDAY_RATE,
+    });
+
+    const rowSummary = summaryMap.get(employeeId) || emptyComputedSummary();
+    let scheduleSummary = emptyComputedSummary();
+    for (const value of summaryMap.values()) {
+      scheduleSummary = addSummaries(scheduleSummary, value);
+    }
+
+    const updatedEntry = {
+      scheduleId,
+      employeeId,
+      day,
+      shiftCode: resolvedShiftCode,
+      shiftId: resolvedShiftId,
+      date: entryDate,
+    };
+
+    const selectedShift = shiftTemplatesResult.rows.find((row) => String(row.id) === String(resolvedShiftId)) || null;
+    const shiftHours = selectedShift
+      ? calcShiftDurationHours(selectedShift.start_time, selectedShift.end_time, selectedShift.hours)
+      : 0;
+    const nightHours = selectedShift ? calcNightHours(selectedShift.start_time, selectedShift.end_time) : 0;
+
+    return res.json({
+      ok: true,
+      entry: {
+        ...updatedEntry,
+        workedHours: shiftHours,
+        nightHours,
+      },
+      rowSummary,
+      scheduleSummary,
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    return res.status(500).json({ message: error.message });
   }
 });
 
@@ -1636,6 +1793,7 @@ app.delete('/api/shift-template/:code', requireAuth, requireTenantContext, async
 
 app.post('/api/calc/summary', requireAuth, requireTenantContext, async (req, res, next) => {
   try {
+    await ensureDefaultShiftTemplatesForTenant(req.tenantId);
     const monthKey = cleanStr(req.body?.monthKey);
     if (!isValidMonthKey(monthKey)) {
       return res.status(400).json({ message: 'Невалиден monthKey. Очаква се YYYY-MM.' });
