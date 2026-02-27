@@ -29,12 +29,7 @@ const {
   dateAdd,
   finalizeSirvOvertimeAllocations,
 } = require('./schedule_calculations');
-const {
-  getDaysOfMonth,
-  buildPattern,
-  validateRest,
-  applyOverwriteMode,
-} = require('./schedule_generator');
+const { createHolidayService } = require('./holidayService');
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -49,6 +44,8 @@ const pool =
         user: process.env.PGUSER || 'postgres',
         password: process.env.PGPASSWORD || '',
       });
+
+const holidayService = createHolidayService(pool);
 
 app.use(
   cors({
@@ -155,16 +152,19 @@ function normalizeShiftCode(input) {
   return latinUpper;
 }
 
-function computeSystemShiftSnapshot(shiftCode, date) {
+function computeSystemShiftSnapshot(shiftCode, date, isHoliday = () => ({ isHoliday: false })) {
   const normalized = normalizeShiftCode(shiftCode);
   if (normalized === 'R') {
     const workMinutes = 480;
-    const { isWeekend, isHoliday } = calcDayType(date);
+    const dayType = calcDayType(date);
+    const holidayResult = isHoliday(date);
+    const isHolidayDay = Boolean(holidayResult?.isHoliday ?? holidayResult);
+    const isWeekend = dayType.isWeekend;
     return {
       work_minutes: workMinutes,
       work_minutes_total: workMinutes,
       night_minutes: 0,
-      holiday_minutes: isHoliday ? workMinutes : 0,
+      holiday_minutes: isHolidayDay ? workMinutes : 0,
       weekend_minutes: isWeekend ? workMinutes : 0,
       overtime_minutes: 0,
       break_minutes_applied: 0,
@@ -301,15 +301,24 @@ const SYSTEM_SHIFT_TEMPLATES = [
   { code: 'B', name: 'Болничен', start_time: '00:00', end_time: '00:00', hours: 0 },
 ];
 
-async function buildHolidayResolver() {
-  const hasHolidaysTable = await tableExists('holidays');
-  if (!hasHolidaysTable) {
-    return holidayResolverFactory(new Set());
+async function buildHolidayResolver(tenantId, fromDate = null, toDate = null) {
+  if (!(await tableExists('tenant_holidays'))) {
+    const hasHolidaysTable = await tableExists('holidays');
+    if (!hasHolidaysTable) {
+      return holidayResolverFactory(new Set());
+    }
+    const rows = await pool.query('SELECT date::text AS date FROM holidays');
+    const dates = new Set(rows.rows.map((row) => normalizeDateOnly(row.date)).filter(Boolean));
+    return holidayResolverFactory(dates);
   }
 
-  const rows = await pool.query('SELECT date::text AS date FROM holidays');
-  const dates = new Set(rows.rows.map((row) => normalizeDateOnly(row.date)).filter(Boolean));
-  return holidayResolverFactory(dates);
+  if (tenantId && fromDate && toDate) {
+    const entries = await holidayService.listCombined(tenantId, fromDate, toDate);
+    const holidayDates = new Set(entries.filter((item) => item.isHoliday).map((item) => normalizeDateOnly(item.date)).filter(Boolean));
+    return holidayResolverFactory(holidayDates);
+  }
+
+  return (dateISO) => ({ isHoliday: false, type: 'none' });
 }
 
 function getSirvPeriodBounds(monthKey, periodMonths = 1) {
@@ -722,15 +731,15 @@ async function requireTenantContext(req, res, next) {
   }
 }
 
-async function requireTenantRoles(req, allowedRoles = []) {
-  const actor = await resolveActorTenant(req);
-  if (req.user?.is_super_admin === true) {
-    return actor;
+function getYearBounds(year) {
+  const parsedYear = Number(year);
+  if (!Number.isInteger(parsedYear) || parsedYear < 1970 || parsedYear > 2100) {
+    return null;
   }
-  if (!allowedRoles.includes(actor.role)) {
-    throw createHttpError(403, 'Нямате права за това действие.');
-  }
-  return actor;
+  return {
+    from: `${parsedYear}-01-01`,
+    to: `${parsedYear}-12-31`,
+  };
 }
 
 async function insertAuditLog(action, entity, payload = {}) {
@@ -1507,6 +1516,103 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
   }
 });
 
+app.get('/api/holidays', requireAuth, requireTenantContext, async (req, res, next) => {
+  try {
+    const year = Number(req.query?.year || new Date().getUTCFullYear());
+    const bounds = getYearBounds(year);
+    if (!bounds) {
+      return res.status(400).json({ message: 'Невалидна година.' });
+    }
+    const holidays = await holidayService.listCombined(req.tenantId, bounds.from, bounds.to);
+    return res.json({ holidays });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/holidays/range', requireAuth, requireTenantContext, async (req, res, next) => {
+  try {
+    const from = normalizeDateOnly(req.query?.from);
+    const to = normalizeDateOnly(req.query?.to);
+    if (!from || !to || from > to) {
+      return res.status(400).json({ message: 'Невалиден диапазон.' });
+    }
+    const holidays = (await holidayService.listCombined(req.tenantId, from, to)).filter((row) => row.isHoliday);
+    return res.json({ holidays });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/holidays', requireAuth, requireTenantContext, async (req, res, next) => {
+  try {
+    const actor = await resolveActorTenant(req);
+    if (!['owner', 'admin', 'super_admin'].includes(actor.role)) {
+      return res.status(403).json({ message: 'Само owner/admin може да управлява празници.' });
+    }
+
+    const date = normalizeDateOnly(req.body?.date);
+    const name = cleanStr(req.body?.name);
+    const isCompanyDayOff = Boolean(req.body?.is_company_day_off ?? req.body?.isCompanyDayOff ?? true);
+    const isWorkingDayOverride = Boolean(req.body?.is_working_day_override ?? req.body?.isWorkingDayOverride ?? false);
+    const note = cleanStr(req.body?.note || '') || null;
+
+    if (!date || !name) {
+      return res.status(400).json({ message: 'date и name са задължителни.' });
+    }
+    if (isCompanyDayOff && isWorkingDayOverride) {
+      return res.status(400).json({ message: 'Денят не може едновременно да е фирмен почивен и работен override.' });
+    }
+
+    const result = await holidayService.upsertTenantHoliday({
+      tenantId: req.tenantId,
+      date,
+      name,
+      isCompanyDayOff,
+      isWorkingDayOverride,
+      note,
+      createdBy: req.user?.id || null,
+    });
+    return res.status(201).json({ holiday: result.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.delete('/api/holidays/:date', requireAuth, requireTenantContext, async (req, res, next) => {
+  try {
+    const actor = await resolveActorTenant(req);
+    if (!['owner', 'admin', 'super_admin'].includes(actor.role)) {
+      return res.status(403).json({ message: 'Само owner/admin може да управлява празници.' });
+    }
+    const date = normalizeDateOnly(req.params.date);
+    if (!date) {
+      return res.status(400).json({ message: 'Невалидна дата.' });
+    }
+    await holidayService.deleteTenantHoliday(req.tenantId, date);
+    return res.json({ ok: true });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/holidays/seed', requireAuth, async (req, res, next) => {
+  try {
+    if (req.user?.is_super_admin !== true) {
+      return res.status(403).json({ message: 'Само super admin може да seed-ва официални празници.' });
+    }
+    const year = Number(req.query?.year || req.body?.year);
+    const bounds = getYearBounds(year);
+    if (!bounds) {
+      return res.status(400).json({ message: 'Невалидна година.' });
+    }
+    const inserted = await holidayService.seedYear(year);
+    return res.json({ ok: true, year, inserted });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.get('/api/departments', requireAuth, requireTenantContext, async (req, res) => {
   try {
     const result = await pool.query(
@@ -2209,8 +2315,8 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     const hasShiftTemplatesSirvShift = await tableHasColumn('shift_templates', 'is_sirv_shift');
     const shiftTemplatesSelect = `SELECT id, code, name, start_time, end_time, hours${hasShiftTemplatesBreakMinutes ? ', COALESCE(break_minutes, 0) AS break_minutes' : ', 0::integer AS break_minutes'}${hasShiftTemplatesBreakIncluded ? ', COALESCE(break_included, FALSE) AS break_included' : ', FALSE::boolean AS break_included'}${hasShiftTemplatesSirvShift ? ', is_sirv_shift' : ', NULL::boolean AS is_sirv_shift'} FROM shift_templates`;
 
-    const holidayResolver = await buildHolidayResolver();
-    let snapshot = computeSystemShiftSnapshot(resolvedShiftCode, entryDate);
+    const holidayResolver = await buildHolidayResolver(req.tenantId, entryDate, dateAdd(entryDate, 1));
+    let snapshot = computeSystemShiftSnapshot(resolvedShiftCode, entryDate, holidayResolver);
 
     const shiftTemplatesForCalcResult = snapshot
       ? { rows: [] }
@@ -4161,7 +4267,12 @@ app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (r
          WHERE schedule_id = ANY($1::uuid[])`,
         [scopeIds, schedule.status]
       )
-      : { rows: [{ work: 0, night: 0, weekend: 0, holiday: 0, overtime: 0 }] };
+      : { rows: [{ worked: 0 }] };
+
+    const holidayResolver = await buildHolidayResolver(req.tenantId, bounds.periodStart, bounds.periodEnd);
+    const businessDays = countBusinessDays(bounds.periodStart, bounds.periodEnd, holidayResolver);
+    const periodNorm = businessDays * 480;
+    const overtimePeriod = Math.max(0, Number(periodWorkedResult.rows[0].worked || 0) - periodNorm);
 
     return res.json({
       ok: true,
@@ -4227,7 +4338,7 @@ app.post('/api/schedules/:id/lock', requireAuth, requireTenantContext, async (re
         )
         : { rows: [] };
 
-      const holidayResolver = await buildHolidayResolver();
+      const holidayResolver = await buildHolidayResolver(req.tenantId, bounds.periodStart, bounds.periodEnd);
       const businessDays = countBusinessDays(bounds.periodStart, bounds.periodEnd, holidayResolver);
       const periodNorm = businessDays * 480;
       const finalized = finalizeSirvOvertimeAllocations(rowsRes.rows, periodNorm, 480);

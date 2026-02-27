@@ -86,7 +86,8 @@ const state = {
   backendReconnectInFlight: false,
   pendingConnectionLogs: loadPendingConnectionLogs(),
   lastConnectionErrorSignature: '',
-  departmentShiftsCache: {}
+  holidaysByMonthCache: {},
+  holidaysAdminRows: [],
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -249,6 +250,10 @@ const reviewNotesInput = document.getElementById('reviewNotesInput');
 const inspectTableForm = document.getElementById('inspectTableForm');
 const inspectTableNameInput = document.getElementById('inspectTableNameInput');
 const inspectTableOutput = document.getElementById('inspectTableOutput');
+const holidaysYearInput = document.getElementById('holidaysYearInput');
+const holidaysReloadBtn = document.getElementById('holidaysReloadBtn');
+const holidaysTableBody = document.getElementById('holidaysTableBody');
+const holidayForm = document.getElementById('holidayForm');
 
 let statusToastTimer = null;
 let lastShiftImportPreviewPayload = null;
@@ -359,6 +364,7 @@ async function init() {
   attachLockAndExport();
   attachSettingsControls();
   attachSettingsSubtabs();
+  attachHolidaySettings();
   attachDepartmentControls();
   attachDepartmentManagementControls();
   attachEmployeeEditModalControls();
@@ -1766,6 +1772,49 @@ function attachSettingsSubtabs() {
       }
     });
   });
+}
+
+function attachHolidaySettings() {
+  if (holidaysYearInput) {
+    holidaysYearInput.value = String(new Date().getFullYear());
+  }
+  if (holidaysReloadBtn) {
+    holidaysReloadBtn.addEventListener('click', async () => {
+      await loadHolidaysAdminYear(holidaysYearInput?.value || new Date().getFullYear());
+    });
+  }
+  if (holidayForm) {
+    holidayForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const formData = new FormData(holidayForm);
+      const isCompanyDayOff = formData.get('is_company_day_off') === 'on';
+      const isWorkingDayOverride = formData.get('is_working_day_override') === 'on';
+      if (isCompanyDayOff && isWorkingDayOverride) {
+        setStatus('Не може едновременно фирмен празник и working override.', false);
+        return;
+      }
+      await apiRequest('/api/holidays', {
+        method: 'POST',
+        body: JSON.stringify({
+          date: formData.get('date'),
+          name: formData.get('name'),
+          is_company_day_off: isCompanyDayOff,
+          is_working_day_override: isWorkingDayOverride,
+          note: formData.get('note') || '',
+        })
+      });
+      holidayForm.reset();
+      state.holidaysByMonthCache = {};
+      await loadHolidaysAdminYear(holidaysYearInput?.value || new Date().getFullYear());
+      await loadHolidayRangeForMonth(state.month);
+      renderSchedule();
+    });
+  }
+  if (holidaysTableBody) {
+    loadHolidaysAdminYear(holidaysYearInput?.value || new Date().getFullYear()).catch(() => {
+      holidaysTableBody.innerHTML = '<tr><td colspan="4">Няма достъп до празници.</td></tr>';
+    });
+  }
 }
 
 function attachApiControls() {
@@ -3997,7 +4046,9 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
     const inEmployment = isEmployeeActiveOnDay(employee, year, monthIndex, day);
     const currentShift = getShiftCodeForCell(employee, month, day);
     const date = new Date(year, monthIndex - 1, day);
-    const holiday = isOfficialHoliday(date);
+    const dateISO = `${year}-${String(monthIndex).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const holidayMeta = getHolidayMeta(dateISO);
+    const holiday = Boolean(holidayMeta?.isHoliday);
     const weekend = isWeekend(date);
     const cell = document.createElement('td');
     if (holiday) {
@@ -4097,6 +4148,76 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
   return { row, employeeSnapshotTotals };
 }
 
+function monthBounds(monthKey) {
+  const [year, month] = String(monthKey || '').split('-').map(Number);
+  if (!year || !month) {
+    return null;
+  }
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return { from: `${year}-${String(month).padStart(2, '0')}-01`, to: `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}` };
+}
+
+async function loadHolidayRangeForMonth(monthKey) {
+  const bounds = monthBounds(monthKey);
+  if (!bounds) {
+    return;
+  }
+  if (state.holidaysByMonthCache[monthKey]) {
+    return;
+  }
+  try {
+    const query = new URLSearchParams({ from: bounds.from, to: bounds.to });
+    const payload = await apiRequest(`/api/holidays/range?${query.toString()}`, { method: 'GET' });
+    const mapped = new Map((payload.holidays || []).map((row) => [row.date, row]));
+    state.holidaysByMonthCache[monthKey] = mapped;
+  } catch (_error) {
+    state.holidaysByMonthCache[monthKey] = new Map();
+  }
+}
+
+function getHolidayMeta(dateISO) {
+  const monthKey = String(dateISO || '').slice(0, 7);
+  const map = state.holidaysByMonthCache[monthKey];
+  if (!map) {
+    return null;
+  }
+  return map.get(String(dateISO).slice(0, 10)) || null;
+}
+
+async function loadHolidaysAdminYear(year) {
+  const y = Number(year || new Date().getFullYear());
+  const payload = await apiRequest(`/api/holidays?year=${encodeURIComponent(String(y))}`, { method: 'GET' });
+  state.holidaysAdminRows = Array.isArray(payload.holidays) ? payload.holidays : [];
+  renderHolidaysAdminTable();
+}
+
+function renderHolidaysAdminTable() {
+  if (!holidaysTableBody) return;
+  holidaysTableBody.innerHTML = '';
+  state.holidaysAdminRows.forEach((holiday) => {
+    const row = document.createElement('tr');
+    const lock = holiday.type === 'official' ? '🔒' : '';
+    row.innerHTML = `<td>${holiday.date}</td><td>${holiday.name || '—'}</td><td>${holiday.type || 'none'} ${lock}</td><td></td>`;
+    const actionCell = row.lastElementChild;
+    if (holiday.type !== 'official') {
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.textContent = 'Изтрий';
+      delBtn.addEventListener('click', async () => {
+        await apiRequest(`/api/holidays/${encodeURIComponent(holiday.date)}`, { method: 'DELETE' });
+        state.holidaysByMonthCache = {};
+        await loadHolidaysAdminYear(holidaysYearInput?.value || new Date().getFullYear());
+        await loadHolidayRangeForMonth(state.month);
+        renderSchedule();
+      });
+      actionCell.appendChild(delBtn);
+    } else {
+      actionCell.textContent = 'Read-only';
+    }
+    holidaysTableBody.appendChild(row);
+  });
+}
+
 function renderSchedule() {
   const month = state.month || todayMonth();
   const [year, monthIndex] = month.split('-').map(Number);
@@ -4135,7 +4256,9 @@ function renderSchedule() {
   header.innerHTML = '<th class="sticky">Служител / Отдел / Длъжност</th>';
   for (let day = 1; day <= totalDays; day += 1) {
     const date = new Date(year, monthIndex - 1, day);
-    const holiday = isOfficialHoliday(date);
+    const dateISO = `${year}-${String(monthIndex).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const holidayMeta = getHolidayMeta(dateISO);
+    const holiday = Boolean(holidayMeta?.isHoliday);
     const weekend = isWeekend(date);
     const th = document.createElement('th');
     th.textContent = String(day);
@@ -4143,6 +4266,13 @@ function renderSchedule() {
       th.className = 'day-holiday';
     } else if (weekend) {
       th.className = 'day-weekend';
+    }
+    if (holiday) {
+      const badge = document.createElement('span');
+      badge.className = 'holiday-day-badge';
+      badge.textContent = ' Празник';
+      badge.title = holidayMeta?.name || 'Празник';
+      th.appendChild(badge);
     }
     header.appendChild(th);
   }
@@ -4455,7 +4585,9 @@ function getMonthStats(year, monthIndex, totalDays) {
 
   for (let day = 1; day <= totalDays; day += 1) {
     const date = new Date(year, monthIndex - 1, day);
-    const holiday = isOfficialHoliday(date);
+    const dateISO = `${year}-${String(monthIndex).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const holidayMeta = getHolidayMeta(dateISO);
+    const holiday = Boolean(holidayMeta?.isHoliday);
     const weekend = isWeekend(date);
 
     if (holiday) {
@@ -4932,6 +5064,7 @@ async function loadSchedulesForMonth() {
   }
 
   state.selectedScheduleIds = selectedScheduleIds;
+  await loadHolidayRangeForMonth(monthKey);
 
   if (!state.activeScheduleId || !validIds.has(state.activeScheduleId) || !state.selectedScheduleIds.includes(state.activeScheduleId)) {
     state.activeScheduleId = state.selectedScheduleIds[0] || null;
@@ -5762,24 +5895,8 @@ function isWeekend(date) {
 }
 
 function isOfficialHoliday(date) {
-  const year = date.getFullYear();
-  const month = date.getMonth() + 1;
-  const day = date.getDate();
-  const key = `${month}-${day}`;
-
-  const fixed = new Set(['1-1', '3-3', '5-1', '5-6', '5-24', '9-6', '9-22', '12-24', '12-25', '12-26']);
-  if (fixed.has(key)) {
-    return true;
-  }
-
-  const easter = orthodoxEaster(year);
-  const easterDates = [-2, -1, 0, 1].map((offset) => {
-    const d = new Date(easter);
-    d.setDate(easter.getDate() + offset);
-    return `${d.getMonth() + 1}-${d.getDate()}`;
-  });
-
-  return easterDates.includes(key);
+  const iso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  return Boolean(getHolidayMeta(iso)?.isHoliday);
 }
 
 function orthodoxEaster(year) {

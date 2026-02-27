@@ -130,3 +130,26 @@ CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_request_log_created_at ON request_log(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS holidays (
+  date DATE PRIMARY KEY,
+  name TEXT NOT NULL,
+  is_official BOOLEAN NOT NULL DEFAULT TRUE,
+  source TEXT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS tenant_holidays (
+  id BIGSERIAL PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  date DATE NOT NULL,
+  name TEXT NOT NULL,
+  is_working_day_override BOOLEAN NOT NULL DEFAULT FALSE,
+  is_company_day_off BOOLEAN NOT NULL DEFAULT TRUE,
+  note TEXT NULL,
+  created_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (tenant_id, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_holidays_tenant_id_date ON tenant_holidays(tenant_id, date);

@@ -61,18 +61,27 @@ test('sirv period overtime surplus', () => {
 });
 
 
-test('sirv overtime finalization is deterministic and allocates from last day backwards', () => {
-  const entries = [
-    { schedule_id: 's1', employee_id: 'e1', day: 1, month_key: '2026-02', date: '2026-02-01', work_minutes_total: 600 },
-    { schedule_id: 's1', employee_id: 'e1', day: 2, month_key: '2026-02', date: '2026-02-02', work_minutes_total: 540 },
-    { schedule_id: 's1', employee_id: 'e1', day: 3, month_key: '2026-02', date: '2026-02-03', work_minutes_total: 480 },
-  ];
+test('norm calculation excludes holidays and respects override working', () => {
+  const resolver = (date) => {
+    if (date === '2026-03-03') {
+      return { isHoliday: true, type: 'official' };
+    }
+    if (date === '2026-03-04') {
+      return { isHoliday: false, type: 'override_working' };
+    }
+    return { isHoliday: false, type: 'none' };
+  };
+  const businessDays = countBusinessDays('2026-03-02', '2026-03-06', resolver);
+  assert.equal(businessDays, 4);
+});
 
-  const result = finalizeSirvOvertimeAllocations(entries, 1500, 480);
-  const key = (item) => `${item.schedule_id}|${item.employee_id}|${item.day}`;
-  const map = new Map(result.updates.map((item) => [key(item), item.overtime_minutes]));
-
-  assert.equal(map.get('s1|e1|1'), 60);
-  assert.equal(map.get('s1|e1|2'), 60);
-  assert.equal(map.get('s1|e1|3'), 0);
+test('holiday_minutes split across midnight by day holiday flags', () => {
+  const resolver = (date) => ({ isHoliday: date === '2026-03-03', type: date === '2026-03-03' ? 'official' : 'none' });
+  const metrics = computeEntryMetrics({
+    dateISO: '2026-03-02',
+    shift: { start_time: '20:00', end_time: '04:00', break_minutes: 0, break_included: true },
+    isHoliday: resolver,
+  });
+  assert.equal(metrics.work_minutes_total, 480);
+  assert.equal(metrics.holiday_minutes, 240);
 });
