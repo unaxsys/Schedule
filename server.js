@@ -7,6 +7,12 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 const {
+  parseCsvText,
+  normalizeImportRow,
+  buildDuplicateKey,
+  buildImportPreview,
+} = require('./shift_import');
+const {
   DEFAULT_WEEKEND_RATE,
   DEFAULT_HOLIDAY_RATE,
   computeMonthlySummary,
@@ -21,6 +27,7 @@ const {
   validateScheduleEntry,
   countBusinessDays,
   dateAdd,
+  finalizeSirvOvertimeAllocations,
 } = require('./schedule_calculations');
 const {
   enumerateDates: enumerateLeaveDates,
@@ -42,6 +49,8 @@ const pool =
         password: process.env.PGPASSWORD || '',
       });
 
+const holidayService = createHolidayService(pool);
+
 app.use(
   cors({
     origin: '*',
@@ -50,7 +59,7 @@ app.use(
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 function isValidUuid(v) {
   return (
@@ -61,6 +70,61 @@ function isValidUuid(v) {
 
 function cleanStr(v) {
   return String(v ?? '').trim();
+}
+
+function normalizeShiftImportRowsPayload(payload) {
+  if (Array.isArray(payload?.rows)) {
+    return payload.rows;
+  }
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+  return null;
+}
+
+async function resolveTenantDepartmentOrThrow({ departmentId, tenantId }) {
+  if (!isValidUuid(departmentId)) {
+    throw createHttpError(400, 'Невалиден department_id.');
+  }
+
+  const result = await pool.query(
+    'SELECT id FROM departments WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+    [departmentId, tenantId]
+  );
+
+  if (!result.rowCount) {
+    throw createHttpError(404, 'Отделът не е намерен или е извън tenant scope.');
+  }
+
+  return result.rows[0].id;
+}
+
+function readRowsFromImportRequest(req) {
+  const rowsPayload = normalizeShiftImportRowsPayload(req.body);
+  if (rowsPayload) {
+    return rowsPayload;
+  }
+
+  const csvText = cleanStr(req.body?.csv || req.body?.csvText || req.body?.rawCsv || '');
+  if (csvText) {
+    return parseCsvText(csvText);
+  }
+  return null;
+}
+
+async function loadDepartmentShiftDuplicates({ departmentId, tenantId }) {
+  const rows = await pool.query(
+    `SELECT id, code, name, start_time, end_time, break_minutes, break_included
+     FROM shift_templates
+     WHERE tenant_id = $1 AND department_id = $2`,
+    [tenantId, departmentId]
+  );
+
+  const byKey = new Map();
+  rows.rows.forEach((row) => {
+    byKey.set(buildDuplicateKey(row), row);
+  });
+  return byKey;
 }
 
 function normalizeShiftCode(input) {
@@ -92,16 +156,19 @@ function normalizeShiftCode(input) {
   return latinUpper;
 }
 
-function computeSystemShiftSnapshot(shiftCode, date) {
+function computeSystemShiftSnapshot(shiftCode, date, isHoliday = () => ({ isHoliday: false })) {
   const normalized = normalizeShiftCode(shiftCode);
   if (normalized === 'R') {
     const workMinutes = 480;
-    const { isWeekend, isHoliday } = calcDayType(date);
+    const dayType = calcDayType(date);
+    const holidayResult = isHoliday(date);
+    const isHolidayDay = Boolean(holidayResult?.isHoliday ?? holidayResult);
+    const isWeekend = dayType.isWeekend;
     return {
       work_minutes: workMinutes,
       work_minutes_total: workMinutes,
       night_minutes: 0,
-      holiday_minutes: isHoliday ? workMinutes : 0,
+      holiday_minutes: isHolidayDay ? workMinutes : 0,
       weekend_minutes: isWeekend ? workMinutes : 0,
       overtime_minutes: 0,
       break_minutes_applied: 0,
@@ -238,15 +305,24 @@ const SYSTEM_SHIFT_TEMPLATES = [
   { code: 'B', name: 'Болничен', start_time: '00:00', end_time: '00:00', hours: 0 },
 ];
 
-async function buildHolidayResolver() {
-  const hasHolidaysTable = await tableExists('holidays');
-  if (!hasHolidaysTable) {
-    return holidayResolverFactory(new Set());
+async function buildHolidayResolver(tenantId, fromDate = null, toDate = null) {
+  if (!(await tableExists('tenant_holidays'))) {
+    const hasHolidaysTable = await tableExists('holidays');
+    if (!hasHolidaysTable) {
+      return holidayResolverFactory(new Set());
+    }
+    const rows = await pool.query('SELECT date::text AS date FROM holidays');
+    const dates = new Set(rows.rows.map((row) => normalizeDateOnly(row.date)).filter(Boolean));
+    return holidayResolverFactory(dates);
   }
 
-  const rows = await pool.query('SELECT date::text AS date FROM holidays');
-  const dates = new Set(rows.rows.map((row) => normalizeDateOnly(row.date)).filter(Boolean));
-  return holidayResolverFactory(dates);
+  if (tenantId && fromDate && toDate) {
+    const entries = await holidayService.listCombined(tenantId, fromDate, toDate);
+    const holidayDates = new Set(entries.filter((item) => item.isHoliday).map((item) => normalizeDateOnly(item.date)).filter(Boolean));
+    return holidayResolverFactory(holidayDates);
+  }
+
+  return (dateISO) => ({ isHoliday: false, type: 'none' });
 }
 
 function getSirvPeriodBounds(monthKey, periodMonths = 1) {
@@ -315,6 +391,58 @@ function buildShiftTemplateScopeCondition({ hasDepartmentId, departmentId, tenan
     values,
     whereSql: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
   };
+}
+
+function mapShiftTemplateRow(row) {
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    start: row.start_time || row.start,
+    end: row.end_time || row.end,
+    hours: Number(row.hours || 0),
+    break_minutes: Number(row.break_minutes || 0),
+    break_included: Boolean(row.break_included),
+    departmentId: row.department_id || row.departmentId || null,
+  };
+}
+
+async function getDepartmentScopedShifts({ tenantId, departmentId, includeGlobal = true }) {
+  const hasTenantId = await hasShiftTemplatesTenantId();
+  const hasDepartmentId = await hasShiftTemplatesDepartmentId();
+  const values = [];
+  const where = [];
+
+  if (hasTenantId) {
+    values.push(tenantId);
+    where.push(`st.tenant_id = $${values.length}`);
+  }
+
+  if (hasDepartmentId) {
+    values.push(departmentId);
+    const departmentParam = `$${values.length}`;
+    where.push(includeGlobal
+      ? `(st.department_id = ${departmentParam} OR st.department_id IS NULL)`
+      : `st.department_id = ${departmentParam}`);
+  }
+
+  const result = await pool.query(
+    `SELECT st.id,
+            st.code,
+            st.name,
+            st.start_time,
+            st.end_time,
+            st.break_minutes,
+            st.break_included,
+            st.hours,
+            st.department_id
+     FROM shift_templates st
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY (st.department_id IS NULL) ASC, st.name ASC, st.start_time ASC`,
+    values
+  );
+
+  return result.rows.map(mapShiftTemplateRow);
 }
 
 async function ensureDefaultShiftTemplatesForTenant(tenantId) {
@@ -1138,6 +1266,9 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL`);
   await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS sirv_enabled BOOLEAN NOT NULL DEFAULT FALSE`);
   await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS sirv_period_months INTEGER NOT NULL DEFAULT 1`);
+  await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS lock_note TEXT NULL`);
+  await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ NULL`);
+  await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS locked_by UUID NULL`);
   await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS id UUID`);
   await pool.query(`UPDATE shift_templates SET id = gen_random_uuid() WHERE id IS NULL`);
   await pool.query(`ALTER TABLE shift_templates ALTER COLUMN id SET DEFAULT gen_random_uuid()`);
@@ -1172,8 +1303,11 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
 
   await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS break_minutes_applied INTEGER NULL`);
+  await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS overtime_estimated_minutes INTEGER NULL`);
   await pool.query(`ALTER TABLE audit_log ALTER COLUMN old_shift_code TYPE VARCHAR(16)`);
   await pool.query(`ALTER TABLE audit_log ALTER COLUMN new_shift_code TYPE VARCHAR(16)`);
+  await pool.query(`ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS event_type TEXT NULL`);
+  await pool.query(`ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS metadata JSONB NULL`);
 
   await pool.query(`
     UPDATE schedules s
@@ -1528,6 +1662,103 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+app.get('/api/holidays', requireAuth, requireTenantContext, async (req, res, next) => {
+  try {
+    const year = Number(req.query?.year || new Date().getUTCFullYear());
+    const bounds = getYearBounds(year);
+    if (!bounds) {
+      return res.status(400).json({ message: 'Невалидна година.' });
+    }
+    const holidays = await holidayService.listCombined(req.tenantId, bounds.from, bounds.to);
+    return res.json({ holidays });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/holidays/range', requireAuth, requireTenantContext, async (req, res, next) => {
+  try {
+    const from = normalizeDateOnly(req.query?.from);
+    const to = normalizeDateOnly(req.query?.to);
+    if (!from || !to || from > to) {
+      return res.status(400).json({ message: 'Невалиден диапазон.' });
+    }
+    const holidays = (await holidayService.listCombined(req.tenantId, from, to)).filter((row) => row.isHoliday);
+    return res.json({ holidays });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/holidays', requireAuth, requireTenantContext, async (req, res, next) => {
+  try {
+    const actor = await resolveActorTenant(req);
+    if (!['owner', 'admin', 'super_admin'].includes(actor.role)) {
+      return res.status(403).json({ message: 'Само owner/admin може да управлява празници.' });
+    }
+
+    const date = normalizeDateOnly(req.body?.date);
+    const name = cleanStr(req.body?.name);
+    const isCompanyDayOff = Boolean(req.body?.is_company_day_off ?? req.body?.isCompanyDayOff ?? true);
+    const isWorkingDayOverride = Boolean(req.body?.is_working_day_override ?? req.body?.isWorkingDayOverride ?? false);
+    const note = cleanStr(req.body?.note || '') || null;
+
+    if (!date || !name) {
+      return res.status(400).json({ message: 'date и name са задължителни.' });
+    }
+    if (isCompanyDayOff && isWorkingDayOverride) {
+      return res.status(400).json({ message: 'Денят не може едновременно да е фирмен почивен и работен override.' });
+    }
+
+    const result = await holidayService.upsertTenantHoliday({
+      tenantId: req.tenantId,
+      date,
+      name,
+      isCompanyDayOff,
+      isWorkingDayOverride,
+      note,
+      createdBy: req.user?.id || null,
+    });
+    return res.status(201).json({ holiday: result.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.delete('/api/holidays/:date', requireAuth, requireTenantContext, async (req, res, next) => {
+  try {
+    const actor = await resolveActorTenant(req);
+    if (!['owner', 'admin', 'super_admin'].includes(actor.role)) {
+      return res.status(403).json({ message: 'Само owner/admin може да управлява празници.' });
+    }
+    const date = normalizeDateOnly(req.params.date);
+    if (!date) {
+      return res.status(400).json({ message: 'Невалидна дата.' });
+    }
+    await holidayService.deleteTenantHoliday(req.tenantId, date);
+    return res.json({ ok: true });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/holidays/seed', requireAuth, async (req, res, next) => {
+  try {
+    if (req.user?.is_super_admin !== true) {
+      return res.status(403).json({ message: 'Само super admin може да seed-ва официални празници.' });
+    }
+    const year = Number(req.query?.year || req.body?.year);
+    const bounds = getYearBounds(year);
+    if (!bounds) {
+      return res.status(400).json({ message: 'Невалидна година.' });
+    }
+    const inserted = await holidayService.seedYear(year);
+    return res.json({ ok: true, year, inserted });
+  } catch (error) {
+    return next(error);
   }
 });
 
@@ -2557,22 +2788,299 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
   }
 });
 
+
+app.post('/api/schedules/:id/generate', requireAuth, requireTenantContext, async (req, res) => {
+  const scheduleId = cleanStr(req.params.id);
+  const departmentId = cleanStr(req.body?.department_id || req.body?.departmentId);
+  const employeeIdsRaw = Array.isArray(req.body?.employee_ids)
+    ? req.body.employee_ids
+    : (Array.isArray(req.body?.employeeIds) ? req.body.employeeIds : []);
+  const templateType = cleanStr(req.body?.template_type || req.body?.templateType);
+  const options = req.body?.options && typeof req.body.options === 'object' ? req.body.options : {};
+
+  const allowedTemplates = new Set(['SIRV_12H_2_2', 'SIRV_12H_2_4', '3_SHIFT_8H', '8H_STANDARD_WEEKDAYS']);
+  const overwriteMode = ['empty_only', 'overwrite_auto_only', 'overwrite_all'].includes(cleanStr(options.overwrite_mode || options.overwriteMode))
+    ? cleanStr(options.overwrite_mode || options.overwriteMode)
+    : 'empty_only';
+  const restMinHours = Math.max(0, Number(options.rest_min_hours ?? options.restMinHours ?? 12) || 12);
+  const rotateEmployees = Boolean(options.rotate_employees ?? options.rotateEmployees ?? false);
+  const includeWeekends = Boolean(options.include_weekends ?? options.includeWeekends ?? false);
+  const startPatternDayRaw = Number(options.start_pattern_day ?? options.startPatternDay ?? 1);
+  const startPatternDay = Number.isInteger(startPatternDayRaw) && startPatternDayRaw >= 1 && startPatternDayRaw <= 31 ? startPatternDayRaw : 1;
+
+  if (!isValidUuid(scheduleId) || !isValidUuid(departmentId)) {
+    return res.status(400).json({ message: 'Невалиден schedule_id или department_id.' });
+  }
+  if (!allowedTemplates.has(templateType)) {
+    return res.status(400).json({ message: 'Невалиден template_type.' });
+  }
+
+  try {
+    const scheduleResult = await pool.query(
+      `SELECT id, tenant_id, department_id, month_key, status
+       FROM schedules
+       WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId]
+    );
+
+    if (!scheduleResult.rowCount) {
+      return res.status(404).json({ message: 'Графикът не е намерен.' });
+    }
+
+    const schedule = scheduleResult.rows[0];
+    if (!isValidMonthKey(schedule.month_key)) {
+      return res.status(400).json({ message: 'Графикът няма валиден month_key.' });
+    }
+    if (schedule.status === 'locked') {
+      return res.status(403).json({ message: 'Графикът е заключен.' });
+    }
+    if (String(schedule.department_id || '') !== departmentId) {
+      return res.status(400).json({ message: 'Избраният отдел не съвпада с отдела на графика.' });
+    }
+
+    const departmentResult = await pool.query(
+      `SELECT id, name FROM departments WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+      [departmentId, req.tenantId]
+    );
+    if (!departmentResult.rowCount) {
+      return res.status(404).json({ message: 'Отделът не е намерен.' });
+    }
+
+    const hasShiftTemplatesTenant = await hasShiftTemplatesTenantId();
+    const hasShiftTemplatesDepartment = await hasShiftTemplatesDepartmentId();
+    const shiftScope = buildShiftTemplateScopeCondition({
+      hasDepartmentId: hasShiftTemplatesDepartment,
+      departmentId,
+      tenantScoped: hasShiftTemplatesTenant ? req.tenantId : null,
+    });
+
+    const shiftTemplatesResult = await pool.query(
+      `SELECT id, code, name, start_time, end_time, hours, break_minutes, break_included
+       FROM shift_templates
+       ${shiftScope.whereSql}
+       ORDER BY created_at, code`,
+      shiftScope.values
+    );
+    const shiftTemplates = appendSystemShiftTemplates(shiftTemplatesResult.rows);
+    const byCode = new Map(shiftTemplates.map((row) => [normalizeShiftCode(row.code), row]));
+
+    const shiftIds = {
+      day12ShiftId: byCode.get('D')?.id || null,
+      night12ShiftId: byCode.get('N')?.id || null,
+      morning8ShiftId: byCode.get('M')?.id || byCode.get('R')?.id || null,
+      evening8ShiftId: byCode.get('E')?.id || null,
+      night8ShiftId: byCode.get('N8')?.id || byCode.get('N')?.id || null,
+    };
+
+    const missing = [];
+    if (templateType === 'SIRV_12H_2_2' || templateType === 'SIRV_12H_2_4') {
+      if (!shiftIds.day12ShiftId) missing.push('day12ShiftId (code D)');
+      if (!shiftIds.night12ShiftId) missing.push('night12ShiftId (code N)');
+    }
+    if (templateType === '3_SHIFT_8H') {
+      if (!shiftIds.morning8ShiftId) missing.push('morning8ShiftId (code M или R)');
+      if (!shiftIds.evening8ShiftId) missing.push('evening8ShiftId (code E)');
+      if (!shiftIds.night8ShiftId) missing.push('night8ShiftId (code N8 или N)');
+    }
+    if (templateType === '8H_STANDARD_WEEKDAYS' && !shiftIds.morning8ShiftId) {
+      missing.push('morning8ShiftId (code M или R)');
+    }
+
+    if (missing.length) {
+      return res.status(400).json({
+        message: `Липсват смени за този отдел: ${missing.join(', ')}`,
+        missingShifts: missing,
+      });
+    }
+
+    const monthDays = getDaysOfMonth(schedule.month_key);
+    if (!monthDays.length) {
+      return res.status(400).json({ message: 'Невалиден month_key.' });
+    }
+
+    const employeeIds = employeeIdsRaw
+      .map((id) => cleanStr(id))
+      .filter((id) => isValidUuid(id));
+
+    const employeeParams = [req.tenantId, departmentId];
+    let employeeSql = `SELECT e.id, e.name
+      FROM employees e
+      WHERE e.tenant_id = $1 AND e.department_id = $2`;
+    if (employeeIds.length) {
+      employeeParams.push(employeeIds);
+      employeeSql += ` AND e.id = ANY($3::uuid[])`;
+    }
+    employeeSql += ' ORDER BY e.name';
+
+    const employeesResult = await pool.query(employeeSql, employeeParams);
+    const employees = employeesResult.rows;
+    if (!employees.length) {
+      return res.status(400).json({ message: 'Няма служители за генерация в избрания отдел.' });
+    }
+
+    const existingEntriesResult = await pool.query(
+      `SELECT schedule_id, employee_id, day, shift_id, shift_code, is_manual
+       FROM schedule_entries
+       WHERE schedule_id = $1 AND employee_id = ANY($2::uuid[])`,
+      [scheduleId, employees.map((e) => e.id)]
+    );
+    const existingMap = new Map(existingEntriesResult.rows.map((row) => [`${row.employee_id}|${row.day}`, row]));
+
+    const byShiftId = new Map(shiftTemplates.map((row) => [String(row.id || ''), row]));
+    const pattern = buildPattern(templateType, shiftIds, { include_weekends: includeWeekends });
+    if (!pattern) {
+      return res.status(400).json({ message: 'Невалиден шаблон за генерация.' });
+    }
+
+    const hasScheduleEntriesMonthKey = await tableHasColumn('schedule_entries', 'month_key');
+    const hasWorkMinutes = await tableHasColumn('schedule_entries', 'work_minutes');
+    const hasNightMinutes = await tableHasColumn('schedule_entries', 'night_minutes');
+    const hasHolidayMinutes = await tableHasColumn('schedule_entries', 'holiday_minutes');
+    const hasWeekendMinutes = await tableHasColumn('schedule_entries', 'weekend_minutes');
+    const hasOvertimeMinutes = await tableHasColumn('schedule_entries', 'overtime_minutes');
+    const hasWorkMinutesTotal = await tableHasColumn('schedule_entries', 'work_minutes_total');
+    const hasBreakMinutesApplied = await tableHasColumn('schedule_entries', 'break_minutes_applied');
+    const hasShiftIdColumn = await tableHasColumn('schedule_entries', 'shift_id');
+    const hasIsManualColumn = await tableHasColumn('schedule_entries', 'is_manual');
+    const hasUpdatedAtColumn = await tableHasColumn('schedule_entries', 'updated_at');
+
+    let generatedCount = 0;
+    let skippedCount = 0;
+    const warnings = [];
+    const errors = [];
+
+    for (let employeeIndex = 0; employeeIndex < employees.length; employeeIndex += 1) {
+      const employee = employees[employeeIndex];
+      let prevAssigned = null;
+
+      for (let dayIdx = 0; dayIdx < monthDays.length; dayIdx += 1) {
+        const dateISO = monthDays[dayIdx];
+        const dayNumber = Number(dateISO.slice(-2));
+        const cycleDayIndex = dayNumber - startPatternDay;
+        const employeeOffset = rotateEmployees ? employeeIndex : 0;
+        const nextShiftId = pattern({ dayIndex: cycleDayIndex, employeeOffset, dateISO }) || null;
+
+        const existingEntry = existingMap.get(`${employee.id}|${dayNumber}`) || null;
+        if (!applyOverwriteMode(existingEntry, overwriteMode)) {
+          skippedCount += 1;
+          continue;
+        }
+
+        const shiftTemplate = nextShiftId ? byShiftId.get(String(nextShiftId)) : null;
+        if (nextShiftId && !shiftTemplate) {
+          skippedCount += 1;
+          errors.push({ employee_id: employee.id, date: dateISO, msg: 'Липсва shift template за избраната смяна.' });
+          continue;
+        }
+
+        const enforce24 = options.enforce_24h_after_12h === undefined
+          ? (templateType.startsWith('SIRV_12H'))
+          : Boolean(options.enforce_24h_after_12h);
+
+        if (prevAssigned && shiftTemplate) {
+          const restCheck = validateRest(
+            { dateISO: prevAssigned.dateISO, shift: prevAssigned.shift },
+            { dateISO, shift: shiftTemplate },
+            restMinHours,
+            enforce24
+          );
+          if (!restCheck.ok) {
+            warnings.push({ employee_id: employee.id, date: dateISO, msg: restCheck.reason });
+            skippedCount += 1;
+            continue;
+          }
+        }
+
+        const snapshot = shiftTemplate
+          ? await computeEntrySnapshot({ date: dateISO, shift: shiftTemplate, isHoliday: null, sirvEnabled: false, dailyNormMinutes: 480 })
+          : {
+              work_minutes: 0,
+              work_minutes_total: 0,
+              night_minutes: 0,
+              holiday_minutes: 0,
+              weekend_minutes: 0,
+              overtime_minutes: 0,
+              break_minutes_applied: 0,
+            };
+
+        const values = [scheduleId, employee.id, dayNumber, shiftTemplate ? normalizeShiftCode(shiftTemplate.code) : null];
+        const columns = ['schedule_id', 'employee_id', 'day', 'shift_code'];
+
+        if (hasScheduleEntriesMonthKey) {
+          columns.push('month_key');
+          values.push(schedule.month_key);
+        }
+        if (hasShiftIdColumn) {
+          columns.push('shift_id');
+          values.push(shiftTemplate ? shiftTemplate.id : null);
+        }
+        if (hasWorkMinutes) { columns.push('work_minutes'); values.push(snapshot.work_minutes); }
+        if (hasWorkMinutesTotal) { columns.push('work_minutes_total'); values.push(snapshot.work_minutes_total); }
+        if (hasNightMinutes) { columns.push('night_minutes'); values.push(snapshot.night_minutes); }
+        if (hasHolidayMinutes) { columns.push('holiday_minutes'); values.push(snapshot.holiday_minutes); }
+        if (hasWeekendMinutes) { columns.push('weekend_minutes'); values.push(snapshot.weekend_minutes); }
+        if (hasOvertimeMinutes) { columns.push('overtime_minutes'); values.push(snapshot.overtime_minutes); }
+        if (hasBreakMinutesApplied) { columns.push('break_minutes_applied'); values.push(snapshot.break_minutes_applied); }
+        if (hasIsManualColumn) { columns.push('is_manual'); values.push(false); }
+
+        const placeholders = columns.map((_, index) => `$${index + 1}`);
+        const updates = columns
+          .filter((col) => !['schedule_id', 'employee_id', 'day'].includes(col))
+          .map((col) => `${col} = EXCLUDED.${col}`);
+        if (hasUpdatedAtColumn) {
+          updates.push('updated_at = NOW()');
+        }
+
+        await pool.query(
+          `INSERT INTO schedule_entries (${columns.join(', ')})
+           VALUES (${placeholders.join(', ')})
+           ON CONFLICT (schedule_id, employee_id, day)
+           DO UPDATE SET ${updates.join(', ')}`,
+          values
+        );
+
+        existingMap.set(`${employee.id}|${dayNumber}`, {
+          employee_id: employee.id,
+          day: dayNumber,
+          shift_id: shiftTemplate ? shiftTemplate.id : null,
+          shift_code: shiftTemplate ? normalizeShiftCode(shiftTemplate.code) : null,
+          is_manual: false,
+        });
+
+        if (shiftTemplate) {
+          prevAssigned = { dateISO, shift: shiftTemplate };
+        }
+        generatedCount += 1;
+      }
+    }
+
+    return res.json({ generatedCount, skippedCount, warnings, errors });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
 app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, res) => {
+  const validation = validateShiftTemplatePayload(req.body || {});
+  if (!validation.ok) {
+    return res.status(400).json({ message: validation.message });
+  }
+
   const code = cleanStr(req.body?.code);
-  const name = cleanStr(req.body?.name);
-  const start = cleanStr(req.body?.start);
-  const end = cleanStr(req.body?.end);
-  const hours = Number(req.body?.hours);
-  const breakMinutes = Math.max(0, Number(req.body?.break_minutes ?? req.body?.breakMinutes ?? 0));
-  const breakIncluded = Boolean(req.body?.break_included ?? req.body?.breakIncluded ?? false);
+  const { name } = validation.value;
+  const start = validation.value.startTime;
+  const end = validation.value.endTime;
+  const hours = validation.value.hours;
+  const breakMinutes = validation.value.breakMinutes;
+  const breakIncluded = validation.value.breakIncluded;
   const isSirvShift = req.body?.is_sirv_shift === undefined && req.body?.isSirvShift === undefined
     ? null
     : Boolean(req.body?.is_sirv_shift ?? req.body?.isSirvShift);
   const departmentIdRaw = req.body?.department_id ?? req.body?.departmentId;
   const departmentId = departmentIdRaw === null || departmentIdRaw === '' ? null : cleanStr(departmentIdRaw);
 
-  if (!code || !name || !start || !end || !(hours > 0)) {
-    return res.status(400).json({ message: 'Невалидни данни за смяна.' });
+  if (!code) {
+    return res.status(400).json({ message: 'Невалиден код за смяна.' });
   }
 
   try {
@@ -2659,6 +3167,118 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/api/departments/:id/shifts/import/preview', requireAuth, requireTenantContext, async (req, res) => {
+  try {
+    const departmentId = await resolveTenantDepartmentOrThrow({ departmentId: req.params.id, tenantId: req.tenantId });
+    const sourceRows = readRowsFromImportRequest(req);
+    if (!sourceRows) {
+      return res.status(400).json({ message: 'Липсват rows/csv/file за import preview.' });
+    }
+
+    const existingShiftsByKey = await loadDepartmentShiftDuplicates({ departmentId, tenantId: req.tenantId });
+    const preview = buildImportPreview({ rows: sourceRows, existingShifts: Array.from(existingShiftsByKey.values()) });
+    const toCreate = preview.to_create.map((entry) => ({
+      ...entry,
+      normalizedRow: {
+        ...entry.normalizedRow,
+        department_id: departmentId,
+      },
+    }));
+
+    return res.json({
+      department_id: departmentId,
+      total_rows: preview.total_rows,
+      valid_rows: preview.valid_rows,
+      invalid_rows: preview.invalid_rows,
+      duplicates: preview.duplicates,
+      to_create: toCreate,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    return res.status(status).json({ message: error.message });
+  }
+});
+
+app.post('/api/departments/:id/shifts/import/commit', requireAuth, requireTenantContext, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const departmentId = await resolveTenantDepartmentOrThrow({ departmentId: req.params.id, tenantId: req.tenantId });
+    const mode = cleanStr(req.body?.mode || 'skipDuplicates') || 'skipDuplicates';
+    const supportedModes = new Set(['skipDuplicates', 'updateDuplicates']);
+    if (!supportedModes.has(mode)) {
+      return res.status(400).json({ message: 'Невалиден mode. Използвайте skipDuplicates или updateDuplicates.' });
+    }
+
+    const toCreate = Array.isArray(req.body?.toCreate) ? req.body.toCreate : [];
+    if (!toCreate.length) {
+      return res.json({ createdCount: 0, updatedCount: 0, skippedCount: 0, createdIds: [] });
+    }
+
+    await client.query('BEGIN');
+
+    const existingByKey = await loadDepartmentShiftDuplicates({ departmentId, tenantId: req.tenantId });
+    const createdIds = [];
+    let createdCount = 0;
+    let updatedCount = 0;
+    let skippedCount = 0;
+
+    for (const item of toCreate) {
+      const normalizedResult = normalizeImportRow(item || {});
+      const normalized = normalizedResult.normalizedRow;
+      const validationErrors = normalizedResult.errors;
+      if (validationErrors.length) {
+        skippedCount += 1;
+        continue;
+      }
+
+      const duplicateKey = buildDuplicateKey(normalized);
+      const existing = existingByKey.get(duplicateKey);
+
+      if (existing && mode === 'skipDuplicates') {
+        skippedCount += 1;
+        continue;
+      }
+
+      if (existing && mode === 'updateDuplicates') {
+        await client.query(
+          `UPDATE shift_templates
+           SET name = $1,
+               start_time = $2,
+               end_time = $3,
+               break_minutes = $4,
+               break_included = $5,
+               hours = $6
+           WHERE id = $7 AND tenant_id = $8 AND department_id = $9`,
+          [normalized.name, normalized.start_time, normalized.end_time, normalized.break_minutes, normalized.break_included, normalized.hours, existing.id, req.tenantId, departmentId]
+        );
+        updatedCount += 1;
+        continue;
+      }
+
+      const nextCode = cleanStr(normalized.code) || `IMP${String(Date.now()).slice(-6)}${Math.floor(Math.random() * 999)}`;
+      const inserted = await client.query(
+        `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, break_minutes, break_included, hours)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id`,
+        [req.tenantId, departmentId, nextCode, normalized.name, normalized.start_time, normalized.end_time, normalized.break_minutes, normalized.break_included, normalized.hours]
+      );
+
+      createdCount += 1;
+      createdIds.push(inserted.rows[0].id);
+      existingByKey.set(duplicateKey, { id: inserted.rows[0].id, ...normalized, code: nextCode });
+    }
+
+    await client.query('COMMIT');
+    return res.json({ createdCount, updatedCount, skippedCount, createdIds });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    const status = error.status || 500;
+    return res.status(status).json({ message: error.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -3983,12 +4603,12 @@ app.delete('/api/leaves/:id', requireAuth, requireTenantContext, async (req, res
 
 app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (req, res) => {
   const scheduleId = req.params.id;
-  const period = cleanStr(req.query?.period || 'month').toLowerCase();
+  const scope = cleanStr(req.query?.scope || req.query?.period || 'month').toLowerCase();
   if (!isValidUuid(scheduleId)) {
     return res.status(400).json({ message: 'Невалиден schedule id.' });
   }
-  if (!['month', 'sirv'].includes(period)) {
-    return res.status(400).json({ message: 'period трябва да е month|sirv.' });
+  if (!['month', 'sirv_period', 'sirv'].includes(scope)) {
+    return res.status(400).json({ message: 'scope трябва да е month|sirv_period.' });
   }
 
   try {
@@ -4003,15 +4623,15 @@ app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (r
     }
     const schedule = scheduleResult.rows[0];
 
-    const sumMonth = await pool.query(
-      `SELECT COALESCE(SUM(COALESCE(work_minutes_total, work_minutes, 0)),0)::int AS total_work,
+    const monthTotalsResult = await pool.query(
+      `SELECT COALESCE(SUM(COALESCE(work_minutes_total, work_minutes, 0)),0)::int AS work,
               COALESCE(SUM(COALESCE(night_minutes, 0)),0)::int AS night,
               COALESCE(SUM(COALESCE(weekend_minutes, 0)),0)::int AS weekend,
               COALESCE(SUM(COALESCE(holiday_minutes, 0)),0)::int AS holiday,
-              COALESCE(SUM(COALESCE(overtime_minutes, 0)),0)::int AS overtime
+              COALESCE(SUM(COALESCE(CASE WHEN $2 = 'locked' THEN overtime_minutes ELSE COALESCE(overtime_estimated_minutes, overtime_minutes, 0) END, 0)),0)::int AS overtime
        FROM schedule_entries
        WHERE schedule_id = $1`,
-      [scheduleId]
+      [scheduleId, schedule.status]
     );
 
     const monthBounds = getMonthBounds(schedule.month_key);
@@ -4046,18 +4666,23 @@ app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (r
     }
 
     const bounds = getSirvPeriodBounds(schedule.month_key, schedule.sirv_period_months);
-    const periodScheduleIds = await pool.query(
+    const scopeSchedulesResult = await pool.query(
       `SELECT id FROM schedules
        WHERE tenant_id = $1 AND month_key >= $2 AND month_key <= $3`,
       [req.tenantId, bounds.periodStart.slice(0, 7), bounds.periodEnd.slice(0, 7)]
     );
-    const ids = periodScheduleIds.rows.map((r) => r.id);
-    const periodWorkedResult = ids.length
+    const scopeIds = scopeSchedulesResult.rows.map((row) => row.id);
+
+    const totalsResult = scopeIds.length
       ? await pool.query(
-        `SELECT COALESCE(SUM(COALESCE(work_minutes_total, work_minutes, 0)), 0)::int AS worked
+        `SELECT COALESCE(SUM(COALESCE(work_minutes_total, work_minutes, 0)),0)::int AS work,
+                COALESCE(SUM(COALESCE(night_minutes, 0)),0)::int AS night,
+                COALESCE(SUM(COALESCE(weekend_minutes, 0)),0)::int AS weekend,
+                COALESCE(SUM(COALESCE(holiday_minutes, 0)),0)::int AS holiday,
+                COALESCE(SUM(COALESCE(CASE WHEN $2 = 'locked' THEN overtime_minutes ELSE COALESCE(overtime_estimated_minutes, overtime_minutes, 0) END, 0)),0)::int AS overtime
          FROM schedule_entries
          WHERE schedule_id = ANY($1::uuid[])`,
-        [ids]
+        [scopeIds, schedule.status]
       )
       : { rows: [{ worked: 0 }] };
 
@@ -4079,7 +4704,7 @@ app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (r
 
     return res.json({
       ok: true,
-      period: 'sirv',
+      scope: 'sirv_period',
       period_start: bounds.periodStart,
       period_end: bounds.periodEnd,
       totals: {
@@ -4095,6 +4720,268 @@ app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (r
   }
 });
 
+app.post('/api/schedules/:id/lock', requireAuth, requireTenantContext, async (req, res) => {
+  const scheduleId = req.params.id;
+  const note = cleanStr(req.body?.note || '') || null;
+  if (!isValidUuid(scheduleId)) {
+    return res.status(400).json({ message: 'Невалиден schedule id.' });
+  }
+
+  try {
+    await requireTenantRoles(req, ['owner', 'admin', 'manager']);
+
+    const scheduleMetaResult = await pool.query(
+      `SELECT id, month_key, status, COALESCE(sirv_enabled, FALSE) AS sirv_enabled, COALESCE(sirv_period_months,1) AS sirv_period_months,
+              locked_at, locked_by
+       FROM schedules
+       WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId]
+    );
+    if (!scheduleMetaResult.rowCount) {
+      return res.status(404).json({ message: 'Графикът не е намерен.' });
+    }
+
+    const scheduleMeta = scheduleMetaResult.rows[0];
+    const warnings = [];
+    if (scheduleMeta.status !== 'locked') {
+      await pool.query(
+        `UPDATE schedules
+         SET status = 'locked', locked_at = NOW(), locked_by = $3, lock_note = $4
+         WHERE id = $1 AND tenant_id = $2`,
+        [scheduleId, req.tenantId, req.user?.id || null, note]
+      );
+    }
+
+    if (scheduleMeta.sirv_enabled) {
+      const bounds = getSirvPeriodBounds(scheduleMeta.month_key, scheduleMeta.sirv_period_months);
+      const scheduleIdsRes = await pool.query(
+        `SELECT id FROM schedules WHERE tenant_id = $1 AND month_key >= $2 AND month_key <= $3`,
+        [req.tenantId, bounds.periodStart.slice(0, 7), bounds.periodEnd.slice(0, 7)]
+      );
+      const scopeIds = scheduleIdsRes.rows.map((r) => r.id);
+      const rowsRes = scopeIds.length
+        ? await pool.query(
+          `SELECT se.schedule_id, se.employee_id, se.day, s.month_key,
+                  CONCAT(s.month_key, '-', LPAD(se.day::text, 2, '0')) AS date,
+                  COALESCE(se.work_minutes_total, se.work_minutes, 0)::int AS work_minutes_total
+           FROM schedule_entries se
+           JOIN schedules s ON s.id = se.schedule_id
+           WHERE se.schedule_id = ANY($1::uuid[])
+           ORDER BY se.employee_id, date, se.schedule_id`,
+          [scopeIds]
+        )
+        : { rows: [] };
+
+      const holidayResolver = await buildHolidayResolver(req.tenantId, bounds.periodStart, bounds.periodEnd);
+      const businessDays = countBusinessDays(bounds.periodStart, bounds.periodEnd, holidayResolver);
+      const periodNorm = businessDays * 480;
+      const finalized = finalizeSirvOvertimeAllocations(rowsRes.rows, periodNorm, 480);
+      warnings.push(...finalized.warnings);
+
+      for (const up of finalized.updates) {
+        await pool.query(
+          `UPDATE schedule_entries
+           SET overtime_minutes = $1,
+               overtime_estimated_minutes = NULL,
+               updated_at = NOW()
+           WHERE schedule_id = $2 AND employee_id = $3 AND day = $4`,
+          [up.overtime_minutes, up.schedule_id, up.employee_id, up.day]
+        );
+      }
+    }
+
+    const finalStateResult = await pool.query(
+      `SELECT id, status, locked_at, locked_by
+       FROM schedules
+       WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId]
+    );
+
+    const totalsResult = await pool.query(
+      `SELECT COALESCE(SUM(COALESCE(work_minutes_total, work_minutes, 0)),0)::int AS work,
+              COALESCE(SUM(COALESCE(night_minutes, 0)),0)::int AS night,
+              COALESCE(SUM(COALESCE(weekend_minutes, 0)),0)::int AS weekend,
+              COALESCE(SUM(COALESCE(holiday_minutes, 0)),0)::int AS holiday,
+              COALESCE(SUM(COALESCE(overtime_minutes, 0)),0)::int AS overtime
+       FROM schedule_entries
+       WHERE schedule_id = $1`,
+      [scheduleId]
+    );
+
+    await insertAuditLog('schedule_lock', 'schedule', {
+      tenantId: req.tenantId,
+      actorUserId: req.user?.id,
+      scheduleId,
+      entityId: scheduleId,
+      after: { ...finalStateResult.rows[0], note },
+      ip: req.ip,
+      userAgent: req.get('user-agent') || null,
+    });
+
+    return res.json({ ...finalStateResult.rows[0], totals: totalsResult.rows[0], warnings });
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/api/schedules/:id/unlock', requireAuth, requireTenantContext, async (req, res) => {
+  const scheduleId = req.params.id;
+  const note = cleanStr(req.body?.note || '') || null;
+  if (!isValidUuid(scheduleId)) {
+    return res.status(400).json({ message: 'Невалиден schedule id.' });
+  }
+
+  try {
+    await requireTenantRoles(req, ['owner', 'admin']);
+
+    const scheduleCheck = await pool.query(
+      `SELECT id, status FROM schedules WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId]
+    );
+    if (!scheduleCheck.rowCount) {
+      return res.status(404).json({ message: 'Графикът не е намерен.' });
+    }
+
+    await pool.query(
+      `UPDATE schedules
+       SET status = 'draft', locked_at = NULL, locked_by = NULL, lock_note = $3
+       WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId, note]
+    );
+
+    await pool.query(
+      `UPDATE schedule_entries
+       SET overtime_minutes = NULL,
+           updated_at = NOW()
+       WHERE schedule_id = $1`,
+      [scheduleId]
+    );
+
+    await insertAuditLog('schedule_unlock', 'schedule', {
+      tenantId: req.tenantId,
+      actorUserId: req.user?.id,
+      scheduleId,
+      entityId: scheduleId,
+      after: { status: 'draft', note },
+      ip: req.ip,
+      userAgent: req.get('user-agent') || null,
+    });
+
+    return res.json({ status: 'draft' });
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.get('/api/schedules/:id/export.xlsx', requireAuth, requireTenantContext, async (req, res) => {
+  const scheduleId = req.params.id;
+  if (!isValidUuid(scheduleId)) {
+    return res.status(400).json({ message: 'Невалиден schedule id.' });
+  }
+
+  try {
+    await requireTenantRoles(req, ['owner', 'admin', 'manager']);
+    const data = await pool.query(
+      `SELECT s.id, s.name, s.month_key, s.status, e.name AS employee_name, se.day, se.shift_code,
+              COALESCE(se.work_minutes_total, 0) AS work_minutes_total,
+              COALESCE(se.night_minutes, 0) AS night_minutes,
+              COALESCE(se.weekend_minutes, 0) AS weekend_minutes,
+              COALESCE(se.holiday_minutes, 0) AS holiday_minutes,
+              COALESCE(CASE WHEN s.status = 'locked' THEN se.overtime_minutes ELSE COALESCE(se.overtime_estimated_minutes, se.overtime_minutes, 0) END, 0) AS overtime_minutes
+       FROM schedules s
+       LEFT JOIN schedule_entries se ON se.schedule_id = s.id
+       LEFT JOIN employees e ON e.id = se.employee_id
+       WHERE s.id = $1 AND s.tenant_id = $2
+       ORDER BY e.name NULLS LAST, se.day`,
+      [scheduleId, req.tenantId]
+    );
+    if (!data.rowCount) {
+      return res.status(404).json({ message: 'Графикът не е намерен.' });
+    }
+
+    const header = 'Employee,Day,Shift,Work(h),Night(h),Weekend(h),Holiday(h),Overtime(h)';
+    const lines = [header];
+    data.rows.forEach((row) => {
+      if (!row.employee_name) return;
+      lines.push([
+        row.employee_name,
+        row.day,
+        row.shift_code,
+        (Number(row.work_minutes_total) / 60).toFixed(2),
+        (Number(row.night_minutes) / 60).toFixed(2),
+        (Number(row.weekend_minutes) / 60).toFixed(2),
+        (Number(row.holiday_minutes) / 60).toFixed(2),
+        (Number(row.overtime_minutes) / 60).toFixed(2),
+      ].join(','));
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="schedule-${scheduleId}.xlsx"`);
+    return res.send(lines.join('\n'));
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.get('/api/schedules/:id/export.pdf', requireAuth, requireTenantContext, async (req, res) => {
+  const scheduleId = req.params.id;
+  if (!isValidUuid(scheduleId)) {
+    return res.status(400).json({ message: 'Невалиден schedule id.' });
+  }
+
+  try {
+    await requireTenantRoles(req, ['owner', 'admin', 'manager']);
+    const scheduleResult = await pool.query(
+      `SELECT id, name, month_key, status FROM schedules WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId]
+    );
+    if (!scheduleResult.rowCount) {
+      return res.status(404).json({ message: 'Графикът не е намерен.' });
+    }
+
+    const rows = await pool.query(
+      `SELECT e.name AS employee_name,
+              COALESCE(SUM(COALESCE(se.work_minutes_total, 0)),0)::int AS work,
+              COALESCE(SUM(COALESCE(se.night_minutes, 0)),0)::int AS night,
+              COALESCE(SUM(COALESCE(se.weekend_minutes, 0)),0)::int AS weekend,
+              COALESCE(SUM(COALESCE(se.holiday_minutes, 0)),0)::int AS holiday,
+              COALESCE(SUM(COALESCE(CASE WHEN $3 = 'locked' THEN se.overtime_minutes ELSE COALESCE(se.overtime_estimated_minutes, se.overtime_minutes, 0) END, 0)),0)::int AS overtime
+       FROM schedule_entries se
+       JOIN employees e ON e.id = se.employee_id
+       WHERE se.schedule_id = $1
+       GROUP BY e.name
+       ORDER BY e.name`,
+      [scheduleId, req.tenantId, scheduleResult.rows[0].status]
+    );
+
+    const lines = [
+      `Schedule: ${scheduleResult.rows[0].name}`,
+      `Month: ${scheduleResult.rows[0].month_key}`,
+      `Status: ${scheduleResult.rows[0].status}`,
+      '',
+      'Employee | Work(h) | Night(h) | Weekend(h) | Holiday(h) | Overtime(h)',
+      ...rows.rows.map((row) => `${row.employee_name} | ${(row.work / 60).toFixed(2)} | ${(row.night / 60).toFixed(2)} | ${(row.weekend / 60).toFixed(2)} | ${(row.holiday / 60).toFixed(2)} | ${(row.overtime / 60).toFixed(2)}`),
+    ];
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="schedule-${scheduleId}.pdf"`);
+    return res.send(lines.join('\n'));
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
+    return res.status(500).json({ message: error.message });
+  }
+});
 
 initDatabase()
   .then(() => {
@@ -4106,147 +4993,3 @@ initDatabase()
     console.error('Database init error:', error);
     process.exit(1);
   });
-
-app.post('/api/schedules/:id/lock', requireAuth, requireTenantContext, async (req, res) => {
-  const scheduleId = req.params.id;
-  if (!isValidUuid(scheduleId)) {
-    return res.status(400).json({ message: 'Невалиден schedule id.' });
-  }
-  try {
-    const result = await pool.query(
-      `UPDATE schedules
-       SET status = 'locked', locked_at = NOW(), locked_by = $3
-       WHERE id = $1 AND tenant_id = $2 AND status <> 'locked'
-       RETURNING id, status, locked_at, locked_by`,
-      [scheduleId, req.tenantId, req.user?.id || null]
-    );
-    if (!result.rowCount) {
-      return res.status(409).json({ message: 'Графикът е вече заключен или липсва.' });
-    }
-
-    const scheduleMetaResult = await pool.query(
-      `SELECT month_key, COALESCE(sirv_enabled, FALSE) AS sirv_enabled, COALESCE(sirv_period_months,1) AS sirv_period_months
-       FROM schedules
-       WHERE id = $1 AND tenant_id = $2`,
-      [scheduleId, req.tenantId]
-    );
-    const scheduleMeta = scheduleMetaResult.rows[0] || null;
-    if (scheduleMeta?.sirv_enabled) {
-      const bounds = getSirvPeriodBounds(scheduleMeta.month_key, scheduleMeta.sirv_period_months);
-      const scheduleIdsRes = await pool.query(
-        `SELECT id FROM schedules WHERE tenant_id = $1 AND month_key >= $2 AND month_key <= $3`,
-        [req.tenantId, bounds.periodStart.slice(0, 7), bounds.periodEnd.slice(0, 7)]
-      );
-      const scopeIds = scheduleIdsRes.rows.map((r) => r.id);
-      const rowsRes = scopeIds.length
-        ? await pool.query(
-          `SELECT se.schedule_id, se.employee_id, se.day, s.month_key,
-                  COALESCE(se.work_minutes_total, se.work_minutes, 0)::int AS work_minutes_total
-           FROM schedule_entries se
-           JOIN schedules s ON s.id = se.schedule_id
-           WHERE se.schedule_id = ANY($1::uuid[])
-           ORDER BY se.employee_id, s.month_key, se.day`,
-          [scopeIds]
-        )
-        : { rows: [] };
-
-      const holidayResolver = await buildHolidayResolver();
-      const businessDays = countBusinessDays(bounds.periodStart, bounds.periodEnd, holidayResolver);
-      const periodNorm = businessDays * 480;
-
-      const byEmployee = new Map();
-      for (const row of rowsRes.rows) {
-        const key = String(row.employee_id);
-        if (!byEmployee.has(key)) byEmployee.set(key, []);
-        byEmployee.get(key).push(row);
-      }
-
-      for (const [, entries] of byEmployee.entries()) {
-        const worked = entries.reduce((acc, r) => acc + Number(r.work_minutes_total || 0), 0);
-        let remaining = Math.max(0, worked - periodNorm);
-        const updates = [];
-
-        const dailyCandidate = new Map(entries.map((e) => [`${e.schedule_id}|${e.employee_id}|${e.day}`, Math.max(0, Number(e.work_minutes_total || 0) - 480)]));
-        for (let i = entries.length - 1; i >= 0; i -= 1) {
-          const e = entries[i];
-          const key = `${e.schedule_id}|${e.employee_id}|${e.day}`;
-          const candidate = dailyCandidate.get(key) || 0;
-          const assigned = Math.min(remaining, candidate);
-          updates.push({ ...e, overtime: assigned });
-          remaining -= assigned;
-        }
-        if (remaining > 0) {
-          for (let i = 0; i < updates.length && remaining > 0; i += 1) {
-            const extra = Math.min(remaining, Number(updates[i].work_minutes_total || 0));
-            updates[i].overtime += extra;
-            remaining -= extra;
-          }
-        }
-
-        for (const up of updates) {
-          await pool.query(
-            `UPDATE schedule_entries
-             SET overtime_minutes = $1
-             WHERE schedule_id = $2 AND employee_id = $3 AND day = $4`,
-            [up.overtime, up.schedule_id, up.employee_id, up.day]
-          );
-        }
-      }
-    }
-
-    await insertAuditLog('lock_schedule', 'schedule', {
-      tenantId: req.tenantId,
-      actorUserId: req.user?.id,
-      scheduleId,
-      employeeId: req.user?.id,
-      entryDate: normalizeDateOnly(new Date().toISOString().slice(0, 10)),
-      after: result.rows[0],
-      ip: req.ip,
-      userAgent: req.get('user-agent') || null,
-    });
-
-    return res.json({ ok: true, schedule: result.rows[0] });
-  } catch (error) {
-    return res.status(500).json({ message: error.message });
-  }
-});
-
-app.post('/api/schedules/:id/unlock', requireAuth, requireTenantContext, async (req, res) => {
-  const scheduleId = req.params.id;
-  if (!isValidUuid(scheduleId)) {
-    return res.status(400).json({ message: 'Невалиден schedule id.' });
-  }
-
-  const role = cleanStr(req.user?.role || req.get('x-user-role')).toLowerCase();
-  if (!['owner', 'super_admin'].includes(role) && req.user?.is_super_admin !== true) {
-    return res.status(403).json({ message: 'Само owner/superadmin може да отключва.' });
-  }
-
-  try {
-    const result = await pool.query(
-      `UPDATE schedules
-       SET status = 'draft', locked_at = NULL, locked_by = NULL
-       WHERE id = $1 AND tenant_id = $2 AND status <> 'draft'
-       RETURNING id, status, locked_at, locked_by`,
-      [scheduleId, req.tenantId]
-    );
-    if (!result.rowCount) {
-      return res.status(409).json({ message: 'Графикът е вече отключен или липсва.' });
-    }
-
-    await insertAuditLog('unlock_schedule', 'schedule', {
-      tenantId: req.tenantId,
-      actorUserId: req.user?.id,
-      scheduleId,
-      employeeId: req.user?.id,
-      entryDate: normalizeDateOnly(new Date().toISOString().slice(0, 10)),
-      after: result.rows[0],
-      ip: req.ip,
-      userAgent: req.get('user-agent') || null,
-    });
-
-    return res.json({ ok: true, schedule: result.rows[0] });
-  } catch (error) {
-    return res.status(500).json({ message: error.message });
-  }
-});

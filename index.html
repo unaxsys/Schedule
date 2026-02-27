@@ -156,8 +156,8 @@
           </div>
 
           <div class="row actions-row">
-            <button id="lockScheduleBtn" type="button">Заключи графика</button>
-            <button id="unlockScheduleBtn" type="button">Отключи графика</button>
+            <button id="lockScheduleBtn" type="button">Заключи график</button>
+            <button id="unlockScheduleBtn" type="button">Отключи</button>
             <button id="exportExcelBtn" type="button">Експорт Excel</button>
             <button id="exportPdfBtn" type="button">Експорт PDF</button>
             <span id="lockStatus" class="lock-status">Статус: Отключен</span>
@@ -312,6 +312,7 @@
             <button type="button" class="settings-subtab-btn" data-settings-tab="calculationsSettingsPanel">Изчисления</button>
             <button type="button" class="settings-subtab-btn" data-settings-tab="shiftsSettingsPanel">Смени</button>
             <button type="button" class="settings-subtab-btn" data-settings-tab="usersSettingsPanel">Потребители</button>
+            <button type="button" class="settings-subtab-btn" data-settings-tab="holidaysSettingsPanel">Календар / Празници</button>
           </div>
 
           <div id="summarySettingsPanel" class="settings-subtab-panel active">
@@ -337,7 +338,8 @@
           </div>
 
           <div id="shiftsSettingsPanel" class="settings-subtab-panel">
-            <h3>Смени (начало/край)</h3>
+            <h3>Смени на отдела (начало/край)</h3>
+            <p>Смените тук са само за избрания отдел. Ако няма отделни смени, се ползват global смени.</p>
             <form id="shiftForm" class="row">
               <input id="shiftCodeInput" maxlength="4" required placeholder="Код (напр. D1)" />
               <input id="shiftNameInput" required placeholder="Име на смяна" />
@@ -346,10 +348,48 @@
               </select>
               <input id="shiftStartInput" type="time" required />
               <input id="shiftEndInput" type="time" required />
+              <input id="shiftBreakMinutesInput" type="number" min="0" step="1" value="0" placeholder="Почивка (мин)" />
+              <label><input id="shiftBreakIncludedInput" type="checkbox" /> Почивката е включена</label>
               <button type="submit">Добави смяна</button>
             </form>
+            <div class="row shift-import-row">
+              <button type="button" id="downloadShiftImportTemplateBtn">Свали шаблон</button>
+              <input id="shiftImportFileInput" type="file" accept=".csv,.xlsx" />
+              <button type="button" id="shiftImportPreviewBtn">Импорт от Excel/CSV</button>
+              <select id="shiftImportDepartmentInput">
+                <option value="">Изберете отдел</option>
+              </select>
+              <label><input type="checkbox" id="shiftImportUpdateDuplicatesInput" /> Update duplicates</label>
+              <button type="button" id="shiftImportCommitBtn">Commit</button>
+            </div>
+            <div id="shiftImportSummary" class="shift-import-summary"></div>
+            <div id="shiftImportPreview" class="shift-import-preview"></div>
             <div id="shiftList" class="shift-list"></div>
             <small>Смените „Почивка“, „Отпуск“ и „Болничен“ са системни и не се трият.</small>
+          </div>
+
+
+          <div id="holidaysSettingsPanel" class="settings-subtab-panel">
+            <h3>Календар / Празници</h3>
+            <div class="row" style="align-items:center; gap:8px; margin-bottom:10px;">
+              <label for="holidaysYearInput">Година:</label>
+              <input id="holidaysYearInput" type="number" min="1970" max="2100" step="1" />
+              <button id="holidaysReloadBtn" type="button">Зареди</button>
+            </div>
+            <form id="holidayForm" class="row" style="margin-bottom:10px; flex-wrap: wrap;">
+              <input name="date" type="date" required />
+              <input name="name" type="text" required placeholder="Име" />
+              <label><input name="is_company_day_off" type="checkbox" checked /> Фирмен почивен ден</label>
+              <label><input name="is_working_day_override" type="checkbox" /> Този ден е работен (override)</label>
+              <input name="note" type="text" placeholder="Бележка" />
+              <button type="submit">Запази</button>
+            </form>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Date</th><th>Name</th><th>Type</th><th>Actions</th></tr></thead>
+                <tbody id="holidaysTableBody"></tbody>
+              </table>
+            </div>
           </div>
 
           <div id="usersSettingsPanel" class="settings-subtab-panel">
@@ -464,8 +504,8 @@
             <article>
               <h3>8) Заключване и експорт</h3>
               <ul>
-                <li><strong>„Заключи графика“</strong> спира редакции за текущия месец.</li>
-                <li><strong>„Отключи графика“</strong> връща възможността за промени.</li>
+                <li><strong>„Заключи график“</strong> спира редакции за текущия месец.</li>
+                <li><strong>„Отключи“</strong> връща възможността за промени.</li>
                 <li>Експортите <strong>Excel</strong> и <strong>PDF</strong> генерират текущата таблица за отчет и архив.</li>
               </ul>
             </article>
