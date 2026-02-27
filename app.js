@@ -3481,6 +3481,8 @@ function calculateEmployeeTotals({ employee, summary, year, month, monthNormHour
     ? sirvTotals.overtimeHours
     : Math.max(0, summary.workedHours - monthNormHours);
 
+  const reportedWeekendWorkedHours = isSirvEmployee ? 0 : summary.weekendWorkedHours;
+
   return {
     workedDays: summary.workedDays,
     workedHours: summary.workedHours,
@@ -3490,7 +3492,7 @@ function calculateEmployeeTotals({ employee, summary, year, month, monthNormHour
     sirvWorkedHours: sirvTotals.convertedWorkedHours,
     overtimeHours,
     holidayWorkedHours: summary.holidayWorkedHours,
-    weekendWorkedHours: summary.weekendWorkedHours,
+    weekendWorkedHours: reportedWeekendWorkedHours,
     nightWorkedHours: summary.nightWorkedHours,
     nightConvertedHours: summary.nightConvertedHours,
     payableHours,
@@ -3718,7 +3720,7 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
       }
 
       const key = scheduleKey(employeeId, monthKey, day);
-      const rawShiftCode = state.schedule[key] || state.sirvSchedule[key] || 'P';
+      const rawShiftCode = state.sirvSchedule[key] || state.schedule[key] || 'P';
       const shiftCode = normalizeShiftCodeForApi(rawShiftCode);
       const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
       if (shift.type !== 'work') {
