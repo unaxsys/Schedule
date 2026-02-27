@@ -15,6 +15,13 @@ const {
   calcDayType,
   summarizeViolationStatus,
 } = require('./labor_rules');
+const {
+  computeEntryMetrics,
+  holidayResolverFactory,
+  validateScheduleEntry,
+  countBusinessDays,
+  dateAdd,
+} = require('./schedule_calculations');
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -87,20 +94,24 @@ function computeSystemShiftSnapshot(shiftCode, date) {
     const { isWeekend, isHoliday } = calcDayType(date);
     return {
       work_minutes: workMinutes,
+      work_minutes_total: workMinutes,
       night_minutes: 0,
       holiday_minutes: isHoliday ? workMinutes : 0,
       weekend_minutes: isWeekend ? workMinutes : 0,
       overtime_minutes: 0,
+      break_minutes_applied: 0,
     };
   }
 
   if (['P', 'O', 'B'].includes(normalized)) {
     return {
       work_minutes: 0,
+      work_minutes_total: 0,
       night_minutes: 0,
       holiday_minutes: 0,
       weekend_minutes: 0,
       overtime_minutes: 0,
+      break_minutes_applied: 0,
     };
   }
 
@@ -222,24 +233,44 @@ const SYSTEM_SHIFT_TEMPLATES = [
   { code: 'B', name: 'Болничен', start_time: '00:00', end_time: '00:00', hours: 0 },
 ];
 
-function isWeekendDate(dateText) {
-  const date = new Date(`${dateText}T00:00:00Z`);
-  const day = date.getUTCDay();
-  return day === 0 || day === 6;
+async function buildHolidayResolver() {
+  const hasHolidaysTable = await tableExists('holidays');
+  if (!hasHolidaysTable) {
+    return holidayResolverFactory(new Set());
+  }
+
+  const rows = await pool.query('SELECT date::text AS date FROM holidays');
+  const dates = new Set(rows.rows.map((row) => normalizeDateOnly(row.date)).filter(Boolean));
+  return holidayResolverFactory(dates);
 }
 
-function computeEntrySnapshot({ date, shift }) {
-  const workedHours = calcShiftDurationHours(shift.start_time, shift.end_time, shift.hours || 0);
-  const breakMinutes = Number(shift.break_minutes || 0);
-  const workMinutes = Math.max(0, Math.round(workedHours * 60) - breakMinutes);
-  const nightMinutes = Math.round(calcNightHours(shift.start_time, shift.end_time) * 60);
-  const isWeekend = isWeekendDate(date);
+function getSirvPeriodBounds(monthKey, periodMonths = 1) {
+  const [year, month] = String(monthKey || '').split('-').map(Number);
+  const totalMonths = Math.min(4, Math.max(1, Number(periodMonths) || 1));
+  const end = new Date(Date.UTC(year, month - 1, 1));
+  const start = new Date(Date.UTC(year, month - totalMonths, 1));
+  const periodStart = start.toISOString().slice(0, 10);
+  const periodEndDate = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() + 1, 0));
+  return { periodStart, periodEnd: periodEndDate.toISOString().slice(0, 10) };
+}
+
+async function computeEntrySnapshot({ date, shift, isHoliday, sirvEnabled = false, dailyNormMinutes = 480 }) {
+  const metrics = computeEntryMetrics({
+    dateISO: date,
+    shift,
+    isHoliday,
+    sirvEnabled,
+    dailyNormMinutes,
+  });
+
   return {
-    work_minutes: workMinutes,
-    night_minutes: nightMinutes,
-    holiday_minutes: 0,
-    weekend_minutes: isWeekend ? workMinutes : 0,
-    overtime_minutes: Math.max(0, workMinutes - 480),
+    work_minutes: metrics.work_minutes_total,
+    work_minutes_total: metrics.work_minutes_total,
+    night_minutes: metrics.night_minutes,
+    holiday_minutes: metrics.holiday_minutes,
+    weekend_minutes: metrics.weekend_minutes,
+    overtime_minutes: metrics.overtime_minutes,
+    break_minutes_applied: metrics.break_minutes_applied,
   };
 }
 
@@ -287,10 +318,10 @@ async function ensureDefaultShiftTemplatesForTenant(tenantId) {
   if (hasTenantId) {
     for (const shift of SYSTEM_SHIFT_TEMPLATES) {
       await pool.query(
-        `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, hours)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, break_minutes, break_included, is_sirv_shift, hours)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (tenant_id, code) WHERE department_id IS NULL DO NOTHING`,
-        [tenantId, shift.code, shift.name, shift.start_time, shift.end_time, shift.hours]
+        [tenantId, shift.code, shift.name, shift.start_time, shift.end_time, Number(shift.break_minutes || 0), Boolean(shift.break_included), shift.is_sirv_shift || null, shift.hours]
       );
     }
     return;
@@ -298,10 +329,10 @@ async function ensureDefaultShiftTemplatesForTenant(tenantId) {
 
   for (const shift of SYSTEM_SHIFT_TEMPLATES) {
     await pool.query(
-      `INSERT INTO shift_templates (code, name, start_time, end_time, hours)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO shift_templates (code, name, start_time, end_time, break_minutes, break_included, is_sirv_shift, hours)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (code) DO NOTHING`,
-      [shift.code, shift.name, shift.start_time, shift.end_time, shift.hours]
+      [shift.code, shift.name, shift.start_time, shift.end_time, Number(shift.break_minutes || 0), Boolean(shift.break_included), shift.is_sirv_shift || null, shift.hours]
     );
   }
 }
@@ -319,6 +350,9 @@ function appendSystemShiftTemplates(shiftTemplates = []) {
       start_time: template.start_time || template.start || '',
       end_time: template.end_time || template.end || '',
       hours: Number(template.hours || 0),
+      break_minutes: Number(template.break_minutes || 0),
+      break_included: Boolean(template.break_included),
+      is_sirv_shift: template.is_sirv_shift === undefined ? null : Boolean(template.is_sirv_shift),
     });
   }
 
@@ -917,6 +951,8 @@ async function initDatabase() {
       month_key TEXT NOT NULL CHECK (month_key ~ '^\d{4}-\d{2}$'),
       department TEXT NULL,
       status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'locked')),
+      sirv_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      sirv_period_months INTEGER NOT NULL DEFAULT 1,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
@@ -940,6 +976,9 @@ async function initDatabase() {
       name TEXT NOT NULL,
       start_time CHAR(5) NOT NULL,
       end_time CHAR(5) NOT NULL,
+      break_minutes INTEGER NOT NULL DEFAULT 0,
+      break_included BOOLEAN NOT NULL DEFAULT FALSE,
+      is_sirv_shift BOOLEAN NULL,
       hours NUMERIC(6,2) NOT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
@@ -987,13 +1026,20 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE departments ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
   await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
   await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS sirv_enabled BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS sirv_period_months INTEGER NOT NULL DEFAULT 1`);
   await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS id UUID`);
   await pool.query(`UPDATE shift_templates SET id = gen_random_uuid() WHERE id IS NULL`);
   await pool.query(`ALTER TABLE shift_templates ALTER COLUMN id SET DEFAULT gen_random_uuid()`);
   await pool.query(`ALTER TABLE shift_templates ALTER COLUMN id SET NOT NULL`);
   await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
   await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS break_minutes INTEGER NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS break_included BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS is_sirv_shift BOOLEAN NULL`);
   await pool.query(`ALTER TABLE schedule_entries ALTER COLUMN shift_code TYPE VARCHAR(16)`);
+  await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS work_minutes_total INTEGER NULL`);
+  await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS break_minutes_applied INTEGER NULL`);
   await pool.query(`ALTER TABLE audit_log ALTER COLUMN old_shift_code TYPE VARCHAR(16)`);
   await pool.query(`ALTER TABLE audit_log ALTER COLUMN new_shift_code TYPE VARCHAR(16)`);
 
@@ -1730,10 +1776,10 @@ app.post('/api/schedules', requireAuth, requireTenantContext, async (req, res) =
     }
 
     const created = await pool.query(
-      `INSERT INTO schedules (tenant_id, name, month_key, department, department_id, status)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, name, month_key, department, department_id, status, created_at`,
-      [actor.tenantId, name, monthKey, department, departmentResult.rows[0].id, 'draft']
+      `INSERT INTO schedules (tenant_id, name, month_key, department, department_id, status, sirv_enabled, sirv_period_months)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, name, month_key, department, department_id, status, sirv_enabled, sirv_period_months, created_at`,
+      [actor.tenantId, name, monthKey, department, departmentResult.rows[0].id, 'draft', Boolean(req.body?.sirv_enabled ?? false), [1,2,3,4].includes(Number(req.body?.sirv_period_months)) ? Number(req.body?.sirv_period_months) : 1]
     );
 
     res.status(201).json({
@@ -1777,7 +1823,10 @@ app.get('/api/schedules', requireAuth, requireTenantContext, async (req, res) =>
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const schedulesResult = await pool.query(
-      `SELECT id, name, month_key, department, department_id, status, created_at
+      `SELECT id, name, month_key, department, department_id, status,
+              COALESCE(sirv_enabled, FALSE) AS sirv_enabled,
+              COALESCE(sirv_period_months, 1) AS sirv_period_months,
+              created_at
        FROM schedules
        ${whereSql}
        ORDER BY created_at DESC`,
@@ -1800,7 +1849,9 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
     await ensureDefaultShiftTemplatesForTenant(req.tenantId);
 
     const scheduleResult = await pool.query(
-      `SELECT id, name, month_key, department, department_id, status, created_at
+      `SELECT id, name, month_key, department, department_id, status, created_at,
+              COALESCE(sirv_enabled, FALSE) AS sirv_enabled,
+              COALESCE(sirv_period_months, 1) AS sirv_period_months
        FROM schedules WHERE id = $1 AND tenant_id = $2`,
       [scheduleId, req.tenantId]
     );
@@ -1825,12 +1876,15 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
     );
 
     const hasWorkMinutes = await tableHasColumn('schedule_entries', 'work_minutes');
+    const hasWorkMinutesTotal = await tableHasColumn('schedule_entries', 'work_minutes_total');
+    const hasBreakMinutesApplied = await tableHasColumn('schedule_entries', 'break_minutes_applied');
     const entriesSelectExtras = hasWorkMinutes
       ? `, se.work_minutes AS "workMinutes",
+         COALESCE(se.work_minutes_total, se.work_minutes) AS "workMinutesTotal",
          se.night_minutes AS "nightMinutes",
          se.holiday_minutes AS "holidayMinutes",
          se.weekend_minutes AS "weekendMinutes",
-         se.overtime_minutes AS "overtimeMinutes"`
+         se.overtime_minutes AS "overtimeMinutes"${hasBreakMinutesApplied ? ', se.break_minutes_applied AS "breakMinutesApplied"' : ', NULL::integer AS "breakMinutesApplied"'}`
       : '';
     const entriesResult = await pool.query(
       `SELECT se.employee_id AS "employeeId", se.day, se.shift_code AS "shiftCode"${entriesSelectExtras}
@@ -1862,7 +1916,10 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
     res.json({
       schedule,
       employees: employeesResult.rows,
-      entries: entriesResult.rows,
+      entries: entriesResult.rows.map((entry) => ({
+        ...entry,
+        validation: { errors: [], warnings: [] },
+      })),
       shiftTemplates: appendSystemShiftTemplates(shiftTemplatesResult.rows),
     });
   } catch (error) {
@@ -1891,7 +1948,10 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     await ensureDefaultShiftTemplatesForTenant(req.tenantId);
 
     const scheduleResult = await pool.query(
-      `SELECT id, department, department_id, status, month_key FROM schedules WHERE id = $1 AND tenant_id = $2`,
+      `SELECT id, department, department_id, status, month_key,
+              COALESCE(sirv_enabled, FALSE) AS sirv_enabled,
+              COALESCE(sirv_period_months, 1) AS sirv_period_months
+       FROM schedules WHERE id = $1 AND tenant_id = $2`,
       [scheduleId, req.tenantId]
     );
 
@@ -2001,29 +2061,67 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     const hasHolidayMinutes = await tableHasColumn('schedule_entries', 'holiday_minutes');
     const hasWeekendMinutes = await tableHasColumn('schedule_entries', 'weekend_minutes');
     const hasOvertimeMinutes = await tableHasColumn('schedule_entries', 'overtime_minutes');
+    const hasWorkMinutesTotal = await tableHasColumn('schedule_entries', 'work_minutes_total');
+    const hasBreakMinutesApplied = await tableHasColumn('schedule_entries', 'break_minutes_applied');
     const hasShiftIdColumn = await tableHasColumn('schedule_entries', 'shift_id');
     const hasIsManualColumn = await tableHasColumn('schedule_entries', 'is_manual');
     const hasNotesColumn = await tableHasColumn('schedule_entries', 'notes');
     const hasUpdatedAtColumn = await tableHasColumn('schedule_entries', 'updated_at');
     const hasShiftTemplatesBreakMinutes = await tableHasColumn('shift_templates', 'break_minutes');
-    const shiftTemplatesSelect = `SELECT id, code, name, start_time, end_time, hours${hasShiftTemplatesBreakMinutes ? ', COALESCE(break_minutes, 0) AS break_minutes' : ', 0::integer AS break_minutes'} FROM shift_templates`;
+    const hasShiftTemplatesBreakIncluded = await tableHasColumn('shift_templates', 'break_included');
+    const hasShiftTemplatesSirvShift = await tableHasColumn('shift_templates', 'is_sirv_shift');
+    const shiftTemplatesSelect = `SELECT id, code, name, start_time, end_time, hours${hasShiftTemplatesBreakMinutes ? ', COALESCE(break_minutes, 0) AS break_minutes' : ', 0::integer AS break_minutes'}${hasShiftTemplatesBreakIncluded ? ', COALESCE(break_included, FALSE) AS break_included' : ', FALSE::boolean AS break_included'}${hasShiftTemplatesSirvShift ? ', is_sirv_shift' : ', NULL::boolean AS is_sirv_shift'} FROM shift_templates`;
 
+    const holidayResolver = await buildHolidayResolver();
     let snapshot = computeSystemShiftSnapshot(resolvedShiftCode, entryDate);
 
     const shiftTemplatesForCalcResult = snapshot
       ? { rows: [] }
       : await pool.query(`${shiftTemplatesSelect} ${shiftScope.whereSql}`, shiftScope.values);
 
-    if (!snapshot) {
-      const selectedShiftForSnapshot = appendSystemShiftTemplates(shiftTemplatesForCalcResult.rows).find((row) => {
+    const selectedShiftForSnapshot = snapshot
+      ? null
+      : (appendSystemShiftTemplates(shiftTemplatesForCalcResult.rows).find((row) => {
         if (resolvedShiftId) {
           return String(row.id) === String(resolvedShiftId);
         }
         return normalizeShiftCode(row.code) === resolvedShiftCode;
-      }) || { code: resolvedShiftCode, start_time: '00:00', end_time: '00:00', hours: 0, break_minutes: 0 };
+      }) || { code: resolvedShiftCode, start_time: '00:00', end_time: '00:00', hours: 0, break_minutes: 0, break_included: false });
 
-      snapshot = computeEntrySnapshot({ date: entryDate, shift: selectedShiftForSnapshot });
+    if (!snapshot) {
+      snapshot = await computeEntrySnapshot({
+        date: entryDate,
+        shift: selectedShiftForSnapshot,
+        isHoliday: holidayResolver,
+        sirvEnabled: Boolean(schedule.sirv_enabled),
+        dailyNormMinutes: Number(employee.workdayMinutes || 480),
+      });
     }
+
+    const previousDay = dateAdd(entryDate, -1);
+    const previousDayInt = Number(String(previousDay).slice(-2));
+    const prevEntryResult = await pool.query(
+      `SELECT se.shift_code, se.shift_id
+       FROM schedule_entries se
+       WHERE se.schedule_id = $1 AND se.employee_id = $2 AND se.day = $3
+       LIMIT 1`,
+      [scheduleId, employeeId, previousDayInt]
+    );
+    let validation = { errors: [], warnings: [] };
+    if (selectedShiftForSnapshot) {
+      let prevShiftEndAt = null;
+      if (prevEntryResult.rowCount) {
+        const prevCode = normalizeShiftCode(prevEntryResult.rows[0].shift_code);
+        const prevShift = appendSystemShiftTemplates(shiftTemplatesForCalcResult.rows).find((row) => normalizeShiftCode(row.code) === prevCode);
+        if (prevShift) {
+          const prevEnd = String(prevShift.end_time || prevShift.end || '00:00');
+          const [h, m] = prevEnd.split(':').map(Number);
+          prevShiftEndAt = h * 60 + m;
+        }
+      }
+      validation = validateScheduleEntry({ prevShiftEndAt, shift: selectedShiftForSnapshot });
+    }
+
     const isManual = Boolean(req.body?.is_manual ?? req.body?.isManual ?? false);
     const notes = cleanStr(req.body?.notes || '') || null;
 
@@ -2038,6 +2136,10 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       if (hasWorkMinutes) {
         columns.push('work_minutes');
         values.push(snapshot.work_minutes);
+      }
+      if (hasWorkMinutesTotal) {
+        columns.push('work_minutes_total');
+        values.push(snapshot.work_minutes_total ?? snapshot.work_minutes);
       }
       if (hasNightMinutes) {
         columns.push('night_minutes');
@@ -2054,6 +2156,10 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       if (hasOvertimeMinutes) {
         columns.push('overtime_minutes');
         values.push(snapshot.overtime_minutes);
+      }
+      if (hasBreakMinutesApplied) {
+        columns.push('break_minutes_applied');
+        values.push(snapshot.break_minutes_applied ?? 0);
       }
       if (hasIsManualColumn) {
         columns.push('is_manual');
@@ -2076,6 +2182,9 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       if (hasWorkMinutes) {
         updateAssignments.push('work_minutes = EXCLUDED.work_minutes');
       }
+      if (hasWorkMinutesTotal) {
+        updateAssignments.push('work_minutes_total = EXCLUDED.work_minutes_total');
+      }
       if (hasNightMinutes) {
         updateAssignments.push('night_minutes = EXCLUDED.night_minutes');
       }
@@ -2087,6 +2196,9 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       }
       if (hasOvertimeMinutes) {
         updateAssignments.push('overtime_minutes = EXCLUDED.overtime_minutes');
+      }
+      if (hasBreakMinutesApplied) {
+        updateAssignments.push('break_minutes_applied = EXCLUDED.break_minutes_applied');
       }
       if (hasIsManualColumn) {
         updateAssignments.push('is_manual = EXCLUDED.is_manual');
@@ -2173,8 +2285,11 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       holidayMinutes: snapshot.holiday_minutes,
       weekendMinutes: snapshot.weekend_minutes,
       overtimeMinutes: snapshot.overtime_minutes,
+      workMinutesTotal: snapshot.work_minutes_total ?? snapshot.work_minutes,
+      breakMinutesApplied: snapshot.break_minutes_applied ?? 0,
       isManual,
       notes,
+      validation,
     };
 
     await insertAuditLog('set_shift', 'schedule_entry', {
@@ -2216,8 +2331,12 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       rowSummary,
       scheduleSummary,
       validation: {
-        status: validationStatus,
-        message: validationStatus === 'error' ? 'Нарушени са ограниченията за СИРВ/почивки. Коригирайте смяната.' : (validationStatus === 'warning' ? 'Има предупреждения в трудовите ограничения.' : 'OK'),
+        status: validation.errors.length ? 'error' : (validation.warnings.length ? 'warning' : validationStatus),
+        message: validation.errors.length
+          ? 'Има критични нарушения в смяната.'
+          : (validation.warnings.length ? 'Има предупреждения по трудови правила.' : (validationStatus === 'error' ? 'Нарушени са ограниченията за СИРВ/почивки. Коригирайте смяната.' : (validationStatus === 'warning' ? 'Има предупреждения в трудовите ограничения.' : 'OK'))),
+        errors: validation.errors,
+        warnings: validation.warnings,
         violations: rowSummary.violations || [],
       },
     });
@@ -2232,6 +2351,11 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
   const start = cleanStr(req.body?.start);
   const end = cleanStr(req.body?.end);
   const hours = Number(req.body?.hours);
+  const breakMinutes = Math.max(0, Number(req.body?.break_minutes ?? req.body?.breakMinutes ?? 0));
+  const breakIncluded = Boolean(req.body?.break_included ?? req.body?.breakIncluded ?? false);
+  const isSirvShift = req.body?.is_sirv_shift === undefined && req.body?.isSirvShift === undefined
+    ? null
+    : Boolean(req.body?.is_sirv_shift ?? req.body?.isSirvShift);
   const departmentIdRaw = req.body?.department_id ?? req.body?.departmentId;
   const departmentId = departmentIdRaw === null || departmentIdRaw === '' ? null : cleanStr(departmentIdRaw);
 
@@ -2261,53 +2385,62 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
       if (hasDepartmentId) {
         if (departmentId) {
           await pool.query(
-            `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, hours)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, break_minutes, break_included, is_sirv_shift, hours)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              ON CONFLICT (tenant_id, department_id, code) WHERE department_id IS NOT NULL
              DO UPDATE SET
                name = EXCLUDED.name,
                start_time = EXCLUDED.start_time,
                end_time = EXCLUDED.end_time,
+               break_minutes = EXCLUDED.break_minutes,
+               break_included = EXCLUDED.break_included,
+               is_sirv_shift = EXCLUDED.is_sirv_shift,
                hours = EXCLUDED.hours`,
-            [req.tenantId, departmentId, code, name, start, end, hours]
+            [req.tenantId, departmentId, code, name, start, end, breakMinutes, breakIncluded, isSirvShift, hours]
           );
         } else {
           await pool.query(
-            `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, hours)
-             VALUES ($1, NULL, $2, $3, $4, $5, $6)
+            `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, break_minutes, break_included, is_sirv_shift, hours)
+             VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9)
              ON CONFLICT (tenant_id, code) WHERE department_id IS NULL
              DO UPDATE SET
                name = EXCLUDED.name,
                start_time = EXCLUDED.start_time,
                end_time = EXCLUDED.end_time,
+               break_minutes = EXCLUDED.break_minutes,
+               break_included = EXCLUDED.break_included,
+               is_sirv_shift = EXCLUDED.is_sirv_shift,
                hours = EXCLUDED.hours`,
-            [req.tenantId, code, name, start, end, hours]
+            [req.tenantId, code, name, start, end, breakMinutes, breakIncluded, isSirvShift, hours]
           );
         }
       } else {
         await pool.query(
-          `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, hours)
-           VALUES ($1, $2, $3, $4, $5, $6)
+          `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, break_minutes, break_included, is_sirv_shift, hours)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            ON CONFLICT (tenant_id, code)
            DO UPDATE SET
              name = EXCLUDED.name,
              start_time = EXCLUDED.start_time,
              end_time = EXCLUDED.end_time,
+             break_minutes = EXCLUDED.break_minutes,
+             break_included = EXCLUDED.break_included,
+             is_sirv_shift = EXCLUDED.is_sirv_shift,
              hours = EXCLUDED.hours`,
-          [req.tenantId, code, name, start, end, hours]
+          [req.tenantId, code, name, start, end, breakMinutes, breakIncluded, isSirvShift, hours]
         );
       }
     } else {
       await pool.query(
-        `INSERT INTO shift_templates (code, name, start_time, end_time, hours)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO shift_templates (code, name, start_time, end_time, break_minutes, break_included, is_sirv_shift, hours)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (code)
          DO UPDATE SET
            name = EXCLUDED.name,
            start_time = EXCLUDED.start_time,
            end_time = EXCLUDED.end_time,
            hours = EXCLUDED.hours`,
-        [code, name, start, end, hours]
+        [code, name, start, end, breakMinutes, breakIncluded, isSirvShift, hours]
       );
     }
 
@@ -3444,6 +3577,84 @@ app.use((error, req, res, next) => {
   return res.status(status).json({ message });
 });
 
+
+app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (req, res) => {
+  const scheduleId = req.params.id;
+  const period = cleanStr(req.query?.period || 'month').toLowerCase();
+  if (!isValidUuid(scheduleId)) {
+    return res.status(400).json({ message: 'Невалиден schedule id.' });
+  }
+  if (!['month', 'sirv'].includes(period)) {
+    return res.status(400).json({ message: 'period трябва да е month|sirv.' });
+  }
+
+  try {
+    const scheduleResult = await pool.query(
+      `SELECT id, month_key, status, COALESCE(sirv_enabled, FALSE) AS sirv_enabled, COALESCE(sirv_period_months, 1) AS sirv_period_months
+       FROM schedules
+       WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId]
+    );
+    if (!scheduleResult.rowCount) {
+      return res.status(404).json({ message: 'Графикът не е намерен.' });
+    }
+    const schedule = scheduleResult.rows[0];
+
+    const sumMonth = await pool.query(
+      `SELECT COALESCE(SUM(COALESCE(work_minutes_total, work_minutes, 0)),0)::int AS total_work,
+              COALESCE(SUM(COALESCE(night_minutes, 0)),0)::int AS night,
+              COALESCE(SUM(COALESCE(weekend_minutes, 0)),0)::int AS weekend,
+              COALESCE(SUM(COALESCE(holiday_minutes, 0)),0)::int AS holiday,
+              COALESCE(SUM(COALESCE(overtime_minutes, 0)),0)::int AS overtime
+       FROM schedule_entries
+       WHERE schedule_id = $1`,
+      [scheduleId]
+    );
+
+    const totals = sumMonth.rows[0];
+    if (period === 'month' || !schedule.sirv_enabled) {
+      return res.json({ ok: true, period: 'month', totals, overtime_mode: 'daily' });
+    }
+
+    const bounds = getSirvPeriodBounds(schedule.month_key, schedule.sirv_period_months);
+    const periodScheduleIds = await pool.query(
+      `SELECT id FROM schedules
+       WHERE tenant_id = $1 AND month_key >= $2 AND month_key <= $3`,
+      [req.tenantId, bounds.periodStart.slice(0, 7), bounds.periodEnd.slice(0, 7)]
+    );
+    const ids = periodScheduleIds.rows.map((r) => r.id);
+    const periodWorkedResult = ids.length
+      ? await pool.query(
+        `SELECT COALESCE(SUM(COALESCE(work_minutes_total, work_minutes, 0)), 0)::int AS worked
+         FROM schedule_entries
+         WHERE schedule_id = ANY($1::uuid[])`,
+        [ids]
+      )
+      : { rows: [{ worked: 0 }] };
+
+    const holidayResolver = await buildHolidayResolver();
+    const businessDays = countBusinessDays(bounds.periodStart, bounds.periodEnd, holidayResolver);
+    const periodNorm = businessDays * 480;
+    const overtimePeriod = Math.max(0, Number(periodWorkedResult.rows[0].worked || 0) - periodNorm);
+
+    return res.json({
+      ok: true,
+      period: 'sirv',
+      period_start: bounds.periodStart,
+      period_end: bounds.periodEnd,
+      totals: {
+        ...totals,
+        overtime_estimated: schedule.status === 'locked' ? undefined : overtimePeriod,
+        overtime_final: schedule.status === 'locked' ? overtimePeriod : undefined,
+      },
+      sirv_enabled: true,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+
 initDatabase()
   .then(() => {
     app.listen(port, () => {
@@ -3470,6 +3681,76 @@ app.post('/api/schedules/:id/lock', requireAuth, requireTenantContext, async (re
     );
     if (!result.rowCount) {
       return res.status(409).json({ message: 'Графикът е вече заключен или липсва.' });
+    }
+
+    const scheduleMetaResult = await pool.query(
+      `SELECT month_key, COALESCE(sirv_enabled, FALSE) AS sirv_enabled, COALESCE(sirv_period_months,1) AS sirv_period_months
+       FROM schedules
+       WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId]
+    );
+    const scheduleMeta = scheduleMetaResult.rows[0] || null;
+    if (scheduleMeta?.sirv_enabled) {
+      const bounds = getSirvPeriodBounds(scheduleMeta.month_key, scheduleMeta.sirv_period_months);
+      const scheduleIdsRes = await pool.query(
+        `SELECT id FROM schedules WHERE tenant_id = $1 AND month_key >= $2 AND month_key <= $3`,
+        [req.tenantId, bounds.periodStart.slice(0, 7), bounds.periodEnd.slice(0, 7)]
+      );
+      const scopeIds = scheduleIdsRes.rows.map((r) => r.id);
+      const rowsRes = scopeIds.length
+        ? await pool.query(
+          `SELECT se.schedule_id, se.employee_id, se.day, s.month_key,
+                  COALESCE(se.work_minutes_total, se.work_minutes, 0)::int AS work_minutes_total
+           FROM schedule_entries se
+           JOIN schedules s ON s.id = se.schedule_id
+           WHERE se.schedule_id = ANY($1::uuid[])
+           ORDER BY se.employee_id, s.month_key, se.day`,
+          [scopeIds]
+        )
+        : { rows: [] };
+
+      const holidayResolver = await buildHolidayResolver();
+      const businessDays = countBusinessDays(bounds.periodStart, bounds.periodEnd, holidayResolver);
+      const periodNorm = businessDays * 480;
+
+      const byEmployee = new Map();
+      for (const row of rowsRes.rows) {
+        const key = String(row.employee_id);
+        if (!byEmployee.has(key)) byEmployee.set(key, []);
+        byEmployee.get(key).push(row);
+      }
+
+      for (const [, entries] of byEmployee.entries()) {
+        const worked = entries.reduce((acc, r) => acc + Number(r.work_minutes_total || 0), 0);
+        let remaining = Math.max(0, worked - periodNorm);
+        const updates = [];
+
+        const dailyCandidate = new Map(entries.map((e) => [`${e.schedule_id}|${e.employee_id}|${e.day}`, Math.max(0, Number(e.work_minutes_total || 0) - 480)]));
+        for (let i = entries.length - 1; i >= 0; i -= 1) {
+          const e = entries[i];
+          const key = `${e.schedule_id}|${e.employee_id}|${e.day}`;
+          const candidate = dailyCandidate.get(key) || 0;
+          const assigned = Math.min(remaining, candidate);
+          updates.push({ ...e, overtime: assigned });
+          remaining -= assigned;
+        }
+        if (remaining > 0) {
+          for (let i = 0; i < updates.length && remaining > 0; i += 1) {
+            const extra = Math.min(remaining, Number(updates[i].work_minutes_total || 0));
+            updates[i].overtime += extra;
+            remaining -= extra;
+          }
+        }
+
+        for (const up of updates) {
+          await pool.query(
+            `UPDATE schedule_entries
+             SET overtime_minutes = $1
+             WHERE schedule_id = $2 AND employee_id = $3 AND day = $4`,
+            [up.overtime, up.schedule_id, up.employee_id, up.day]
+          );
+        }
+      }
     }
 
     await insertAuditLog('lock_schedule', 'schedule', {

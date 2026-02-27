@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "check": "node --check app.js && node --check server.js"
+    "check": "node --check app.js && node --check server.js",
+    "test": "node --test schedule_calculations.test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
