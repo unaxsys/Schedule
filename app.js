@@ -5080,17 +5080,36 @@ function detectApiBaseUrl() {
     return normalizeApiBaseUrl(window.__API_BASE_URL__);
   }
 
-  const sameOrigin = window.location.origin;
-  const sameHost4000 = `${window.location.protocol}//${window.location.hostname}:4000`;
-
-  return normalizeApiBaseUrl(window.location.port === '4000' ? sameOrigin : sameHost4000);
+  // Prefer same-origin first (reverse proxy deployments), and let reconnect fallback
+  // logic try host:4000 if needed.
+  return normalizeApiBaseUrl(window.location.origin);
 }
 
 function normalizeApiBaseUrl(url) {
   if (!url) {
     return window.location.origin;
   }
-  return url.replace(/\/$/, '');
+  return String(url).replace(/\/$/, '');
+}
+
+function buildApiUrl(baseUrl, path) {
+  const normalizedBase = normalizeApiBaseUrl(baseUrl);
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  return `${normalizedBase}${path}`;
+}
+
+function syncApiBaseUrl(baseUrl) {
+  const normalized = normalizeApiBaseUrl(baseUrl);
+  if (state.apiBaseUrl === normalized) {
+    return;
+  }
+  state.apiBaseUrl = normalized;
+  localStorage.setItem('apiBaseUrl', normalized);
+  if (apiUrlInput) {
+    apiUrlInput.value = normalized;
+  }
 }
 
 async function apiFetch(path, options = {}) {
@@ -5102,17 +5121,41 @@ async function apiFetch(path, options = {}) {
 
   let response;
   try {
-    response = await fetch(`${state.apiBaseUrl}${path}`, {
+    response = await fetch(buildApiUrl(state.apiBaseUrl, path), {
       ...options,
       headers
     });
     updateBackendConnectionIndicator(true, 'Свързан към сървъра');
     state.lastConnectionErrorSignature = '';
   } catch (error) {
-    updateBackendConnectionIndicator(false, getReadableConnectionError(error));
-    pushConnectionLogEntry(error, { source: `apiFetch:${path}` });
-    scheduleReconnect();
-    throw error;
+    const sameOriginBase = normalizeApiBaseUrl(window.location.origin);
+    const fallback4000 = normalizeApiBaseUrl(`${window.location.protocol}//${window.location.hostname}:4000`);
+    const triedBase = normalizeApiBaseUrl(state.apiBaseUrl);
+    const fallbackCandidates = [sameOriginBase, fallback4000].filter((candidate, idx, arr) => candidate !== triedBase && arr.indexOf(candidate) === idx);
+
+    let recovered = false;
+    for (const fallbackBase of fallbackCandidates) {
+      try {
+        response = await fetch(buildApiUrl(fallbackBase, path), {
+          ...options,
+          headers
+        });
+        syncApiBaseUrl(fallbackBase);
+        updateBackendConnectionIndicator(true, `Свързан към сървъра (${fallbackBase})`);
+        setStatus(`Автоматично превключване към API: ${fallbackBase}`, true);
+        recovered = true;
+        break;
+      } catch (_fallbackError) {
+        // continue to next fallback candidate
+      }
+    }
+
+    if (!recovered) {
+      updateBackendConnectionIndicator(false, getReadableConnectionError(error));
+      pushConnectionLogEntry(error, { source: `apiFetch:${path}` });
+      scheduleReconnect();
+      throw error;
+    }
   }
 
   if (response.status === 401 && state.authToken && !state.isHandlingUnauthorized) {
