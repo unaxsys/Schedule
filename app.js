@@ -43,6 +43,7 @@ const state = {
   employees: [],
   scheduleEmployees: [],
   schedule: {},
+  sirvSchedule: {},
   scheduleEntriesById: {},
   scheduleEntrySnapshotsById: {},
   schedules: [],
@@ -3714,7 +3715,8 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
         totals.normHours += 8;
       }
 
-      const shiftCode = state.schedule[scheduleKey(employeeId, monthKey, day)] || 'P';
+      const key = scheduleKey(employeeId, monthKey, day);
+      const shiftCode = state.schedule[key] || state.sirvSchedule[key] || 'P';
       const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
       if (shift.type !== 'work') {
         continue;
@@ -4112,6 +4114,56 @@ async function fetchScheduleDetails(scheduleId) {
   return response.json();
 }
 
+
+async function buildSirvScheduleCache(referenceMonth, employees) {
+  const sirvEmployees = (employees || []).filter((employee) => Boolean(employee?.isSirv));
+  if (!sirvEmployees.length) {
+    return {};
+  }
+
+  const maxPeriod = Math.max(...sirvEmployees.map((employee) => Number(employee?.sirvPeriodMonths || 1) || 1));
+  const months = getPeriodMonths(referenceMonth, maxPeriod);
+  const sirvEmployeeIds = new Set(sirvEmployees.map((employee) => employee.id));
+  const cache = {};
+
+  for (const monthKey of months) {
+    const schedulesResponse = await apiFetch(`/api/schedules?month=${encodeURIComponent(monthKey)}`);
+    if (!schedulesResponse.ok) {
+      continue;
+    }
+
+    const schedulesPayload = await schedulesResponse.json();
+    const schedules = Array.isArray(schedulesPayload.schedules) ? schedulesPayload.schedules : [];
+    if (!schedules.length) {
+      continue;
+    }
+
+    const details = await Promise.all(schedules.map(async (schedule) => {
+      try {
+        return await fetchScheduleDetails(schedule.id);
+      } catch {
+        return null;
+      }
+    }));
+
+    details.forEach((detail) => {
+      if (!detail) {
+        return;
+      }
+
+      const detailMonth = cleanStoredValue(detail.schedule?.month_key) || monthKey;
+      (detail.entries || []).forEach((entry) => {
+        if (!sirvEmployeeIds.has(entry.employeeId)) {
+          return;
+        }
+        cache[scheduleKey(entry.employeeId, detailMonth, entry.day)] = entry.shiftCode;
+      });
+    });
+  }
+
+  return cache;
+}
+
 async function refreshMonthlyView() {
   if (!state.backendAvailable) {
     return;
@@ -4130,6 +4182,7 @@ async function refreshMonthlyView() {
   const allowedEmployees = Array.isArray(employeePayload.employees) ? employeePayload.employees : [];
   const allowedIds = new Set(allowedEmployees.map((employee) => employee.id));
   state.employees = allowedEmployees.map(normalizeEmployeeVacationData);
+  state.sirvSchedule = await buildSirvScheduleCache(month, state.employees);
 
   if (!state.selectedScheduleIds.length) {
     state.scheduleEmployees = [];
