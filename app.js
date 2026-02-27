@@ -82,7 +82,10 @@ const state = {
   backendConnectionOnline: null,
   backendReconnectInFlight: false,
   pendingConnectionLogs: loadPendingConnectionLogs(),
-  lastConnectionErrorSignature: ''
+  lastConnectionErrorSignature: '',
+  leaveTypes: [],
+  leaves: [],
+  leavesByEmployeeDay: {}
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -158,6 +161,13 @@ const unlockScheduleBtn = document.getElementById('unlockScheduleBtn');
 const exportExcelBtn = document.getElementById('exportExcelBtn');
 const exportPdfBtn = document.getElementById('exportPdfBtn');
 const lockStatus = document.getElementById('lockStatus');
+const leaveEmployeeSelect = document.getElementById('leaveEmployeeSelect');
+const leaveTypeSelect = document.getElementById('leaveTypeSelect');
+const leaveFromInput = document.getElementById('leaveFromInput');
+const leaveToInput = document.getElementById('leaveToInput');
+const leaveMinutesInput = document.getElementById('leaveMinutesInput');
+const addLeaveBtn = document.getElementById('addLeaveBtn');
+const leaveList = document.getElementById('leaveList');
 const summarySettingsList = document.getElementById('summarySettingsList');
 const settingsSubtabButtons = document.querySelectorAll('.settings-subtab-btn');
 const settingsSubtabPanels = document.querySelectorAll('.settings-subtab-panel');
@@ -329,6 +339,7 @@ async function init() {
   attachVacationFilters();
   attachVacationCorrectionModalControls();
   attachVacationDateValidationControls();
+  attachLeavesControls();
   attachShiftForm();
   attachLockAndExport();
   attachSettingsControls();
@@ -361,12 +372,15 @@ async function init() {
 
 function normalizeUserRole(value) {
   const normalized = String(value || '').trim().toLowerCase();
-  return ['user', 'manager', 'admin', 'super_admin'].includes(normalized) ? normalized : 'user';
+  return ['user', 'manager', 'admin', 'owner', 'super_admin'].includes(normalized) ? normalized : 'user';
 }
 
 function getRoleLabel(role) {
   if (role === 'admin') {
     return 'Администратор';
+  }
+  if (role === 'owner') {
+    return 'Собственик';
   }
   if (role === 'manager') {
     return 'Мениджър';
@@ -378,11 +392,11 @@ function getRoleLabel(role) {
 }
 
 function canDeleteEmployees() {
-  return state.userRole === 'admin';
+  return state.userRole === 'admin' || state.userRole === 'owner';
 }
 
 function canManageVacationCorrections() {
-  return state.userRole === 'manager' || state.userRole === 'admin';
+  return state.userRole === 'manager' || state.userRole === 'admin' || state.userRole === 'owner';
 }
 
 
@@ -2324,6 +2338,7 @@ function renderAll() {
   renderEmployees();
   renderSchedule();
   renderVacationEmployeeOptions();
+  renderLeavesPanel();
   renderVacationDepartmentFilterOptions();
   renderVacationLedger();
   renderPlatformUserEmployeeOptions();
@@ -2392,6 +2407,9 @@ function roleLabelForPlatform(role) {
   }
   if (role === 'admin') {
     return 'Администратор';
+  }
+  if (role === 'owner') {
+    return 'Собственик';
   }
   if (role === 'manager') {
     return 'Мениджър';
@@ -2928,6 +2946,90 @@ function renderVacationEmployeeOptions() {
   });
 }
 
+
+
+function renderLeavesPanel() {
+  if (!leaveEmployeeSelect || !leaveTypeSelect || !leaveList) {
+    return;
+  }
+
+  const employees = getVacationLedgerFilteredEmployees();
+  leaveEmployeeSelect.innerHTML = employees.map((employee) => `<option value="${employee.id}">${employee.name}</option>`).join('') || '<option value="">Няма служители</option>';
+  leaveTypeSelect.innerHTML = (state.leaveTypes || []).map((type) => `<option value="${type.id}">${type.name}</option>`).join('') || '<option value="">Няма типове</option>';
+
+  const canManage = canManageLeaves();
+  [leaveEmployeeSelect, leaveTypeSelect, leaveFromInput, leaveToInput, leaveMinutesInput, addLeaveBtn].forEach((el) => {
+    if (el) {
+      el.disabled = !canManage;
+    }
+  });
+
+  const month = state.month || todayMonth();
+  const rows = (state.leaves || []).filter((leave) => String(leave.date_from || '').startsWith(month) || String(leave.date_to || '').startsWith(month));
+  if (!rows.length) {
+    leaveList.innerHTML = '<small>Няма отсъствия за избрания месец.</small>';
+    return;
+  }
+
+  leaveList.innerHTML = rows.map((leave) => {
+    const employee = state.employees.find((entry) => entry.id === leave.employee_id);
+    const canDelete = canManage ? `<button type="button" class="btn-delete leave-delete-btn" data-leave-id="${leave.id}">Изтрий</button>` : '';
+    return `<div class="schedule-list-item"><strong>${employee?.name || leave.employee_id}</strong> • ${leave.leave_type?.name || leave.leave_type_name || leave.leave_type_code || 'Отсъствие'} • ${leave.date_from} → ${leave.date_to} ${canDelete}</div>`;
+  }).join('');
+
+  leaveList.querySelectorAll('.leave-delete-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        const response = await apiFetch(`/api/leaves/${btn.dataset.leaveId}`, { method: 'DELETE' });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.message || 'Неуспешно изтриване');
+        }
+        await refreshMonthlyView();
+        renderAll();
+      } catch (error) {
+        setStatus(error.message, false);
+      }
+    });
+  });
+}
+
+function attachLeavesControls() {
+  if (!addLeaveBtn) {
+    return;
+  }
+
+  addLeaveBtn.addEventListener('click', async () => {
+    if (!canManageLeaves()) {
+      setStatus('Нямате права за добавяне на отсъствия.', false);
+      return;
+    }
+    const body = {
+      employee_id: leaveEmployeeSelect.value,
+      leave_type_id: Number(leaveTypeSelect.value),
+      date_from: leaveFromInput.value,
+      date_to: leaveToInput.value,
+      minutes_per_day: leaveMinutesInput.value ? Number(leaveMinutesInput.value) : null,
+    };
+
+    try {
+      const response = await apiFetch('/api/leaves', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.message || 'Неуспешно добавяне на отсъствие');
+      }
+      await refreshMonthlyView();
+      renderAll();
+      setStatus('Отсъствието е добавено.', true);
+    } catch (error) {
+      setStatus(error.message, false);
+    }
+  });
+}
 
 function attachVacationDateValidationControls() {
   vacationStartInput?.addEventListener('input', () => {
@@ -3559,6 +3661,8 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       cell.classList.add('day-weekend');
     }
 
+    const leave = getLeaveForCell(employee.id, month, day);
+
     const select = document.createElement('select');
     select.className = 'shift-select';
     if (!inEmployment) {
@@ -3566,6 +3670,9 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       select.classList.add('shift-select--inactive');
     }
     select.disabled = monthLocked || !inEmployment;
+    if (leave) {
+      select.title = 'Има отсъствие за деня. Смяната може да се редактира, но отсъствието остава активно.';
+    }
 
     const scheduleId = getEmployeeScheduleId(employee);
     const scopedShiftTemplates = scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
@@ -3621,6 +3728,16 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       overtimeBadge.title = `Извънредни: ${minutesToHoursDecimal(entrySnapshot?.overtimeMinutes)} ч`;
       cell.classList.add('day-overtime');
       cell.appendChild(overtimeBadge);
+    }
+
+    if (leave?.leave_type_code || leave?.leave_type?.code) {
+      const leaveCode = String(leave.leave_type_code || leave.leave_type?.code || '').toUpperCase();
+      const leaveName = leave.leave_type_name || leave.leave_type?.name || 'Отсъствие';
+      const leaveBadge = document.createElement('span');
+      leaveBadge.className = `cell-leave-badge ${leaveCode === 'SICK' ? 'cell-leave-badge--sick' : ''}`.trim();
+      leaveBadge.textContent = getLeaveBadgeLabel({ code: leaveCode, name: leaveName });
+      leaveBadge.title = leaveName;
+      cell.appendChild(leaveBadge);
     }
 
     row.appendChild(cell);
@@ -4376,17 +4493,36 @@ function detectApiBaseUrl() {
     return normalizeApiBaseUrl(window.__API_BASE_URL__);
   }
 
-  const sameOrigin = window.location.origin;
-  const sameHost4000 = `${window.location.protocol}//${window.location.hostname}:4000`;
-
-  return normalizeApiBaseUrl(window.location.port === '4000' ? sameOrigin : sameHost4000);
+  // Prefer same-origin first (reverse proxy deployments), and let reconnect fallback
+  // logic try host:4000 if needed.
+  return normalizeApiBaseUrl(window.location.origin);
 }
 
 function normalizeApiBaseUrl(url) {
   if (!url) {
     return window.location.origin;
   }
-  return url.replace(/\/$/, '');
+  return String(url).replace(/\/$/, '');
+}
+
+function buildApiUrl(baseUrl, path) {
+  const normalizedBase = normalizeApiBaseUrl(baseUrl);
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  return `${normalizedBase}${path}`;
+}
+
+function syncApiBaseUrl(baseUrl) {
+  const normalized = normalizeApiBaseUrl(baseUrl);
+  if (state.apiBaseUrl === normalized) {
+    return;
+  }
+  state.apiBaseUrl = normalized;
+  localStorage.setItem('apiBaseUrl', normalized);
+  if (apiUrlInput) {
+    apiUrlInput.value = normalized;
+  }
 }
 
 async function apiFetch(path, options = {}) {
@@ -4398,17 +4534,41 @@ async function apiFetch(path, options = {}) {
 
   let response;
   try {
-    response = await fetch(`${state.apiBaseUrl}${path}`, {
+    response = await fetch(buildApiUrl(state.apiBaseUrl, path), {
       ...options,
       headers
     });
     updateBackendConnectionIndicator(true, 'Свързан към сървъра');
     state.lastConnectionErrorSignature = '';
   } catch (error) {
-    updateBackendConnectionIndicator(false, getReadableConnectionError(error));
-    pushConnectionLogEntry(error, { source: `apiFetch:${path}` });
-    scheduleReconnect();
-    throw error;
+    const sameOriginBase = normalizeApiBaseUrl(window.location.origin);
+    const fallback4000 = normalizeApiBaseUrl(`${window.location.protocol}//${window.location.hostname}:4000`);
+    const triedBase = normalizeApiBaseUrl(state.apiBaseUrl);
+    const fallbackCandidates = [sameOriginBase, fallback4000].filter((candidate, idx, arr) => candidate !== triedBase && arr.indexOf(candidate) === idx);
+
+    let recovered = false;
+    for (const fallbackBase of fallbackCandidates) {
+      try {
+        response = await fetch(buildApiUrl(fallbackBase, path), {
+          ...options,
+          headers
+        });
+        syncApiBaseUrl(fallbackBase);
+        updateBackendConnectionIndicator(true, `Свързан към сървъра (${fallbackBase})`);
+        setStatus(`Автоматично превключване към API: ${fallbackBase}`, true);
+        recovered = true;
+        break;
+      } catch (_fallbackError) {
+        // continue to next fallback candidate
+      }
+    }
+
+    if (!recovered) {
+      updateBackendConnectionIndicator(false, getReadableConnectionError(error));
+      pushConnectionLogEntry(error, { source: `apiFetch:${path}` });
+      scheduleReconnect();
+      throw error;
+    }
   }
 
   if (response.status === 401 && state.authToken && !state.isHandlingUnauthorized) {
@@ -4560,6 +4720,32 @@ async function refreshMonthlyView() {
   const allowedIds = new Set(allowedEmployees.map((employee) => employee.id));
   state.employees = allowedEmployees.map(normalizeEmployeeVacationData);
   state.sirvSchedule = await buildSirvScheduleCache(month, state.employees);
+
+  try {
+    const leaveTypesResponse = await apiFetch('/api/leaves/types');
+    if (leaveTypesResponse.ok) {
+      const leaveTypesPayload = await leaveTypesResponse.json();
+      state.leaveTypes = Array.isArray(leaveTypesPayload.leave_types) ? leaveTypesPayload.leave_types : [];
+    }
+  } catch {
+    state.leaveTypes = [];
+  }
+
+  try {
+    const leaveQuery = new URLSearchParams({ month });
+    if (singleDepartmentFilter) {
+      leaveQuery.set('department_id', singleDepartmentFilter);
+    }
+    const leavesResponse = await apiFetch(`/api/leaves?${leaveQuery.toString()}`);
+    if (leavesResponse.ok) {
+      const leavesPayload = await leavesResponse.json();
+      state.leaves = Array.isArray(leavesPayload.leaves) ? leavesPayload.leaves : [];
+      rebuildLeavesIndex();
+    }
+  } catch {
+    state.leaves = [];
+    rebuildLeavesIndex();
+  }
 
   if (!state.selectedScheduleIds.length) {
     state.scheduleEmployees = [];
@@ -5086,6 +5272,51 @@ function normalizeEmployeeVacationData(employee) {
 
 function scheduleKey(employeeId, month, day) {
   return `${employeeId}|${month}|${day}`;
+}
+
+function enumerateLeaveDays(dateFrom, dateTo) {
+  if (!dateFrom || !dateTo || dateFrom > dateTo) {
+    return [];
+  }
+  const result = [];
+  const current = new Date(`${dateFrom}T00:00:00.000Z`);
+  const end = new Date(`${dateTo}T00:00:00.000Z`);
+  while (current <= end) {
+    result.push(current.toISOString().slice(0, 10));
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return result;
+}
+
+function getLeaveBadgeLabel(leaveType) {
+  const code = String(leaveType?.code || '').toUpperCase();
+  if (code === 'SICK') {
+    return 'Б';
+  }
+  return String(leaveType?.name || code || 'L').slice(0, 2).toUpperCase();
+}
+
+function rebuildLeavesIndex() {
+  const byDay = {};
+  (state.leaves || []).forEach((leave) => {
+    const employeeId = String(leave.employee_id || '');
+    if (!employeeId) {
+      return;
+    }
+    enumerateLeaveDays(leave.date_from, leave.date_to).forEach((day) => {
+      byDay[`${employeeId}|${day}`] = leave;
+    });
+  });
+  state.leavesByEmployeeDay = byDay;
+}
+
+function getLeaveForCell(employeeId, month, day) {
+  const dateKey = `${month}-${String(day).padStart(2, '0')}`;
+  return state.leavesByEmployeeDay[`${employeeId}|${dateKey}`] || null;
+}
+
+function canManageLeaves() {
+  return ['owner', 'admin', 'manager', 'super_admin'].includes(state.userRole);
 }
 
 function persistEmployeesLocal() {

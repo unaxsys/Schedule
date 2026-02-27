@@ -88,6 +88,7 @@
           <option value="user">Потребител</option>
           <option value="manager">Мениджър</option>
           <option value="admin">Администратор</option>
+          <option value="owner">Собственик</option>
           <option value="super_admin">Супер администратор</option>
         </select>
         <a id="superAdminPortalLink" href="super-admin.html" target="_blank" class="super-admin-link hidden">Супер админ панел</a>
@@ -160,6 +161,18 @@
             <button id="exportExcelBtn" type="button">Експорт Excel</button>
             <button id="exportPdfBtn" type="button">Експорт PDF</button>
             <span id="lockStatus" class="lock-status">Статус: Отключен</span>
+          </div>
+          <div class="panel" style="margin: 12px 0;">
+            <h3>Управление на отсъствия</h3>
+            <div class="row">
+              <select id="leaveEmployeeSelect"></select>
+              <select id="leaveTypeSelect"></select>
+              <input id="leaveFromInput" type="date" />
+              <input id="leaveToInput" type="date" />
+              <input id="leaveMinutesInput" type="number" min="1" placeholder="минути/ден (по избор)" />
+              <button id="addLeaveBtn" type="button">Добави отсъствие</button>
+            </div>
+            <div id="leaveList" class="schedule-list"></div>
           </div>
           <div id="monthInfo" class="month-info"></div>
           <div id="scheduleOverviewPanel" class="schedule-overview-panel"></div>
