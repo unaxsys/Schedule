@@ -54,6 +54,8 @@ const state = {
   departments: [],
   expandedDepartmentId: null,
   selectedDepartmentId: 'all',
+  selectedDepartmentIds: [],
+  scheduleViewMode: 'combined',
   hasManualScheduleSelection: false,
   backendAvailable: true,
   apiBaseUrl: '',
@@ -118,6 +120,11 @@ const monthInfo = document.getElementById('monthInfo');
 const scheduleOverviewPanel = document.getElementById('scheduleOverviewPanel');
 const scheduleFilterDepartmentSelect = document.getElementById('scheduleFilterDepartmentSelect');
 const scheduleDepartmentSelect = document.getElementById('scheduleDepartmentSelect');
+const scheduleDepartmentMultiSelect = document.getElementById('scheduleDepartmentMultiSelect');
+const scheduleDepartmentChips = document.getElementById('scheduleDepartmentChips');
+const scheduleSelectAllDepartmentsBtn = document.getElementById('scheduleSelectAllDepartmentsBtn');
+const scheduleClearDepartmentsBtn = document.getElementById('scheduleClearDepartmentsBtn');
+const scheduleViewModeSelect = document.getElementById('scheduleViewModeSelect');
 const scheduleNameInput = document.getElementById('scheduleNameInput');
 const createScheduleBtn = document.getElementById('createScheduleBtn');
 const scheduleList = document.getElementById('scheduleList');
@@ -298,6 +305,7 @@ async function init() {
 
   const loadedSchedule = loadScheduleState();
   state.month = loadedSchedule.month || todayMonth();
+  loadScheduleReviewPreferences();
   state.schedule = loadedSchedule.schedule || {};
   state.employees = loadEmployees().map(normalizeEmployeeVacationData);
   state.apiBaseUrl = detectApiBaseUrl();
@@ -870,6 +878,8 @@ function resetTenantScopedState({ clearLocalStorage = false } = {}) {
     localStorage.removeItem('employees');
     localStorage.removeItem('scheduleState');
     localStorage.removeItem('shiftTemplates');
+    localStorage.removeItem('scheduleReviewDepartments');
+    localStorage.removeItem('scheduleReviewMode');
   }
 }
 
@@ -1131,12 +1141,182 @@ function attachSettingsControls() {
   });
 }
 
+function loadScheduleReviewPreferences() {
+  try {
+    const params = new URLSearchParams(window.location.search || '');
+    const monthFromQuery = cleanStoredValue(params.get('month'));
+    if (monthFromQuery) {
+      state.month = monthFromQuery;
+    }
+
+    const deptsFromQuery = cleanStoredValue(params.get('depts'));
+    if (deptsFromQuery) {
+      state.selectedDepartmentIds = deptsFromQuery.split(',').map((item) => cleanStoredValue(item)).filter(Boolean);
+    } else {
+      const saved = localStorage.getItem('scheduleReviewDepartments');
+      state.selectedDepartmentIds = saved ? JSON.parse(saved) : [];
+    }
+
+    const modeFromQuery = cleanStoredValue(params.get('view_mode'));
+    const savedMode = cleanStoredValue(localStorage.getItem('scheduleReviewMode'));
+    state.scheduleViewMode = ['combined', 'sections'].includes(modeFromQuery)
+      ? modeFromQuery
+      : (['combined', 'sections'].includes(savedMode) ? savedMode : 'combined');
+  } catch (_error) {
+    state.selectedDepartmentIds = [];
+    state.scheduleViewMode = 'combined';
+  }
+}
+
+function persistScheduleReviewPreferences() {
+  const selected = Array.isArray(state.selectedDepartmentIds) ? state.selectedDepartmentIds.filter(Boolean) : [];
+  localStorage.setItem('scheduleReviewDepartments', JSON.stringify(selected));
+  localStorage.setItem('scheduleReviewMode', state.scheduleViewMode || 'combined');
+
+  const params = new URLSearchParams(window.location.search || '');
+  params.set('month', state.month || todayMonth());
+  if (selected.length) {
+    params.set('depts', selected.join(','));
+  } else {
+    params.delete('depts');
+  }
+  if (state.scheduleViewMode && state.scheduleViewMode !== 'combined') {
+    params.set('view_mode', state.scheduleViewMode);
+  } else {
+    params.delete('view_mode');
+  }
+
+  const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
+  window.history.replaceState({}, '', nextUrl);
+}
+
+function getEffectiveSingleDepartmentFilter() {
+  const selectedIds = (state.selectedDepartmentIds || []).filter(Boolean);
+  if (selectedIds.length === 1) {
+    return selectedIds[0];
+  }
+
+  if (state.selectedDepartmentId && ![DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)) {
+    return state.selectedDepartmentId;
+  }
+
+  return null;
+}
+
+function getSelectedDepartmentIdsSet() {
+  return new Set((state.selectedDepartmentIds || []).map((item) => cleanStoredValue(item)).filter(Boolean));
+}
+
+function setSelectedDepartments(nextIds) {
+  state.selectedDepartmentIds = Array.from(new Set((nextIds || []).map((item) => cleanStoredValue(item)).filter(Boolean)));
+  persistScheduleReviewPreferences();
+  renderDepartmentMultiSelect();
+  renderSchedule();
+}
+
+function removeSelectedDepartment(departmentId) {
+  setSelectedDepartments((state.selectedDepartmentIds || []).filter((item) => item !== departmentId));
+}
+
+function renderDepartmentMultiSelect() {
+  if (!scheduleDepartmentMultiSelect || !scheduleDepartmentChips) {
+    return;
+  }
+
+  const selectedSet = getSelectedDepartmentIdsSet();
+  scheduleDepartmentMultiSelect.innerHTML = '';
+  state.departments.forEach((department) => {
+    const row = document.createElement('div');
+    row.className = 'schedule-multi-option';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = selectedSet.has(department.id);
+    checkbox.addEventListener('change', () => {
+      const current = getSelectedDepartmentIdsSet();
+      if (checkbox.checked) {
+        current.add(department.id);
+      } else {
+        current.delete(department.id);
+      }
+      setSelectedDepartments(Array.from(current));
+    });
+
+    const label = document.createElement('span');
+    label.textContent = department.name;
+
+    const singleBtn = document.createElement('button');
+    singleBtn.type = 'button';
+    singleBtn.className = 'schedule-single-dept-btn';
+    singleBtn.textContent = 'Само този отдел';
+    singleBtn.addEventListener('click', () => {
+      setSelectedDepartments([department.id]);
+    });
+
+    row.appendChild(checkbox);
+    row.appendChild(label);
+    row.appendChild(singleBtn);
+    scheduleDepartmentMultiSelect.appendChild(row);
+  });
+
+  scheduleDepartmentChips.innerHTML = '';
+  const selectedDepartments = state.departments.filter((department) => selectedSet.has(department.id));
+  if (!selectedDepartments.length) {
+    const chip = document.createElement('span');
+    chip.className = 'schedule-chip schedule-chip--all';
+    chip.textContent = 'ОБЩ (всички отдели)';
+    scheduleDepartmentChips.appendChild(chip);
+  } else {
+    selectedDepartments.forEach((department) => {
+      const chip = document.createElement('span');
+      chip.className = 'schedule-chip';
+      chip.textContent = department.name;
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = '×';
+      removeBtn.addEventListener('click', () => removeSelectedDepartment(department.id));
+      chip.appendChild(removeBtn);
+      scheduleDepartmentChips.appendChild(chip);
+    });
+  }
+
+  if (scheduleViewModeSelect) {
+    scheduleViewModeSelect.value = state.scheduleViewMode || 'combined';
+  }
+}
+
 function attachDepartmentControls() {
   if (scheduleFilterDepartmentSelect) {
     scheduleFilterDepartmentSelect.addEventListener('change', async () => {
       state.selectedDepartmentId = scheduleFilterDepartmentSelect.value || DEPARTMENT_VIEW_ALL;
+      if (![DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)) {
+        setSelectedDepartments([state.selectedDepartmentId]);
+      }
       await refreshMonthlyView();
       renderAll();
+    });
+  }
+
+  if (scheduleSelectAllDepartmentsBtn) {
+    scheduleSelectAllDepartmentsBtn.addEventListener('click', () => {
+      setSelectedDepartments(state.departments.map((department) => department.id));
+    });
+  }
+
+  if (scheduleClearDepartmentsBtn) {
+    scheduleClearDepartmentsBtn.addEventListener('click', () => {
+      setSelectedDepartments([]);
+    });
+  }
+
+  if (scheduleViewModeSelect) {
+    scheduleViewModeSelect.addEventListener('change', () => {
+      state.scheduleViewMode = ['combined', 'sections'].includes(scheduleViewModeSelect.value)
+        ? scheduleViewModeSelect.value
+        : 'combined';
+      persistScheduleReviewPreferences();
+      renderSchedule();
     });
   }
 
@@ -1204,6 +1384,10 @@ function renderDepartmentOptions() {
 
     scheduleFilterDepartmentSelect.value = state.selectedDepartmentId;
   }
+
+  const validDepartmentIds = new Set(state.departments.map((department) => department.id));
+  state.selectedDepartmentIds = (state.selectedDepartmentIds || []).filter((id) => validDepartmentIds.has(id));
+  renderDepartmentMultiSelect();
 
   renderDepartmentList();
   renderEmployeeDepartmentOptions();
@@ -1575,6 +1759,7 @@ function attachLockAndExport() {
 
 generateBtn.addEventListener('click', async () => {
   state.month = monthPicker.value || todayMonth();
+  persistScheduleReviewPreferences();
   saveScheduleLocal();
   await refreshMonthlyView();
   renderAll();
@@ -1582,6 +1767,7 @@ generateBtn.addEventListener('click', async () => {
 
 monthPicker.addEventListener('change', async () => {
   state.month = monthPicker.value || todayMonth();
+  persistScheduleReviewPreferences();
   saveScheduleLocal();
   await refreshMonthlyView();
   renderAll();
@@ -3193,6 +3379,21 @@ async function setVacationShiftForDateRange(employee, startDateKey, endDateKey, 
   return { updated, skipped };
 }
 
+async function setShiftForCell({ employee, day, month, shiftCode }) {
+  const monthKey = month || state.month || todayMonth();
+  const localKey = scheduleKey(employee.id, monthKey, day);
+  state.schedule[localKey] = shiftCode;
+  saveScheduleLocal();
+
+  const scheduleId = getEmployeeScheduleId(employee);
+  if (!scheduleId) {
+    return;
+  }
+
+  state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = shiftCode;
+  await saveScheduleEntryBackend({ ...employee, scheduleId }, day, shiftCode, { monthKey, scheduleId });
+}
+
 async function correctVacationPeriod(employee, oldStartDateKey, oldEndDateKey, newStartDateKey, newWorkingDays) {
   if (!canManageVacationCorrections()) {
     setStatus('Корекцията на отпуск е позволена само за Мениджър и Администратор.', false);
@@ -3325,6 +3526,120 @@ function getShiftCodeForCell(employee, month, day) {
   return localValue;
 }
 
+function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDays, monthLocked, visibleSummaryColumns, totals, employeeSnapshotTotalsList }) {
+  const row = document.createElement('tr');
+  const nameCell = document.createElement('td');
+  nameCell.className = 'sticky';
+  nameCell.innerHTML = `<b>${employee.name}</b><br><small>${employee.department || 'Без отдел'} • ${employee.position || '—'}</small>`;
+  row.appendChild(nameCell);
+
+  const summary = {
+    monthNormHours: 0,
+    workedDays: 0,
+    workedHours: 0,
+    holidayWorkedHours: 0,
+    weekendWorkedHours: 0,
+    nightWorkedHours: 0,
+    nightConvertedHours: 0,
+    vacationDays: 0,
+    sickDays: 0
+  };
+  const snapshotEntriesByDay = [];
+
+  for (let day = 1; day <= totalDays; day += 1) {
+    const inEmployment = isEmployeeActiveOnDay(employee, year, monthIndex, day);
+    const currentShift = getShiftCodeForCell(employee, month, day);
+    const date = new Date(year, monthIndex - 1, day);
+    const holiday = isOfficialHoliday(date);
+    const weekend = isWeekend(date);
+    const cell = document.createElement('td');
+    if (holiday) {
+      cell.classList.add('day-holiday');
+    } else if (weekend) {
+      cell.classList.add('day-weekend');
+    }
+
+    const select = document.createElement('select');
+    select.className = 'shift-select';
+    if (!inEmployment) {
+      cell.classList.add('day-outside-employment');
+      select.classList.add('shift-select--inactive');
+    }
+    select.disabled = monthLocked || !inEmployment;
+
+    const scheduleId = getEmployeeScheduleId(employee);
+    const scopedShiftTemplates = scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
+      ? state.scheduleShiftTemplatesById[scheduleId]
+      : state.shiftTemplates;
+
+    scopedShiftTemplates.forEach((shift) => {
+      const option = document.createElement('option');
+      option.value = shift.code;
+      option.textContent = shift.label || shift.code;
+      option.dataset.shiftCode = shift.code;
+      option.dataset.shiftId = shift.id || '';
+      option.selected = shift.code === currentShift;
+      select.appendChild(option);
+    });
+
+    select.addEventListener('change', async () => {
+      await setShiftForCell({ employee, day, month, shiftCode: select.value });
+      renderSchedule();
+    });
+
+    cell.appendChild(select);
+
+    const entryValidation = scheduleId
+      ? state.scheduleEntryValidationsById[`${scheduleId}|${employee.id}|${day}`]
+      : null;
+    const entrySnapshot = scheduleId
+      ? state.scheduleEntrySnapshotsById[`${scheduleId}|${employee.id}|${day}`]
+      : null;
+    snapshotEntriesByDay.push(entrySnapshot || {});
+
+    const warningMessages = Array.isArray(entryValidation?.warnings) ? entryValidation.warnings.filter(Boolean) : [];
+    const errorMessages = Array.isArray(entryValidation?.errors) ? entryValidation.errors.filter(Boolean) : [];
+    if (errorMessages.length || warningMessages.length) {
+      const marker = document.createElement('span');
+      marker.className = `cell-validation-marker ${errorMessages.length ? 'cell-validation-marker--error' : 'cell-validation-marker--warning'}`;
+      marker.textContent = errorMessages.length ? '❌' : '⚠';
+      const details = [];
+      if (errorMessages.length) {
+        details.push(`Грешки: ${truncateMessages(errorMessages).join(' | ')}`);
+      }
+      if (warningMessages.length) {
+        details.push(`Предупреждения: ${truncateMessages(warningMessages).join(' | ')}`);
+      }
+      marker.title = details.join('\n');
+      cell.appendChild(marker);
+    }
+
+    if (safeNum(entrySnapshot?.overtimeMinutes) > 0) {
+      const overtimeBadge = document.createElement('span');
+      overtimeBadge.className = 'cell-ot-badge';
+      overtimeBadge.textContent = 'OT';
+      overtimeBadge.title = `Извънредни: ${minutesToHoursDecimal(entrySnapshot?.overtimeMinutes)} ч`;
+      cell.classList.add('day-overtime');
+      cell.appendChild(overtimeBadge);
+    }
+
+    row.appendChild(cell);
+    collectSummary(summary, currentShift, holiday, weekend, inEmployment, entrySnapshot);
+    if (inEmployment && !holiday && !weekend) {
+      summary.monthNormHours += 8;
+    }
+  }
+
+  const employeeTotals = calculateEmployeeTotals({ employee, summary, year, month, monthNormHours: summary.monthNormHours });
+  accumulateTotals(totals, employeeTotals);
+  appendSummaryColumns(row, employeeTotals, visibleSummaryColumns);
+
+  const employeeSnapshotTotals = sumEmployeeTotals(snapshotEntriesByDay);
+  appendSnapshotTotalsColumns(row, employeeSnapshotTotals);
+  employeeSnapshotTotalsList.push(employeeSnapshotTotals);
+  return { row, employeeSnapshotTotals };
+}
+
 function renderSchedule() {
   const month = state.month || todayMonth();
   const [year, monthIndex] = month.split('-').map(Number);
@@ -3342,9 +3657,22 @@ function renderSchedule() {
     <b>Норма:</b> ${monthStats.normHours} ч.
   `;
 
+  const visibleSummaryColumns = getVisibleSummaryColumns();
+  const selectedSet = getSelectedDepartmentIdsSet();
+  const employeesToRender = getEmployeesForSelectedSchedules();
+  const visibleEmployees = employeesToRender.filter((employee) => {
+    if (!selectedSet.size) {
+      return true;
+    }
+    return selectedSet.has(cleanStoredValue(employee.departmentId));
+  });
+
+  const grouped = window.ScheduleGrouping?.groupEmployeesByDepartment
+    ? window.ScheduleGrouping.groupEmployeesByDepartment({ employees: visibleEmployees, departments: state.departments })
+    : { order: ['all'], map: { all: { deptId: 'all', deptName: 'Всички отдели', employees: visibleEmployees } } };
+
   const header = document.createElement('tr');
   header.innerHTML = '<th class="sticky">Служител / Отдел / Длъжност</th>';
-
   for (let day = 1; day <= totalDays; day += 1) {
     const date = new Date(year, monthIndex - 1, day);
     const holiday = isOfficialHoliday(date);
@@ -3358,15 +3686,12 @@ function renderSchedule() {
     }
     header.appendChild(th);
   }
-
-  const visibleSummaryColumns = getVisibleSummaryColumns();
   visibleSummaryColumns.forEach((column) => {
     const cell = document.createElement('th');
     cell.className = 'summary-col';
     cell.textContent = column.label;
     header.appendChild(cell);
   });
-
   ['Общо', 'Нощни', 'Уикенд', 'Празнични', 'Извънредни'].forEach((label) => {
     const cell = document.createElement('th');
     cell.className = 'summary-col schedule-snapshot-total';
@@ -3378,193 +3703,72 @@ function renderSchedule() {
   scheduleTable.appendChild(header);
 
   const totals = {
-    workedDays: 0,
-    workedHours: 0,
-    normHours: 0,
-    deviation: 0,
-    sirvNormHours: 0,
-    sirvWorkedHours: 0,
-    overtimeHours: 0,
-    holidayWorkedHours: 0,
-    weekendWorkedHours: 0,
-    nightWorkedHours: 0,
-    nightConvertedHours: 0,
-    payableHours: 0,
-    vacationDays: 0,
-    remainingVacation: 0,
-    sickDays: 0
+    workedDays: 0, workedHours: 0, normHours: 0, deviation: 0, sirvNormHours: 0, sirvWorkedHours: 0,
+    overtimeHours: 0, holidayWorkedHours: 0, weekendWorkedHours: 0, nightWorkedHours: 0,
+    nightConvertedHours: 0, payableHours: 0, vacationDays: 0, remainingVacation: 0, sickDays: 0
   };
 
-  const employeesToRender = getEmployeesForSelectedSchedules();
-  const employeeSnapshotTotalsList = [];
-  const shouldGroupByDepartment = state.selectedDepartmentId === DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS;
-  const groupedEmployees = shouldGroupByDepartment
-    ? employeesToRender.reduce((acc, employee) => {
-      const department = (employee.department || '').trim() || 'Без отдел';
-      if (!acc[department]) {
-        acc[department] = [];
-      }
-      acc[department].push(employee);
-      return acc;
-    }, {})
-    : { Всички: employeesToRender };
+  const departmentTotalsList = [];
+  const mode = state.scheduleViewMode || 'combined';
+  grouped.order.forEach((deptId) => {
+    const group = grouped.map[deptId] || { deptName: 'Без отдел', employees: [] };
+    const groupEmployees = Array.isArray(group.employees) ? group.employees : [];
 
-  const departmentOrder = Object.keys(groupedEmployees).sort((a, b) => a.localeCompare(b, 'bg'));
+    const sectionRow = document.createElement('tr');
+    sectionRow.className = 'schedule-department-header-row';
+    const sectionCell = document.createElement('td');
+    sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length + 5;
+    sectionCell.innerHTML = `<b>${group.deptName}</b> <small>(${groupEmployees.length} служители)</small>`;
+    sectionRow.appendChild(sectionCell);
+    scheduleTable.appendChild(sectionRow);
 
-  departmentOrder.forEach((department) => {
-    if (shouldGroupByDepartment) {
-      const sectionRow = document.createElement('tr');
-      const sectionCell = document.createElement('td');
-      sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length + 5;
-      sectionCell.innerHTML = `<b>Отдел: ${department}</b>`;
-      sectionRow.appendChild(sectionCell);
-      scheduleTable.appendChild(sectionRow);
+    if (!groupEmployees.length) {
+      const emptyRow = document.createElement('tr');
+      const emptyCell = document.createElement('td');
+      emptyCell.colSpan = 1 + totalDays + visibleSummaryColumns.length + 5;
+      emptyCell.className = 'schedule-empty-department';
+      emptyCell.textContent = 'Няма служители в този отдел';
+      emptyRow.appendChild(emptyCell);
+      scheduleTable.appendChild(emptyRow);
+      return;
     }
 
-    (groupedEmployees[department] || []).forEach((employee) => {
-      const row = document.createElement('tr');
-      const nameCell = document.createElement('td');
-      nameCell.className = 'sticky';
-      nameCell.innerHTML = `<b>${employee.name}</b><br><small>${employee.department} • ${employee.position}</small>`;
-      row.appendChild(nameCell);
-
-      const summary = {
-        monthNormHours: 0,
-        workedDays: 0,
-        workedHours: 0,
-        holidayWorkedHours: 0,
-        weekendWorkedHours: 0,
-        nightWorkedHours: 0,
-        nightConvertedHours: 0,
-        vacationDays: 0,
-        sickDays: 0
-      };
-      const snapshotEntriesByDay = [];
-
-      for (let day = 1; day <= totalDays; day += 1) {
-        const inEmployment = isEmployeeActiveOnDay(employee, year, monthIndex, day);
-        const currentShift = getShiftCodeForCell(employee, month, day);
-        const date = new Date(year, monthIndex - 1, day);
-        const holiday = isOfficialHoliday(date);
-        const weekend = isWeekend(date);
-        const cell = document.createElement('td');
-        if (holiday) {
-          cell.classList.add('day-holiday');
-        } else if (weekend) {
-          cell.classList.add('day-weekend');
-        }
-
-        const select = document.createElement('select');
-        select.className = 'shift-select';
-        if (!inEmployment) {
-          cell.classList.add('day-outside-employment');
-          select.classList.add('shift-select--inactive');
-        }
-        select.disabled = monthLocked || !inEmployment;
-
-        const scheduleId = getEmployeeScheduleId(employee);
-        const scopedShiftTemplates = scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
-          ? state.scheduleShiftTemplatesById[scheduleId]
-          : state.shiftTemplates;
-
-        scopedShiftTemplates.forEach((shift) => {
-          const option = document.createElement('option');
-          option.value = shift.code;
-          option.textContent = shift.label || shift.code;
-          option.dataset.shiftCode = shift.code;
-          option.dataset.shiftId = shift.id || '';
-          option.selected = shift.code === currentShift;
-          select.appendChild(option);
-        });
-
-        select.addEventListener('change', async () => {
-          if (monthLocked) {
-            return;
-          }
-
-          const selectedOption = select.options[select.selectedIndex];
-          const toShift = normalizeShiftCodeForApi(selectedOption?.value || selectedOption?.dataset.shiftCode || currentShift);
-          const toShiftId = selectedOption?.dataset.shiftId || null;
-          const scheduleId = getEmployeeScheduleId(employee);
-          const key = scheduleKey(employee.id, month, day);
-          const previousShift = state.schedule[key] || currentShift;
-
-          if (scheduleId) {
-            state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = toShift;
-          }
-          state.schedule[key] = toShift;
-          saveScheduleLocal();
-
-          const saveResult = await saveScheduleEntryBackend(employee, day, toShift, {
-            scheduleId,
-            shiftId: toShiftId,
-            monthKey: month,
-          });
-
-          if (!saveResult || saveResult.ok !== true) {
-            state.schedule[key] = previousShift;
-            if (scheduleId) {
-              state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = previousShift;
-            }
-          }
-
-          renderSchedule();
-          renderVacationLedger();
-        });
-
-        cell.appendChild(select);
-
-        const scheduleIdForSnapshot = getEmployeeScheduleId(employee);
-        const entryKey = scheduleIdForSnapshot ? `${scheduleIdForSnapshot}|${employee.id}|${day}` : '';
-        const entrySnapshot = entryKey ? state.scheduleEntrySnapshotsById[entryKey] || null : null;
-        const entryValidation = entryKey ? state.scheduleEntryValidationsById[entryKey] || null : null;
-        snapshotEntriesByDay.push(entrySnapshot || {});
-
-        const warningMessages = Array.isArray(entryValidation?.warnings) ? entryValidation.warnings.filter(Boolean) : [];
-        const errorMessages = Array.isArray(entryValidation?.errors) ? entryValidation.errors.filter(Boolean) : [];
-        if (errorMessages.length || warningMessages.length) {
-          const marker = document.createElement('span');
-          marker.className = `cell-validation-marker ${errorMessages.length ? 'cell-validation-marker--error' : 'cell-validation-marker--warning'}`;
-          marker.textContent = errorMessages.length ? '❌' : '⚠';
-          const details = [];
-          if (errorMessages.length) {
-            details.push(`Грешки: ${truncateMessages(errorMessages).join(' | ')}`);
-          }
-          if (warningMessages.length) {
-            details.push(`Предупреждения: ${truncateMessages(warningMessages).join(' | ')}`);
-          }
-          marker.title = details.join('\n');
-          cell.appendChild(marker);
-        }
-
-        if (safeNum(entrySnapshot?.overtimeMinutes) > 0) {
-          const overtimeBadge = document.createElement('span');
-          overtimeBadge.className = 'cell-ot-badge';
-          overtimeBadge.textContent = 'OT';
-          overtimeBadge.title = `Извънредни: ${minutesToHoursDecimal(entrySnapshot?.overtimeMinutes)} ч`;
-          cell.classList.add('day-overtime');
-          cell.appendChild(overtimeBadge);
-        }
-
-        row.appendChild(cell);
-        collectSummary(summary, currentShift, holiday, weekend, inEmployment, entrySnapshot);
-        if (inEmployment && !holiday && !weekend) {
-          summary.monthNormHours += 8;
-        }
-      }
-
-      const employeeTotals = calculateEmployeeTotals({ employee, summary, year, month, monthNormHours: summary.monthNormHours });
-      accumulateTotals(totals, employeeTotals);
-      appendSummaryColumns(row, employeeTotals, visibleSummaryColumns);
-
-      const employeeSnapshotTotals = sumEmployeeTotals(snapshotEntriesByDay);
-      appendSnapshotTotalsColumns(row, employeeSnapshotTotals);
-      employeeSnapshotTotalsList.push(employeeSnapshotTotals);
+    const employeeSnapshotTotalsList = [];
+    groupEmployees.forEach((employee) => {
+      const { row, employeeSnapshotTotals } = renderEmployeeScheduleRow({
+        employee, year, monthIndex, month, totalDays, monthLocked, visibleSummaryColumns, totals, employeeSnapshotTotalsList,
+      });
+      row.dataset.deptId = group.deptId;
       scheduleTable.appendChild(row);
+      departmentTotalsList.push({ deptId: group.deptId, ...employeeSnapshotTotals });
     });
+
+    const deptTotals = window.ScheduleTotals?.sumGridTotals
+      ? window.ScheduleTotals.sumGridTotals(employeeSnapshotTotalsList)
+      : sumGridTotals(employeeSnapshotTotalsList);
+
+    const deptRow = document.createElement('tr');
+    const deptLabel = document.createElement('td');
+    deptLabel.className = 'sticky';
+    deptLabel.innerHTML = `<b>Общо ${group.deptName}</b>`;
+    deptRow.appendChild(deptLabel);
+    for (let day = 1; day <= totalDays; day += 1) {
+      const filler = document.createElement('td');
+      filler.className = 'summary-col';
+      filler.textContent = mode === 'sections' ? '·' : '—';
+      deptRow.appendChild(filler);
+    }
+    for (let idx = 0; idx < visibleSummaryColumns.length; idx += 1) {
+      const filler = document.createElement('td');
+      filler.className = 'summary-col';
+      filler.textContent = '—';
+      deptRow.appendChild(filler);
+    }
+    appendSnapshotTotalsColumns(deptRow, deptTotals, true);
+    scheduleTable.appendChild(deptRow);
   });
 
-  if (employeesToRender.length) {
+  if (visibleEmployees.length) {
     const totalsRow = document.createElement('tr');
     const totalsLabel = document.createElement('td');
     totalsLabel.className = 'sticky';
@@ -3579,7 +3783,7 @@ function renderSchedule() {
     }
 
     appendSummaryColumns(totalsRow, totals, visibleSummaryColumns, true);
-    const snapshotGrandTotals = sumGridTotals(employeeSnapshotTotalsList);
+    const snapshotGrandTotals = sumGridTotals(departmentTotalsList);
     appendSnapshotTotalsColumns(totalsRow, snapshotGrandTotals, true);
     renderScheduleOverviewTotals(snapshotGrandTotals);
     scheduleTable.appendChild(totalsRow);
@@ -4239,8 +4443,9 @@ async function loadSchedulesForMonth() {
   const wasSelectAll = previousScheduleIds.length > 0 && previousScheduleIds.every((id) => previousSelectedIds.includes(id));
 
   const query = new URLSearchParams({ month_key: monthKey });
-  if (state.selectedDepartmentId && ![DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)) {
-    query.set('department_id', state.selectedDepartmentId);
+  const singleDepartmentFilter = getEffectiveSingleDepartmentFilter();
+  if (singleDepartmentFilter) {
+    query.set('department_id', singleDepartmentFilter);
   }
 
   const response = await apiFetch(`/api/schedules?${query.toString()}`);
@@ -4345,8 +4550,9 @@ async function refreshMonthlyView() {
   await loadSchedulesForMonth();
 
   const monthParam = encodeURIComponent(month);
-  const employeeQuery = state.selectedDepartmentId && ![DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)
-    ? `/api/employees?department_id=${encodeURIComponent(state.selectedDepartmentId)}&month_key=${monthParam}`
+  const singleDepartmentFilter = getEffectiveSingleDepartmentFilter();
+  const employeeQuery = singleDepartmentFilter
+    ? `/api/employees?department_id=${encodeURIComponent(singleDepartmentFilter)}&month_key=${monthParam}`
     : `/api/employees?month_key=${monthParam}`;
   const employeeResponse = await apiFetch(employeeQuery);
   const employeePayload = employeeResponse.ok ? await employeeResponse.json() : { employees: [] };

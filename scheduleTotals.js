@@ -18,14 +18,18 @@
     };
   }
 
-  function sumEmployeeTotals(entriesByDay) {
-    const totals = {
+  function zeroTotals() {
+    return {
       workMinutesTotal: 0,
       nightMinutes: 0,
       weekendMinutes: 0,
       holidayMinutes: 0,
       overtimeMinutes: 0,
     };
+  }
+
+  function sumEmployeeTotals(entriesByDay) {
+    const totals = zeroTotals();
 
     (entriesByDay || []).forEach((entry) => {
       const normalized = normalizeEntrySnapshot(entry);
@@ -49,13 +53,7 @@
         acc.overtimeMinutes += safeNum(employee?.overtimeMinutes);
         return acc;
       },
-      {
-        workMinutesTotal: 0,
-        nightMinutes: 0,
-        weekendMinutes: 0,
-        holidayMinutes: 0,
-        overtimeMinutes: 0,
-      }
+      zeroTotals()
     );
   }
 
@@ -64,5 +62,6 @@
     minutesToHoursDecimal,
     sumEmployeeTotals,
     sumGridTotals,
+    zeroTotals,
   };
 })(window);

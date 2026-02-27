@@ -1492,3 +1492,75 @@ html.welcome-lock, html.welcome-lock body { height: 100%; overflow: hidden; }
   background: #fde68a;
   font-weight: 700;
 }
+
+.schedule-controls-row--stacked {
+  display: block;
+}
+
+.schedule-multi-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 0.4rem;
+}
+
+.schedule-multi-select {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  max-height: 190px;
+  overflow: auto;
+  padding: 0.35rem;
+  display: grid;
+  gap: 0.35rem;
+  background: #f8fafc;
+}
+
+.schedule-multi-option {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.schedule-single-dept-btn {
+  margin: 0;
+  padding: 0.22rem 0.4rem;
+  font-size: 0.75rem;
+}
+
+.schedule-dept-chips {
+  margin-top: 0.35rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.schedule-chip {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 0.2rem 0.5rem;
+  background: #eff6ff;
+  font-size: 0.78rem;
+}
+
+.schedule-chip button {
+  margin: 0 0 0 0.35rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 0.9rem;
+}
+
+.schedule-chip--all {
+  background: #f1f5f9;
+}
+
+.schedule-department-header-row td {
+  background: #f8fafc;
+}
+
+.schedule-empty-department {
+  text-align: center;
+  color: #64748b;
+}
