@@ -1607,11 +1607,17 @@ html.welcome-lock, html.welcome-lock body { height: 100%; overflow: hidden; }
   color: #64748b;
 }
 
-.holiday-day-badge {
-  display: inline-block;
-  margin-left: 4px;
-  padding: 1px 4px;
-  border-radius: 8px;
-  background: #ffe5a3;
-  font-size: 10px;
+.cell-leave-badge {
+  margin-left: 0.22rem;
+  padding: 0 0.28rem;
+  font-size: 0.65rem;
+  border-radius: 999px;
+  color: #0f172a;
+  background: #bfdbfe;
+  font-weight: 700;
+}
+
+.cell-leave-badge--sick {
+  background: #fecaca;
+  color: #7f1d1d;
 }
