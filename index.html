@@ -503,26 +503,28 @@
           <label class="field-inline">Начална дата <input id="editStartDateInput" type="date" required /></label>
           <label class="field-inline">Последен работен ден <input id="editEndDateInput" type="date" /></label>
           <input id="editVacationAllowanceInput" type="number" min="0" required placeholder="Годишен отпуск" />
-          <label class="field-inline field-checkbox">
-            <input id="editTelkInput" type="checkbox" />
-            <span>ТЕЛК (+6 дни отпуск)</span>
-            <span class="hover-tooltip" tabindex="0" aria-label="Инфо за ТЕЛК">
-              ?
-              <span class="hover-tooltip__text">с 50% и над 50%</span>
-            </span>
-          </label>
-          <label class="field-inline field-checkbox">
-            <input id="editYoungWorkerInput" type="checkbox" />
-            <span>Служители от 16 - 18 г. (+6 дни отпуск)</span>
-            <span class="hover-tooltip" tabindex="0" aria-label="Инфо за служители от 16 до 18 години">
-              ?
-              <span class="hover-tooltip__text">с разрешение от родител и ИТ</span>
-            </span>
-          </label>
-          <label class="field-inline field-checkbox employee-edit-form__full-row">
-            <input id="editEmployeeIsSirvInput" type="checkbox" />
-            <span>Работи на СИРВ (сумирано изчисляване на работното време)</span>
-          </label>
+          <div class="employee-edit-checkboxes employee-edit-form__full-row">
+            <label class="field-inline field-checkbox employee-edit-checkbox-item">
+              <input id="editTelkInput" type="checkbox" />
+              <span>ТЕЛК (+6 дни отпуск)</span>
+              <span class="hover-tooltip" tabindex="0" aria-label="Инфо за ТЕЛК">
+                ?
+                <span class="hover-tooltip__text">с 50% и над 50%</span>
+              </span>
+            </label>
+            <label class="field-inline field-checkbox employee-edit-checkbox-item">
+              <input id="editYoungWorkerInput" type="checkbox" />
+              <span>Служители от 16 - 18 г. (+6 дни отпуск)</span>
+              <span class="hover-tooltip" tabindex="0" aria-label="Инфо за служители от 16 до 18 години">
+                ?
+                <span class="hover-tooltip__text">с разрешение от родител и ИТ</span>
+              </span>
+            </label>
+            <label class="field-inline field-checkbox employee-edit-checkbox-item employee-edit-checkbox-item--sirv">
+              <input id="editEmployeeIsSirvInput" type="checkbox" />
+              <span>Работи на СИРВ (сумирано изчисляване на работното време)</span>
+            </label>
+          </div>
           <div id="editEmployeeSirvPeriodField" class="employee-edit-form__full-row hidden">
             <label for="editEmployeeSirvPeriodInput" class="field-label">Отчетен период (месеци)</label>
             <select id="editEmployeeSirvPeriodInput">
