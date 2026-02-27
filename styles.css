@@ -75,12 +75,51 @@ header p {
 }
 
 
+
+.backend-connection-indicator {
+  position: fixed;
+  top: 4.9rem;
+  right: 1rem;
+  z-index: 1150;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.backend-connection-dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 999px;
+  display: inline-block;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.14);
+}
+
+.backend-connection-dot--online {
+  background: #22c55e;
+}
+
+.backend-connection-dot--offline {
+  background: #ef4444;
+}
+
 @media (max-width: 768px) {
   .status-toast {
     left: 0.75rem;
     right: 0.75rem;
     top: 0.75rem;
     max-width: none;
+  }
+
+  .backend-connection-indicator {
+    left: 0.75rem;
+    right: auto;
+    top: 5.2rem;
   }
 }
 
@@ -1327,4 +1366,24 @@ html.welcome-lock, html.welcome-lock body { height: 100%; overflow: hidden; }
 .vacation-filters-row input,
 .vacation-filters-row select {
   min-width: 180px;
+}
+
+
+.super-admin-log-card {
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #ef4444;
+  border-radius: 8px;
+  background: #fff;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.55rem;
+}
+
+.super-admin-log-card small {
+  display: block;
+  color: #475569;
+  margin-top: 0.1rem;
+}
+
+.super-admin-log-card p {
+  margin: 0.35rem 0 0;
 }

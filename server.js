@@ -2610,6 +2610,53 @@ app.post('/api/auth/switch-tenant', requireAuth, async (req, res, next) => {
   }
 });
 
+app.post('/api/logs/connection', requireAuth, async (req, res, next) => {
+  const tenantIdFromBody = cleanStr(req.body?.tenantId);
+  const action = cleanStr(req.body?.action || 'backend_connection_lost') || 'backend_connection_lost';
+  const details = req.body?.details && typeof req.body.details === 'object' ? req.body.details : {};
+
+  try {
+    let tenantId = tenantIdFromBody;
+
+    if (tenantId && !isValidUuid(tenantId)) {
+      return res.status(400).json({ message: 'Невалиден tenantId в лога.' });
+    }
+
+    if (!tenantId) {
+      tenantId = await resolveTenantId(req);
+    }
+
+    if (tenantId && req.user?.is_super_admin !== true) {
+      const access = await pool.query(
+        `SELECT 1
+         FROM tenant_users
+         WHERE tenant_id = $1
+           AND user_id = $2
+         LIMIT 1`,
+        [tenantId, req.user?.id]
+      );
+      if (!access.rowCount) {
+        return res.status(403).json({ message: 'Нямате достъп до този tenant за запис на лог.' });
+      }
+    }
+
+    await insertAuditLog(action, 'backend_connection', {
+      tenantId: tenantId || null,
+      actorUserId: req.user?.id || null,
+      after: {
+        ...details,
+        readableMessage: cleanStr(details.error || 'Грешка при връзка със сървъра.'),
+      },
+      ip: req.ip,
+      userAgent: req.get('user-agent') || null,
+    });
+
+    return res.json({ ok: true });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.post('/api/platform/register', async (req, res, next) => {
   const companyName = cleanStr(req.body?.companyName);
   const companyEik = cleanStr(req.body?.companyEik);

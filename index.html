@@ -75,6 +75,10 @@
       <h1>Планиране на смени</h1>
       <p>Управление на отдели, длъжности, графици, отпуски и болнични.</p>
       <small id="storageStatus" class="status-toast status-warn status-toast-visible">Проверка за PostgreSQL бекенд...</small>
+      <div class="backend-connection-indicator" aria-live="polite">
+        <span id="backendConnectionDot" class="backend-connection-dot backend-connection-dot--offline" title="Няма връзка"></span>
+        <span>Връзка към сървъра</span>
+      </div>
       <div class="api-config">
         <label for="apiUrlInput">API URL:</label>
         <input id="apiUrlInput" type="text" placeholder="http://46.183.117.128:4000" />

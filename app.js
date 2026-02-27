@@ -73,7 +73,11 @@ const state = {
   vacationLedgerDepartmentFilter: 'all',
   vacationLedgerSearchQuery: '',
   vacationCorrectionContext: null,
-  isHandlingUnauthorized: false
+  isHandlingUnauthorized: false,
+  backendConnectionOnline: null,
+  backendReconnectInFlight: false,
+  pendingConnectionLogs: loadPendingConnectionLogs(),
+  lastConnectionErrorSignature: ''
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -97,6 +101,7 @@ const youngWorkerInput = document.getElementById('youngWorkerInput');
 const employeeList = document.getElementById('employeeList');
 const scheduleTable = document.getElementById('scheduleTable');
 const storageStatus = document.getElementById('storageStatus');
+const backendConnectionDot = document.getElementById('backendConnectionDot');
 const apiUrlInput = document.getElementById('apiUrlInput');
 const saveApiUrlBtn = document.getElementById('saveApiUrlBtn');
 const userRoleSelect = document.getElementById('userRoleSelect');
@@ -220,6 +225,7 @@ async function init() {
   holidayRateInput.value = String(state.rates.holiday);
   sirvPeriodInput.value = String(state.sirvPeriodMonths);
   apiUrlInput.value = state.apiBaseUrl;
+  updateBackendConnectionIndicator(false, "Проверка за връзка със сървъра...");
   if (userRoleSelect) {
     userRoleSelect.value = state.userRole;
   }
@@ -852,6 +858,26 @@ function resolveTenantIdForPlatformUserCreate() {
   return '';
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return '';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  return date.toLocaleString('bg-BG');
+}
+
 function renderSuperAdminPanel() {
   const overview = state.superAdminOverview;
   if (!overview) {
@@ -889,7 +915,25 @@ function renderSuperAdminPanel() {
   }
 
   if (superAdminLogs) {
-    superAdminLogs.textContent = JSON.stringify(overview.logs || [], null, 2);
+    const allLogs = Array.isArray(overview.logs) ? overview.logs : [];
+    const selectedTenantId = isValidUuid(state.selectedTenantId) ? state.selectedTenantId : '';
+    const logs = selectedTenantId ? allLogs.filter((log) => cleanStoredValue(log.tenantId) === selectedTenantId) : allLogs;
+
+    if (!logs.length) {
+      superAdminLogs.innerHTML = '<small>Няма налични логове за избраната фирма.</small>';
+      return;
+    }
+
+    superAdminLogs.innerHTML = logs.map((log) => {
+      const errorText = cleanStoredValue(log.afterJson?.readableMessage || log.afterJson?.error || log.afterJson?.message || 'Няма детайли за грешката.');
+      return `
+        <div class="super-admin-log-card">
+          <strong>${escapeHtml(log.action || 'audit')}</strong>
+          <small>Tenant: ${escapeHtml(log.tenantId || '—')} | ${escapeHtml(formatDateTime(log.createdAt) || '')}</small>
+          <p><b>Грешка:</b> ${escapeHtml(errorText)}</p>
+        </div>
+      `;
+    }).join('');
   }
 }
 
@@ -3747,6 +3791,141 @@ function promptLastWorkingDate(employee, defaultDate) {
   return normalized;
 }
 
+function loadPendingConnectionLogs() {
+  try {
+    const raw = localStorage.getItem('pendingConnectionLogs');
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function savePendingConnectionLogs() {
+  localStorage.setItem('pendingConnectionLogs', JSON.stringify((state.pendingConnectionLogs || []).slice(-200)));
+}
+
+function updateBackendConnectionIndicator(isOnline, tooltipText) {
+  if (!backendConnectionDot) {
+    return;
+  }
+
+  const hasStateChanged = state.backendConnectionOnline !== isOnline;
+  state.backendConnectionOnline = isOnline;
+  backendConnectionDot.classList.toggle('backend-connection-dot--online', isOnline);
+  backendConnectionDot.classList.toggle('backend-connection-dot--offline', !isOnline);
+  backendConnectionDot.title = tooltipText || (isOnline ? 'Свързан към сървъра' : 'Няма връзка със сървъра');
+
+  if (hasStateChanged && isOnline) {
+    flushPendingConnectionLogs().catch(() => {
+      // will retry automatically later
+    });
+  }
+}
+
+function getReadableConnectionError(error) {
+  const message = cleanStoredValue(error?.message || error);
+  if (!message) {
+    return 'Неуспешна връзка с API сървъра.';
+  }
+  if (message.includes('Failed to fetch')) {
+    return 'Сървърът не отговаря или връзката е прекъсната (network error).';
+  }
+  if (message.includes('Health check failed')) {
+    return 'Health check към сървъра е неуспешен.';
+  }
+  return message;
+}
+
+function pushConnectionLogEntry(error, context = {}) {
+  const tenantId = state.selectedTenantId || state.currentUser?.tenantId || null;
+  const readable = getReadableConnectionError(error);
+  const signature = `${tenantId || 'no-tenant'}|${readable}`;
+
+  if (state.lastConnectionErrorSignature === signature) {
+    return;
+  }
+
+  state.lastConnectionErrorSignature = signature;
+
+  state.pendingConnectionLogs.push({
+    type: 'connection_error',
+    action: 'backend_connection_lost',
+    entity: 'backend_connection',
+    tenantId,
+    details: {
+      error: readable,
+      apiBaseUrl: state.apiBaseUrl,
+      context,
+    },
+    createdAt: new Date().toISOString(),
+  });
+  savePendingConnectionLogs();
+  flushPendingConnectionLogs().catch(() => {
+    // backend is down; keep queue in local storage
+  });
+}
+
+async function flushPendingConnectionLogs() {
+  if (!state.pendingConnectionLogs.length || !state.authToken || !state.backendConnectionOnline) {
+    return;
+  }
+
+  const queued = [...state.pendingConnectionLogs];
+  for (let index = 0; index < queued.length; index += 1) {
+    const item = queued[index];
+    try {
+      await apiFetch('/api/logs/connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(item),
+      });
+      state.pendingConnectionLogs.shift();
+      savePendingConnectionLogs();
+    } catch (_error) {
+      break;
+    }
+  }
+}
+
+async function withBackendReconnect(work, options = {}) {
+  try {
+    const result = await work();
+    updateBackendConnectionIndicator(true, 'Свързан към сървъра');
+    state.lastConnectionErrorSignature = '';
+    return result;
+  } catch (error) {
+    updateBackendConnectionIndicator(false, getReadableConnectionError(error));
+    pushConnectionLogEntry(error, { source: options.source || 'unknown' });
+
+    if (!options.skipReconnect) {
+      scheduleReconnect();
+    }
+
+    throw error;
+  }
+}
+
+function scheduleReconnect() {
+  if (state.backendReconnectInFlight) {
+    return;
+  }
+  state.backendReconnectInFlight = true;
+
+  const attempt = async () => {
+    const connected = await loadFromBackend({ silentStatus: true, skipReconnectSchedule: true });
+    if (!connected) {
+      setTimeout(attempt, 3000);
+      return;
+    }
+
+    state.backendReconnectInFlight = false;
+    setStatus('Връзката със сървъра е възстановена.', true);
+  };
+
+  setTimeout(attempt, 1200);
+}
+
 function detectApiBaseUrl() {
   const saved = localStorage.getItem('apiBaseUrl');
   if (saved) {
@@ -3777,10 +3956,20 @@ async function apiFetch(path, options = {}) {
     headers.set('Authorization', `Bearer ${state.authToken}`);
   }
 
-  const response = await fetch(`${state.apiBaseUrl}${path}`, {
-    ...options,
-    headers
-  });
+  let response;
+  try {
+    response = await fetch(`${state.apiBaseUrl}${path}`, {
+      ...options,
+      headers
+    });
+    updateBackendConnectionIndicator(true, 'Свързан към сървъра');
+    state.lastConnectionErrorSignature = '';
+  } catch (error) {
+    updateBackendConnectionIndicator(false, getReadableConnectionError(error));
+    pushConnectionLogEntry(error, { source: `apiFetch:${path}` });
+    scheduleReconnect();
+    throw error;
+  }
 
   if (response.status === 401 && state.authToken && !state.isHandlingUnauthorized) {
     state.isHandlingUnauthorized = true;
@@ -3946,7 +4135,7 @@ async function refreshMonthlyView() {
   state.scheduleEntrySnapshotsById = mappedEntrySnapshots;
 }
 
-async function loadFromBackend() {
+async function loadFromBackend(options = {}) {
   try {
     const healthResponse = await apiFetch('/api/health');
     if (!healthResponse.ok) {
@@ -3965,7 +4154,10 @@ async function loadFromBackend() {
       saveShiftTemplates();
     }
 
-    setStatus(`Свързан с PostgreSQL бекенд (${state.apiBaseUrl}).`, true);
+    updateBackendConnectionIndicator(true, 'Свързан към сървъра');
+    if (!options.silentStatus) {
+      setStatus(`Свързан с PostgreSQL бекенд (${state.apiBaseUrl}).`, true);
+    }
     persistEmployeesLocal();
     saveScheduleLocal();
     return true;
@@ -3989,6 +4181,12 @@ async function loadFromBackend() {
       } catch (_inner) {
         // fallback ignore
       }
+    }
+
+    updateBackendConnectionIndicator(false, getReadableConnectionError(error));
+    pushConnectionLogEntry(error, { source: 'loadFromBackend' });
+    if (!options.skipReconnectSchedule) {
+      scheduleReconnect();
     }
 
     return false;
