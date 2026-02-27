@@ -2702,9 +2702,9 @@ function renderVacationLedger() {
 
   const table = document.createElement('table');
   const allowanceHeader = hasCarryoverColumn ? `Полагаем ${year}` : 'Полагаем';
-  const carryoverHeader = hasCarryoverColumn ? `<th>Дни за ${year}</th>` : '';
+  const carryoverHeader = hasCarryoverColumn ? `<th>Дни за ${previousYear}</th>` : '';
   table.innerHTML =
-    `<tr><th>Служител</th><th>${allowanceHeader}</th>${carryoverHeader}<th>Използван за годината</th><th>Остатък</th></tr>`;
+    `<tr><th>Служител</th>${carryoverHeader}<th>${allowanceHeader}</th><th>Използван за годината</th><th>Остатък</th></tr>`;
 
   if (!filteredEmployees.length) {
     vacationLedger.textContent = 'Няма служители по зададения филтър.';
@@ -2725,8 +2725,8 @@ function renderVacationLedger() {
       <td>
         <button type="button" class="vacation-dossier-toggle" data-employee-id="${employee.id}" aria-expanded="${isExpanded}">${employee.name}</button>
       </td>
-      <td>${allowance}</td>
       ${hasCarryoverColumn ? `<td>${carryoverDays}</td>` : ''}
+      <td>${allowance}</td>
       <td>${used}</td>
       <td>${totalAllowanceForYear - used}</td>
     `;
