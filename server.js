@@ -7,6 +7,12 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 const {
+  parseCsvText,
+  normalizeImportRow,
+  buildDuplicateKey,
+  buildImportPreview,
+} = require('./shift_import');
+const {
   DEFAULT_WEEKEND_RATE,
   DEFAULT_HOLIDAY_RATE,
   computeMonthlySummary,
@@ -51,7 +57,7 @@ app.use(
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 function isValidUuid(v) {
   return (
@@ -62,6 +68,61 @@ function isValidUuid(v) {
 
 function cleanStr(v) {
   return String(v ?? '').trim();
+}
+
+function normalizeShiftImportRowsPayload(payload) {
+  if (Array.isArray(payload?.rows)) {
+    return payload.rows;
+  }
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+  return null;
+}
+
+async function resolveTenantDepartmentOrThrow({ departmentId, tenantId }) {
+  if (!isValidUuid(departmentId)) {
+    throw createHttpError(400, 'Невалиден department_id.');
+  }
+
+  const result = await pool.query(
+    'SELECT id FROM departments WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+    [departmentId, tenantId]
+  );
+
+  if (!result.rowCount) {
+    throw createHttpError(404, 'Отделът не е намерен или е извън tenant scope.');
+  }
+
+  return result.rows[0].id;
+}
+
+function readRowsFromImportRequest(req) {
+  const rowsPayload = normalizeShiftImportRowsPayload(req.body);
+  if (rowsPayload) {
+    return rowsPayload;
+  }
+
+  const csvText = cleanStr(req.body?.csv || req.body?.csvText || req.body?.rawCsv || '');
+  if (csvText) {
+    return parseCsvText(csvText);
+  }
+  return null;
+}
+
+async function loadDepartmentShiftDuplicates({ departmentId, tenantId }) {
+  const rows = await pool.query(
+    `SELECT id, code, name, start_time, end_time, break_minutes, break_included
+     FROM shift_templates
+     WHERE tenant_id = $1 AND department_id = $2`,
+    [tenantId, departmentId]
+  );
+
+  const byKey = new Map();
+  rows.rows.forEach((row) => {
+    byKey.set(buildDuplicateKey(row), row);
+  });
+  return byKey;
 }
 
 function normalizeShiftCode(input) {
@@ -316,6 +377,58 @@ function buildShiftTemplateScopeCondition({ hasDepartmentId, departmentId, tenan
     values,
     whereSql: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
   };
+}
+
+function mapShiftTemplateRow(row) {
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    start: row.start_time || row.start,
+    end: row.end_time || row.end,
+    hours: Number(row.hours || 0),
+    break_minutes: Number(row.break_minutes || 0),
+    break_included: Boolean(row.break_included),
+    departmentId: row.department_id || row.departmentId || null,
+  };
+}
+
+async function getDepartmentScopedShifts({ tenantId, departmentId, includeGlobal = true }) {
+  const hasTenantId = await hasShiftTemplatesTenantId();
+  const hasDepartmentId = await hasShiftTemplatesDepartmentId();
+  const values = [];
+  const where = [];
+
+  if (hasTenantId) {
+    values.push(tenantId);
+    where.push(`st.tenant_id = $${values.length}`);
+  }
+
+  if (hasDepartmentId) {
+    values.push(departmentId);
+    const departmentParam = `$${values.length}`;
+    where.push(includeGlobal
+      ? `(st.department_id = ${departmentParam} OR st.department_id IS NULL)`
+      : `st.department_id = ${departmentParam}`);
+  }
+
+  const result = await pool.query(
+    `SELECT st.id,
+            st.code,
+            st.name,
+            st.start_time,
+            st.end_time,
+            st.break_minutes,
+            st.break_included,
+            st.hours,
+            st.department_id
+     FROM shift_templates st
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY (st.department_id IS NULL) ASC, st.name ASC, st.start_time ASC`,
+    values
+  );
+
+  return result.rows.map(mapShiftTemplateRow);
 }
 
 async function ensureDefaultShiftTemplatesForTenant(tenantId) {
@@ -2624,21 +2737,26 @@ app.post('/api/schedules/:id/generate', requireAuth, requireTenantContext, async
 });
 
 app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, res) => {
+  const validation = validateShiftTemplatePayload(req.body || {});
+  if (!validation.ok) {
+    return res.status(400).json({ message: validation.message });
+  }
+
   const code = cleanStr(req.body?.code);
-  const name = cleanStr(req.body?.name);
-  const start = cleanStr(req.body?.start);
-  const end = cleanStr(req.body?.end);
-  const hours = Number(req.body?.hours);
-  const breakMinutes = Math.max(0, Number(req.body?.break_minutes ?? req.body?.breakMinutes ?? 0));
-  const breakIncluded = Boolean(req.body?.break_included ?? req.body?.breakIncluded ?? false);
+  const { name } = validation.value;
+  const start = validation.value.startTime;
+  const end = validation.value.endTime;
+  const hours = validation.value.hours;
+  const breakMinutes = validation.value.breakMinutes;
+  const breakIncluded = validation.value.breakIncluded;
   const isSirvShift = req.body?.is_sirv_shift === undefined && req.body?.isSirvShift === undefined
     ? null
     : Boolean(req.body?.is_sirv_shift ?? req.body?.isSirvShift);
   const departmentIdRaw = req.body?.department_id ?? req.body?.departmentId;
   const departmentId = departmentIdRaw === null || departmentIdRaw === '' ? null : cleanStr(departmentIdRaw);
 
-  if (!code || !name || !start || !end || !(hours > 0)) {
-    return res.status(400).json({ message: 'Невалидни данни за смяна.' });
+  if (!code) {
+    return res.status(400).json({ message: 'Невалиден код за смяна.' });
   }
 
   try {
@@ -2725,6 +2843,118 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/api/departments/:id/shifts/import/preview', requireAuth, requireTenantContext, async (req, res) => {
+  try {
+    const departmentId = await resolveTenantDepartmentOrThrow({ departmentId: req.params.id, tenantId: req.tenantId });
+    const sourceRows = readRowsFromImportRequest(req);
+    if (!sourceRows) {
+      return res.status(400).json({ message: 'Липсват rows/csv/file за import preview.' });
+    }
+
+    const existingShiftsByKey = await loadDepartmentShiftDuplicates({ departmentId, tenantId: req.tenantId });
+    const preview = buildImportPreview({ rows: sourceRows, existingShifts: Array.from(existingShiftsByKey.values()) });
+    const toCreate = preview.to_create.map((entry) => ({
+      ...entry,
+      normalizedRow: {
+        ...entry.normalizedRow,
+        department_id: departmentId,
+      },
+    }));
+
+    return res.json({
+      department_id: departmentId,
+      total_rows: preview.total_rows,
+      valid_rows: preview.valid_rows,
+      invalid_rows: preview.invalid_rows,
+      duplicates: preview.duplicates,
+      to_create: toCreate,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    return res.status(status).json({ message: error.message });
+  }
+});
+
+app.post('/api/departments/:id/shifts/import/commit', requireAuth, requireTenantContext, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const departmentId = await resolveTenantDepartmentOrThrow({ departmentId: req.params.id, tenantId: req.tenantId });
+    const mode = cleanStr(req.body?.mode || 'skipDuplicates') || 'skipDuplicates';
+    const supportedModes = new Set(['skipDuplicates', 'updateDuplicates']);
+    if (!supportedModes.has(mode)) {
+      return res.status(400).json({ message: 'Невалиден mode. Използвайте skipDuplicates или updateDuplicates.' });
+    }
+
+    const toCreate = Array.isArray(req.body?.toCreate) ? req.body.toCreate : [];
+    if (!toCreate.length) {
+      return res.json({ createdCount: 0, updatedCount: 0, skippedCount: 0, createdIds: [] });
+    }
+
+    await client.query('BEGIN');
+
+    const existingByKey = await loadDepartmentShiftDuplicates({ departmentId, tenantId: req.tenantId });
+    const createdIds = [];
+    let createdCount = 0;
+    let updatedCount = 0;
+    let skippedCount = 0;
+
+    for (const item of toCreate) {
+      const normalizedResult = normalizeImportRow(item || {});
+      const normalized = normalizedResult.normalizedRow;
+      const validationErrors = normalizedResult.errors;
+      if (validationErrors.length) {
+        skippedCount += 1;
+        continue;
+      }
+
+      const duplicateKey = buildDuplicateKey(normalized);
+      const existing = existingByKey.get(duplicateKey);
+
+      if (existing && mode === 'skipDuplicates') {
+        skippedCount += 1;
+        continue;
+      }
+
+      if (existing && mode === 'updateDuplicates') {
+        await client.query(
+          `UPDATE shift_templates
+           SET name = $1,
+               start_time = $2,
+               end_time = $3,
+               break_minutes = $4,
+               break_included = $5,
+               hours = $6
+           WHERE id = $7 AND tenant_id = $8 AND department_id = $9`,
+          [normalized.name, normalized.start_time, normalized.end_time, normalized.break_minutes, normalized.break_included, normalized.hours, existing.id, req.tenantId, departmentId]
+        );
+        updatedCount += 1;
+        continue;
+      }
+
+      const nextCode = cleanStr(normalized.code) || `IMP${String(Date.now()).slice(-6)}${Math.floor(Math.random() * 999)}`;
+      const inserted = await client.query(
+        `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, break_minutes, break_included, hours)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id`,
+        [req.tenantId, departmentId, nextCode, normalized.name, normalized.start_time, normalized.end_time, normalized.break_minutes, normalized.break_included, normalized.hours]
+      );
+
+      createdCount += 1;
+      createdIds.push(inserted.rows[0].id);
+      existingByKey.set(duplicateKey, { id: inserted.rows[0].id, ...normalized, code: nextCode });
+    }
+
+    await client.query('COMMIT');
+    return res.json({ createdCount, updatedCount, skippedCount, createdIds });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    const status = error.status || 500;
+    return res.status(status).json({ message: error.message });
+  } finally {
+    client.release();
   }
 });
 
