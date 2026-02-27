@@ -13,6 +13,7 @@ const {
   calcShiftDurationHours,
   calcNightHours,
   calcDayType,
+  summarizeViolationStatus,
 } = require('./labor_rules');
 
 const app = express();
@@ -774,7 +775,9 @@ function validateEmployeeInput(data = {}) {
   const startDate = normalizeDateOnly(data.startDate || data.start_date);
   const endDate = normalizeDateOnly(data.endDate || data.end_date);
   const isSirv = Boolean(data.is_sirv ?? data.isSirv);
-  const allowedPeriods = new Set([1, 2, 3, 4, 6]);
+  const rawWorkdayMinutes = Number(data.daily_norm_minutes ?? data.dailyNormMinutes ?? data.workday_minutes ?? data.workdayMinutes ?? 480);
+  const workdayMinutes = Number.isFinite(rawWorkdayMinutes) && rawWorkdayMinutes > 0 ? Math.trunc(rawWorkdayMinutes) : 480;
+  const allowedPeriods = new Set([1, 2, 3, 4]);
   const parsedSirvPeriod = Number(data.sirv_period_months ?? data.sirvPeriodMonths ?? 1);
   const sirvPeriodMonths = allowedPeriods.has(parsedSirvPeriod) ? parsedSirvPeriod : 1;
   if (!isValidEmploymentRange(startDate, endDate)) {
@@ -804,6 +807,7 @@ function validateEmployeeInput(data = {}) {
       youngWorkerBenefit,
       isSirv,
       sirvPeriodMonths,
+      workdayMinutes,
     },
   };
 }
@@ -1417,7 +1421,7 @@ app.post('/api/employees', requireAuth, requireTenantContext, async (req, res) =
     return res.status(400).json(validation.error);
   }
 
-  const { name, department, departmentId, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths } = validation.value;
+  const { name, department, departmentId, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths, workdayMinutes } = validation.value;
 
   try {
     const actor = await resolveActorTenant(req);
@@ -1443,15 +1447,15 @@ app.post('/api/employees', requireAuth, requireTenantContext, async (req, res) =
     }
 
     const result = await pool.query(
-      `INSERT INTO employees (name, department, department_id, position, egn, vacation_allowance, base_vacation_allowance, telk, young_worker_benefit, is_sirv, sirv_period_months, start_date, end_date, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      `INSERT INTO employees (name, department, department_id, position, egn, vacation_allowance, base_vacation_allowance, telk, young_worker_benefit, is_sirv, sirv_period_months, workday_minutes, start_date, end_date, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING id, name, department_id AS "departmentId", department, position, egn,
                  base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  COALESCE(is_sirv, FALSE) AS "isSirv", COALESCE(sirv_period_months, 1) AS "sirvPeriodMonths", COALESCE(workday_minutes, 480) AS "workdayMinutes",
                  start_date::text AS "startDate", end_date::text AS "endDate",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
-      [name, departmentName, resolvedDepartmentId, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths, startDate, endDate, actor.tenantId]
+      [name, departmentName, resolvedDepartmentId, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths, workdayMinutes, startDate, endDate, actor.tenantId]
     );
 
     res.status(201).json({ ok: true, employee: result.rows[0] });
@@ -1476,7 +1480,7 @@ app.put('/api/employees/:id', requireAuth, requireTenantContext, async (req, res
     return res.status(400).json(validation.error);
   }
 
-  const { name, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths } = validation.value;
+  const { name, position, egn, startDate, endDate, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths, workdayMinutes } = validation.value;
 
   try {
     const actor = await resolveActorTenant(req);
@@ -1491,17 +1495,18 @@ app.put('/api/employees/:id', requireAuth, requireTenantContext, async (req, res
            young_worker_benefit = $8,
            is_sirv = $9,
            sirv_period_months = $10,
-           start_date = $11,
-           end_date = $12,
-           tenant_id = COALESCE(tenant_id, $13)
-       WHERE id = $1 AND tenant_id = $13
+           workday_minutes = $11,
+           start_date = $12,
+           end_date = $13,
+           tenant_id = COALESCE(tenant_id, $14)
+       WHERE id = $1 AND tenant_id = $14
        RETURNING id, name, department_id AS "departmentId", COALESCE(department, 'Без отдел') AS department,
                  position, egn, base_vacation_allowance AS "baseVacationAllowance", telk, young_worker_benefit AS "youngWorkerBenefit",
                  COALESCE(is_sirv, FALSE) AS "isSirv", COALESCE(sirv_period_months, 1) AS "sirvPeriodMonths", COALESCE(workday_minutes, 480) AS "workdayMinutes",
                  start_date::text AS "startDate", end_date::text AS "endDate",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "totalVacationDays",
                  (base_vacation_allowance + CASE WHEN telk THEN 6 ELSE 0 END + CASE WHEN young_worker_benefit THEN 6 ELSE 0 END) AS "vacationAllowance"`,
-      [id, name, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths, startDate, endDate, actor.tenantId]
+      [id, name, position, egn, vacationAllowance, baseVacationAllowance, telk, youngWorkerBenefit, isSirv, sirvPeriodMonths, workdayMinutes, startDate, endDate, actor.tenantId]
     );
 
     if (!updated.rowCount) {
@@ -1822,7 +1827,8 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
 
     const employeeResult = await pool.query(
       `SELECT e.id, COALESCE(d.name, e.department) AS department,
-              e.start_date::text AS "startDate", e.end_date::text AS "endDate"
+              e.start_date::text AS "startDate", e.end_date::text AS "endDate",
+              COALESCE(e.is_sirv, FALSE) AS "isSirv"
        FROM employees e
        LEFT JOIN departments d ON d.id = e.department_id
        WHERE e.id = $1 AND e.tenant_id = $2`,
@@ -2060,6 +2066,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     });
 
     const rowSummary = summaryMap.get(employeeId) || emptyComputedSummary();
+    const validationStatus = summarizeViolationStatus(rowSummary.violations);
     let scheduleSummary = emptyComputedSummary();
     for (const value of summaryMap.values()) {
       scheduleSummary = addSummaries(scheduleSummary, value);
@@ -2119,6 +2126,11 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       },
       rowSummary,
       scheduleSummary,
+      validation: {
+        status: validationStatus,
+        message: validationStatus === 'error' ? 'Нарушени са ограниченията за СИРВ/почивки. Коригирайте смяната.' : (validationStatus === 'warning' ? 'Има предупреждения в трудовите ограничения.' : 'OK'),
+        violations: rowSummary.violations || [],
+      },
     });
   } catch (error) {
     return res.status(500).json({ message: error.message });

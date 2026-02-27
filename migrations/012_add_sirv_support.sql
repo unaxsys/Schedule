@@ -11,12 +11,12 @@ ADD COLUMN IF NOT EXISTS workday_minutes INTEGER DEFAULT 480;
 
 UPDATE employees
 SET is_sirv = COALESCE(is_sirv, FALSE),
-    sirv_period_months = CASE WHEN sirv_period_months IN (1,2,3,4,6) THEN sirv_period_months ELSE 1 END,
+    sirv_period_months = CASE WHEN sirv_period_months IN (1,2,3,4) THEN sirv_period_months ELSE 1 END,
     workday_minutes = CASE WHEN workday_minutes > 0 THEN workday_minutes ELSE 480 END
 WHERE is_sirv IS NULL
    OR sirv_period_months IS NULL
    OR workday_minutes IS NULL
-   OR sirv_period_months NOT IN (1,2,3,4,6)
+   OR sirv_period_months NOT IN (1,2,3,4)
    OR workday_minutes <= 0;
 
 ALTER TABLE employees
