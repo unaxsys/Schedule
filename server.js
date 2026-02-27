@@ -1945,11 +1945,16 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     let resolvedShiftId = requestedShiftId || null;
 
     const hasShiftTemplatesDepartment = await hasShiftTemplatesDepartmentId();
-    const shiftScope = buildShiftTemplateScopeCondition({
+    const shiftScopeForLookup = buildShiftTemplateScopeCondition({
       hasDepartmentId: hasShiftTemplatesDepartment,
       departmentId: schedule.department_id || null,
       tenantScoped: hasTenantId ? req.tenantId : null,
       startIndex: 2,
+    });
+    const shiftScope = buildShiftTemplateScopeCondition({
+      hasDepartmentId: hasShiftTemplatesDepartment,
+      departmentId: schedule.department_id || null,
+      tenantScoped: hasTenantId ? req.tenantId : null,
     });
 
     if (requestedShiftId) {
@@ -1957,8 +1962,8 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         return res.status(400).json({ message: 'Невалиден shiftId.' });
       }
       const shiftByIdQuery = {
-        text: `SELECT id, code FROM shift_templates WHERE id = $1${shiftScope.whereSql ? ` AND ${shiftScope.whereSql.replace(/^WHERE\s+/i, '')}` : ''} LIMIT 1`,
-        values: [requestedShiftId, ...shiftScope.values],
+        text: `SELECT id, code FROM shift_templates WHERE id = $1${shiftScopeForLookup.whereSql ? ` AND ${shiftScopeForLookup.whereSql.replace(/^WHERE\s+/i, '')}` : ''} LIMIT 1`,
+        values: [requestedShiftId, ...shiftScopeForLookup.values],
       };
       const shiftByIdResult = await pool.query(shiftByIdQuery.text, shiftByIdQuery.values);
       if (shiftByIdResult.rowCount === 0) {
