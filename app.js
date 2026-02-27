@@ -5285,9 +5285,23 @@ async function loadSchedulesForMonth() {
     query.set('department_id', singleDepartmentFilter);
   }
 
-  const response = await apiFetch(`/api/schedules?${query.toString()}`);
+  let response;
+  try {
+    response = await apiFetch(`/api/schedules?${query.toString()}`);
+  } catch (_error) {
+    state.schedules = [];
+    state.selectedScheduleIds = [];
+    state.activeScheduleId = null;
+    renderScheduleList();
+    return false;
+  }
+
   if (!response.ok) {
-    throw new Error('Schedules unavailable');
+    state.schedules = [];
+    state.selectedScheduleIds = [];
+    state.activeScheduleId = null;
+    renderScheduleList();
+    return false;
   }
 
   const payload = await response.json();
@@ -5316,6 +5330,7 @@ async function loadSchedulesForMonth() {
   }
 
   renderScheduleList();
+  return true;
 }
 
 
@@ -5385,7 +5400,14 @@ async function refreshMonthlyView() {
 
   const month = state.month || monthPicker.value || todayMonth();
   state.month = month;
-  await loadSchedulesForMonth();
+  const schedulesLoaded = await loadSchedulesForMonth();
+  if (!schedulesLoaded) {
+    state.scheduleEmployees = [];
+    state.scheduleEntriesById = {};
+    state.scheduleEntrySnapshotsById = {};
+    state.scheduleEntryValidationsById = {};
+    return;
+  }
 
   const monthParam = encodeURIComponent(month);
   const singleDepartmentFilter = getEffectiveSingleDepartmentFilter();
