@@ -324,7 +324,8 @@
           </div>
 
           <div id="shiftsSettingsPanel" class="settings-subtab-panel">
-            <h3>Смени (начало/край)</h3>
+            <h3>Смени на отдела (начало/край)</h3>
+            <p>Смените тук са само за избрания отдел. Ако няма отделни смени, се ползват global смени.</p>
             <form id="shiftForm" class="row">
               <input id="shiftCodeInput" maxlength="4" required placeholder="Код (напр. D1)" />
               <input id="shiftNameInput" required placeholder="Име на смяна" />
@@ -333,6 +334,8 @@
               </select>
               <input id="shiftStartInput" type="time" required />
               <input id="shiftEndInput" type="time" required />
+              <input id="shiftBreakMinutesInput" type="number" min="0" step="1" value="0" placeholder="Почивка (мин)" />
+              <label><input id="shiftBreakIncludedInput" type="checkbox" /> Почивката е включена</label>
               <button type="submit">Добави смяна</button>
             </form>
             <div class="row shift-import-row">
