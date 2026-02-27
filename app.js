@@ -6101,6 +6101,22 @@ function saveShiftTemplates() {
 }
 
 function mergeShiftTemplates(backendShiftTemplates) {
+  // FIX: normalize break minutes (supports break_minutes and breakMinutes)
+  function __getBreakMinutes(obj) {
+    const v = obj && (obj.break_minutes ?? obj.breakMinutes ?? 0);
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+
+  // FIX: normalize break minutes (supports break_minutes and breakMinutes)
+  function __getBreakMinutes(obj) {
+    const v = obj && (obj.break_minutes ?? obj.breakMinutes ?? 0);
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+
   const merged = [
     ...SYSTEM_SHIFTS.map((shift) => ({ ...shift, id: null })),
     { ...DEFAULT_WORK_SHIFT, id: null }
