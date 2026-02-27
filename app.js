@@ -46,6 +46,7 @@ const state = {
   sirvSchedule: {},
   scheduleEntriesById: {},
   scheduleEntrySnapshotsById: {},
+  scheduleEntryValidationsById: {},
   scheduleShiftTemplatesById: {},
   schedules: [],
   selectedScheduleIds: [],
@@ -114,6 +115,7 @@ const superAdminPortalLink = document.getElementById('superAdminPortalLink');
 const tabButtons = document.querySelectorAll('.tab-btn');
 const tabPanels = document.querySelectorAll('.tab-panel');
 const monthInfo = document.getElementById('monthInfo');
+const scheduleOverviewPanel = document.getElementById('scheduleOverviewPanel');
 const scheduleFilterDepartmentSelect = document.getElementById('scheduleFilterDepartmentSelect');
 const scheduleDepartmentSelect = document.getElementById('scheduleDepartmentSelect');
 const scheduleNameInput = document.getElementById('scheduleNameInput');
@@ -218,6 +220,76 @@ const inspectTableNameInput = document.getElementById('inspectTableNameInput');
 const inspectTableOutput = document.getElementById('inspectTableOutput');
 
 let statusToastTimer = null;
+
+
+const safeNum = window.ScheduleTotals?.safeNum || ((value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+});
+const minutesToHoursDecimal = window.ScheduleTotals?.minutesToHoursDecimal || ((minutes) => (safeNum(minutes, 0) / 60).toFixed(2));
+const sumEmployeeTotals = window.ScheduleTotals?.sumEmployeeTotals || ((entriesByDay) => ({
+  workMinutesTotal: (entriesByDay || []).reduce((acc, entry) => acc + safeNum(entry?.workMinutesTotal ?? entry?.workMinutes), 0),
+  nightMinutes: (entriesByDay || []).reduce((acc, entry) => acc + safeNum(entry?.nightMinutes), 0),
+  weekendMinutes: (entriesByDay || []).reduce((acc, entry) => acc + safeNum(entry?.weekendMinutes), 0),
+  holidayMinutes: (entriesByDay || []).reduce((acc, entry) => acc + safeNum(entry?.holidayMinutes), 0),
+  overtimeMinutes: (entriesByDay || []).reduce((acc, entry) => acc + safeNum(entry?.overtimeMinutes), 0),
+}));
+const sumGridTotals = window.ScheduleTotals?.sumGridTotals || ((visibleEmployees) => (visibleEmployees || []).reduce((acc, employee) => ({
+  workMinutesTotal: acc.workMinutesTotal + safeNum(employee?.workMinutesTotal),
+  nightMinutes: acc.nightMinutes + safeNum(employee?.nightMinutes),
+  weekendMinutes: acc.weekendMinutes + safeNum(employee?.weekendMinutes),
+  holidayMinutes: acc.holidayMinutes + safeNum(employee?.holidayMinutes),
+  overtimeMinutes: acc.overtimeMinutes + safeNum(employee?.overtimeMinutes),
+}), { workMinutesTotal: 0, nightMinutes: 0, weekendMinutes: 0, holidayMinutes: 0, overtimeMinutes: 0 }));
+
+function truncateMessages(messages, maxItems = 2) {
+  const source = Array.isArray(messages) ? messages.filter(Boolean) : [];
+  if (source.length <= maxItems) {
+    return source;
+  }
+  return [...source.slice(0, maxItems), `+${source.length - maxItems} още…`];
+}
+
+function renderScheduleOverviewTotals(totals) {
+  if (!scheduleOverviewPanel) {
+    return;
+  }
+  const items = [
+    ['Общо часове', totals.workMinutesTotal],
+    ['Нощни', totals.nightMinutes],
+    ['Уикенд', totals.weekendMinutes],
+    ['Празнични', totals.holidayMinutes],
+    ['Извънредни', totals.overtimeMinutes],
+  ];
+  scheduleOverviewPanel.innerHTML = `
+    <div class="schedule-overview-title">Обобщение</div>
+    <div class="schedule-overview-grid">
+      ${items.map(([label, minutes]) => `<div class="schedule-overview-item"><span>${label}</span><strong>${minutesToHoursDecimal(minutes)} ч</strong></div>`).join('')}
+    </div>
+  `;
+}
+
+function appendSnapshotTotalsColumns(row, totals, isTotalsRow = false) {
+  const columns = [
+    totals.workMinutesTotal,
+    totals.nightMinutes,
+    totals.weekendMinutes,
+    totals.holidayMinutes,
+    totals.overtimeMinutes,
+  ];
+  columns.forEach((value, index) => {
+    const cell = document.createElement('td');
+    cell.className = 'summary-col schedule-snapshot-total';
+    if (index === 4 && safeNum(value) > 0) {
+      cell.classList.add('negative');
+    }
+    cell.textContent = `${minutesToHoursDecimal(value)} ч`;
+    if (isTotalsRow) {
+      cell.classList.add('schedule-snapshot-total--grand');
+    }
+    row.appendChild(cell);
+  });
+}
 
 init();
 
@@ -787,6 +859,7 @@ function resetTenantScopedState({ clearLocalStorage = false } = {}) {
   state.schedule = {};
   state.scheduleEntriesById = {};
   state.scheduleEntrySnapshotsById = {};
+  state.scheduleEntryValidationsById = {};
   state.schedules = [];
   state.selectedScheduleIds = [];
   state.activeScheduleId = null;
@@ -3294,6 +3367,13 @@ function renderSchedule() {
     header.appendChild(cell);
   });
 
+  ['Общо', 'Нощни', 'Уикенд', 'Празнични', 'Извънредни'].forEach((label) => {
+    const cell = document.createElement('th');
+    cell.className = 'summary-col schedule-snapshot-total';
+    cell.textContent = label;
+    header.appendChild(cell);
+  });
+
   scheduleTable.innerHTML = '';
   scheduleTable.appendChild(header);
 
@@ -3316,6 +3396,7 @@ function renderSchedule() {
   };
 
   const employeesToRender = getEmployeesForSelectedSchedules();
+  const employeeSnapshotTotalsList = [];
   const shouldGroupByDepartment = state.selectedDepartmentId === DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS;
   const groupedEmployees = shouldGroupByDepartment
     ? employeesToRender.reduce((acc, employee) => {
@@ -3334,7 +3415,7 @@ function renderSchedule() {
     if (shouldGroupByDepartment) {
       const sectionRow = document.createElement('tr');
       const sectionCell = document.createElement('td');
-      sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length;
+      sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length + 5;
       sectionCell.innerHTML = `<b>Отдел: ${department}</b>`;
       sectionRow.appendChild(sectionCell);
       scheduleTable.appendChild(sectionRow);
@@ -3358,6 +3439,7 @@ function renderSchedule() {
         vacationDays: 0,
         sickDays: 0
       };
+      const snapshotEntriesByDay = [];
 
       for (let day = 1; day <= totalDays; day += 1) {
         const inEmployment = isEmployeeActiveOnDay(employee, year, monthIndex, day);
@@ -3431,11 +3513,40 @@ function renderSchedule() {
         });
 
         cell.appendChild(select);
-        row.appendChild(cell);
+
         const scheduleIdForSnapshot = getEmployeeScheduleId(employee);
-        const entrySnapshot = scheduleIdForSnapshot
-          ? state.scheduleEntrySnapshotsById[`${scheduleIdForSnapshot}|${employee.id}|${day}`] || null
-          : null;
+        const entryKey = scheduleIdForSnapshot ? `${scheduleIdForSnapshot}|${employee.id}|${day}` : '';
+        const entrySnapshot = entryKey ? state.scheduleEntrySnapshotsById[entryKey] || null : null;
+        const entryValidation = entryKey ? state.scheduleEntryValidationsById[entryKey] || null : null;
+        snapshotEntriesByDay.push(entrySnapshot || {});
+
+        const warningMessages = Array.isArray(entryValidation?.warnings) ? entryValidation.warnings.filter(Boolean) : [];
+        const errorMessages = Array.isArray(entryValidation?.errors) ? entryValidation.errors.filter(Boolean) : [];
+        if (errorMessages.length || warningMessages.length) {
+          const marker = document.createElement('span');
+          marker.className = `cell-validation-marker ${errorMessages.length ? 'cell-validation-marker--error' : 'cell-validation-marker--warning'}`;
+          marker.textContent = errorMessages.length ? '❌' : '⚠';
+          const details = [];
+          if (errorMessages.length) {
+            details.push(`Грешки: ${truncateMessages(errorMessages).join(' | ')}`);
+          }
+          if (warningMessages.length) {
+            details.push(`Предупреждения: ${truncateMessages(warningMessages).join(' | ')}`);
+          }
+          marker.title = details.join('\n');
+          cell.appendChild(marker);
+        }
+
+        if (safeNum(entrySnapshot?.overtimeMinutes) > 0) {
+          const overtimeBadge = document.createElement('span');
+          overtimeBadge.className = 'cell-ot-badge';
+          overtimeBadge.textContent = 'OT';
+          overtimeBadge.title = `Извънредни: ${minutesToHoursDecimal(entrySnapshot?.overtimeMinutes)} ч`;
+          cell.classList.add('day-overtime');
+          cell.appendChild(overtimeBadge);
+        }
+
+        row.appendChild(cell);
         collectSummary(summary, currentShift, holiday, weekend, inEmployment, entrySnapshot);
         if (inEmployment && !holiday && !weekend) {
           summary.monthNormHours += 8;
@@ -3445,6 +3556,10 @@ function renderSchedule() {
       const employeeTotals = calculateEmployeeTotals({ employee, summary, year, month, monthNormHours: summary.monthNormHours });
       accumulateTotals(totals, employeeTotals);
       appendSummaryColumns(row, employeeTotals, visibleSummaryColumns);
+
+      const employeeSnapshotTotals = sumEmployeeTotals(snapshotEntriesByDay);
+      appendSnapshotTotalsColumns(row, employeeSnapshotTotals);
+      employeeSnapshotTotalsList.push(employeeSnapshotTotals);
       scheduleTable.appendChild(row);
     });
   });
@@ -3464,7 +3579,12 @@ function renderSchedule() {
     }
 
     appendSummaryColumns(totalsRow, totals, visibleSummaryColumns, true);
+    const snapshotGrandTotals = sumGridTotals(employeeSnapshotTotalsList);
+    appendSnapshotTotalsColumns(totalsRow, snapshotGrandTotals, true);
+    renderScheduleOverviewTotals(snapshotGrandTotals);
     scheduleTable.appendChild(totalsRow);
+  } else {
+    renderScheduleOverviewTotals({ workMinutesTotal: 0, nightMinutes: 0, weekendMinutes: 0, holidayMinutes: 0, overtimeMinutes: 0 });
   }
 }
 
@@ -3587,9 +3707,10 @@ function collectSummary(summary, shiftCode, holiday, weekend, inEmployment = tru
 
   const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
 
-  const hasSnapshotMinutes = snapshot && Number.isFinite(Number(snapshot.workMinutes));
+  const snapshotWorkMinutes = Number(snapshot?.workMinutesTotal ?? snapshot?.workMinutes);
+  const hasSnapshotMinutes = Number.isFinite(snapshotWorkMinutes);
   if (hasSnapshotMinutes) {
-    const workHours = Number(snapshot.workMinutes || 0) / 60;
+    const workHours = snapshotWorkMinutes / 60;
     const nightHours = Number(snapshot.nightMinutes || 0) / 60;
     const holidayHours = Number(snapshot.holidayMinutes || 0) / 60;
     const weekendHours = Number(snapshot.weekendMinutes || 0) / 60;
@@ -4238,6 +4359,7 @@ async function refreshMonthlyView() {
     state.scheduleEmployees = [];
     state.scheduleEntriesById = {};
     state.scheduleEntrySnapshotsById = {};
+    state.scheduleEntryValidationsById = {};
     return;
   }
 
@@ -4248,6 +4370,7 @@ async function refreshMonthlyView() {
   const employeeById = new Map();
   const mappedEntries = {};
   const mappedEntrySnapshots = {};
+  const mappedEntryValidations = {};
 
   details.forEach((detail) => {
     const schedule = detail.schedule || {};
@@ -4286,10 +4409,15 @@ async function refreshMonthlyView() {
       mappedEntries[entryKey] = normalizeShiftCodeForApi(entry.shiftCode);
       mappedEntrySnapshots[entryKey] = {
         workMinutes: Number(entry.workMinutes ?? 0),
+        workMinutesTotal: Number(entry.workMinutesTotal ?? entry.workMinutes ?? 0),
         nightMinutes: Number(entry.nightMinutes ?? 0),
         holidayMinutes: Number(entry.holidayMinutes ?? 0),
         weekendMinutes: Number(entry.weekendMinutes ?? 0),
         overtimeMinutes: Number(entry.overtimeMinutes ?? 0),
+      };
+      mappedEntryValidations[entryKey] = {
+        errors: Array.isArray(entry.validation?.errors) ? entry.validation.errors : [],
+        warnings: Array.isArray(entry.validation?.warnings) ? entry.validation.warnings : [],
       };
     });
   });
@@ -4299,6 +4427,7 @@ async function refreshMonthlyView() {
   state.scheduleEmployees = mergedEmployees.map(normalizeEmployeeVacationData);
   state.scheduleEntriesById = mappedEntries;
   state.scheduleEntrySnapshotsById = mappedEntrySnapshots;
+  state.scheduleEntryValidationsById = mappedEntryValidations;
   state.scheduleShiftTemplatesById = {};
 
   details.forEach((detail) => {
@@ -4495,10 +4624,15 @@ async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) 
       state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = responsePayload.entry.shiftCode || shiftCode;
       state.scheduleEntrySnapshotsById[`${scheduleId}|${employee.id}|${day}`] = {
         workMinutes: Number(responsePayload.entry.workMinutes ?? 0),
+        workMinutesTotal: Number(responsePayload.entry.workMinutesTotal ?? responsePayload.entry.workMinutes ?? 0),
         nightMinutes: Number(responsePayload.entry.nightMinutes ?? 0),
         holidayMinutes: Number(responsePayload.entry.holidayMinutes ?? 0),
         weekendMinutes: Number(responsePayload.entry.weekendMinutes ?? 0),
         overtimeMinutes: Number(responsePayload.entry.overtimeMinutes ?? 0),
+      };
+      state.scheduleEntryValidationsById[`${scheduleId}|${employee.id}|${day}`] = {
+        errors: Array.isArray(responsePayload.entry.validation?.errors) ? responsePayload.entry.validation.errors : [],
+        warnings: Array.isArray(responsePayload.entry.validation?.warnings) ? responsePayload.entry.validation.warnings : [],
       };
       saveScheduleLocal();
       await refreshMonthlyView();
