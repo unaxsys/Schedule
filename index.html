@@ -226,6 +226,25 @@
               </label>
               <small class="field-help">Добавя допълнителни 6 дни за непълнолетни служители.</small>
             </div>
+            <fieldset class="form-fieldset">
+              <legend>Работно време</legend>
+              <div class="form-field form-field--checkbox">
+                <label class="field-inline field-checkbox">
+                  <input id="employeeIsSirvInput" type="checkbox" />
+                  <span>Работи на СИРВ (сумирано изчисляване на работното време)</span>
+                </label>
+              </div>
+              <div id="employeeSirvPeriodField" class="form-field hidden">
+                <label for="employeeSirvPeriodInput" class="field-label">Отчетен период (месеци)</label>
+                <select id="employeeSirvPeriodInput">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                  <option value="6">6</option>
+                </select>
+              </div>
+            </fieldset>
             <div class="form-field form-field--action">
               <button type="submit" class="btn-add">Добави служител</button>
               <small class="field-help">Записва служителя и го добавя в графика.</small>

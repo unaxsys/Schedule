@@ -98,6 +98,9 @@ const vacationAllowanceInput = document.getElementById('vacationAllowanceInput')
 const vacationAllowanceHint = document.getElementById('vacationAllowanceHint');
 const telkInput = document.getElementById('telkInput');
 const youngWorkerInput = document.getElementById('youngWorkerInput');
+const employeeIsSirvInput = document.getElementById('employeeIsSirvInput');
+const employeeSirvPeriodField = document.getElementById('employeeSirvPeriodField');
+const employeeSirvPeriodInput = document.getElementById('employeeSirvPeriodInput');
 const employeeList = document.getElementById('employeeList');
 const scheduleTable = document.getElementById('scheduleTable');
 const storageStatus = document.getElementById('storageStatus');
@@ -1485,6 +1488,10 @@ employeeForm.addEventListener('submit', async (event) => {
   const enteredVacationAllowance = Number(vacationAllowanceInput.value);
   const hasTelk = Boolean(telkInput?.checked);
   const hasYoungWorkerBenefit = Boolean(youngWorkerInput?.checked);
+  const isSirv = Boolean(employeeIsSirvInput?.checked);
+  const allowedSirvPeriods = new Set([1, 2, 3, 4, 6]);
+  const parsedSirvPeriod = Number(employeeSirvPeriodInput?.value || 1);
+  const sirvPeriodMonths = allowedSirvPeriods.has(parsedSirvPeriod) ? parsedSirvPeriod : 1;
 
   const employee = {
     id: createEmployeeId(),
@@ -1498,7 +1505,9 @@ employeeForm.addEventListener('submit', async (event) => {
     vacationAllowance: enteredVacationAllowance,
     telk: hasTelk,
     youngWorkerBenefit: hasYoungWorkerBenefit,
-    baseVacationAllowance: DEFAULT_BASE_VACATION_ALLOWANCE
+    baseVacationAllowance: DEFAULT_BASE_VACATION_ALLOWANCE,
+    isSirv,
+    sirvPeriodMonths
   };
 
   if (!firstName || !middleName || !lastName || !employee.position || !/^\d{10}$/.test(employee.egn) || !Number.isFinite(enteredVacationAllowance) || enteredVacationAllowance < 0 || !isValidEmploymentDates(employee.startDate, employee.endDate)) {
@@ -1545,6 +1554,13 @@ employeeForm.addEventListener('submit', async (event) => {
   if (youngWorkerInput) {
     youngWorkerInput.checked = false;
   }
+  if (employeeIsSirvInput) {
+    employeeIsSirvInput.checked = false;
+  }
+  if (employeeSirvPeriodInput) {
+    employeeSirvPeriodInput.value = '1';
+  }
+  toggleEmployeeSirvPeriod();
   if (startDateInput) {
     startDateInput.value = '';
   }
@@ -1558,6 +1574,15 @@ employeeForm.addEventListener('submit', async (event) => {
 startDateInput?.addEventListener('change', updateVacationAllowanceHint);
 telkInput?.addEventListener('change', updateVacationAllowanceHint);
 youngWorkerInput?.addEventListener('change', updateVacationAllowanceHint);
+function toggleEmployeeSirvPeriod() {
+  if (!employeeSirvPeriodField) {
+    return;
+  }
+  const active = Boolean(employeeIsSirvInput?.checked);
+  employeeSirvPeriodField.classList.toggle('hidden', !active);
+}
+employeeIsSirvInput?.addEventListener('change', toggleEmployeeSirvPeriod);
+toggleEmployeeSirvPeriod();
 updateVacationAllowanceHint();
 
 async function attachEmployeeToDepartment(employeeId, departmentId) {
@@ -4213,7 +4238,9 @@ async function saveEmployeeBackend(employee) {
         vacationAllowance: employee.vacationAllowance,
         telk: Boolean(employee.telk),
         youngWorkerBenefit: Boolean(employee.youngWorkerBenefit),
-        baseVacationAllowance: resolveBaseVacationAllowance(employee)
+        baseVacationAllowance: resolveBaseVacationAllowance(employee),
+        is_sirv: Boolean(employee.isSirv),
+        sirv_period_months: Number(employee.sirvPeriodMonths) || 1
       })
     });
 
@@ -4555,6 +4582,8 @@ function normalizeEmployeeVacationData(employee) {
   normalized.telk = Boolean(normalized.telk);
   normalized.youngWorkerBenefit = Boolean(normalized.youngWorkerBenefit);
   normalized.baseVacationAllowance = resolveBaseVacationAllowance(normalized);
+  normalized.isSirv = Boolean(normalized.isSirv ?? normalized.is_sirv);
+  normalized.sirvPeriodMonths = Number(normalized.sirvPeriodMonths ?? normalized.sirv_period_months ?? 1) || 1;
   normalized.vacationAllowance = calculateVacationAllowance(normalized.baseVacationAllowance, normalized.telk, normalized.youngWorkerBenefit, normalized.startDate);
   return normalized;
 }

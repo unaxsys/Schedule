@@ -2,7 +2,10 @@ const NIGHT_HOURS_COEFFICIENT = 1.14286;
 const DEFAULT_WEEKEND_RATE = 1.75;
 const DEFAULT_HOLIDAY_RATE = 2;
 const REST_BETWEEN_SHIFTS_MINUTES = 12 * 60;
+const WEEKLY_REST_MINUTES = 36 * 60;
 const MAX_SHIFT_HOURS = 12;
+const MAX_CONSECUTIVE_WORK_DAYS = 5;
+const DEFAULT_WORKDAY_MINUTES = 8 * 60;
 
 function round2(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
@@ -144,6 +147,15 @@ function emptySummary() {
     vacationDays: 0,
     sickDays: 0,
     violations: [],
+    workedMinutes: 0,
+    normMinutes: 0,
+    overtimeMinutes: 0,
+    normalMinutes: 0,
+    nightMinutes: 0,
+    holidayMinutes: 0,
+    overtimeWeekdayMinutes: 0,
+    overtimeRestdayMinutes: 0,
+    overtimeHolidayMinutes: 0,
   };
 }
 
@@ -153,6 +165,41 @@ function monthDayCount(monthKey) {
     return 0;
   }
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function calcNormMinutes(period = [], workdayMinutes = DEFAULT_WORKDAY_MINUTES) {
+  const normalizedWorkday = Number.isFinite(Number(workdayMinutes)) && Number(workdayMinutes) > 0
+    ? Math.trunc(Number(workdayMinutes))
+    : DEFAULT_WORKDAY_MINUTES;
+  let calendarWorkdays = 0;
+  for (const day of period) {
+    if (day && !day.isWeekend && !day.isHoliday) {
+      calendarWorkdays += 1;
+    }
+  }
+  return calendarWorkdays * normalizedWorkday;
+}
+
+function calcWorkedMinutes(schedule = []) {
+  return schedule.reduce((acc, entry) => acc + Math.max(0, Number(entry?.workMinutes || 0)), 0);
+}
+
+function distributeOvertime(overtimeMinutes, minutesOnHolidays, minutesOnRestDays, minutesOnWeekdays) {
+  let remaining = Math.max(0, Math.trunc(Number(overtimeMinutes) || 0));
+
+  const overtimeHolidayMinutes = Math.min(remaining, Math.max(0, Math.trunc(Number(minutesOnHolidays) || 0)));
+  remaining -= overtimeHolidayMinutes;
+
+  const overtimeRestdayMinutes = Math.min(remaining, Math.max(0, Math.trunc(Number(minutesOnRestDays) || 0)));
+  remaining -= overtimeRestdayMinutes;
+
+  const overtimeWeekdayMinutes = Math.min(remaining, Math.max(0, Math.trunc(Number(minutesOnWeekdays) || 0)));
+
+  return {
+    overtimeHolidayMinutes,
+    overtimeRestdayMinutes,
+    overtimeWeekdayMinutes,
+  };
 }
 
 function computeMonthlySummary({
@@ -180,9 +227,16 @@ function computeMonthlySummary({
     const employeeId = String(employee.id);
     const startDate = employee.start_date || employee.startDate || null;
     const endDate = employee.end_date || employee.endDate || null;
+    const isSirv = Boolean(employee.is_sirv ?? employee.isSirv);
+    const workdayMinutes = Math.max(1, Number(employee.workday_minutes ?? employee.workdayMinutes ?? DEFAULT_WORKDAY_MINUTES));
 
-    const perDayWorkedHours = new Map();
+    const periodDays = [];
+    const perDayWorkedMinutes = new Map();
     const intervalShifts = [];
+    const workedDaySet = new Set();
+    let minutesOnHolidays = 0;
+    let minutesOnRestDays = 0;
+    let minutesOnWeekdays = 0;
 
     for (let day = 1; day <= totalDays; day += 1) {
       const dateISO = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -191,10 +245,11 @@ function computeMonthlySummary({
         continue;
       }
       const { isWeekend, isHoliday } = calcDayType(dateISO);
-      if (!isWeekend && !isHoliday) {
-        summary.normHours += 8;
-      }
+      periodDays.push({ dateISO, isWeekend, isHoliday });
     }
+    summary.normMinutes = calcNormMinutes(periodDays, workdayMinutes);
+
+    const rawSchedule = [];
 
     for (const entry of scheduleEntries) {
       if (String(entry.employee_id || entry.employeeId) !== employeeId) {
@@ -229,69 +284,82 @@ function computeMonthlySummary({
         summary.sickDays += 1;
       }
 
+      let shiftMinutes = 0;
+      let nightMinutes = 0;
+      let holidayMinutes = 0;
+      let weekendMinutes = 0;
+
       const hasSnapshot = Number.isFinite(Number(entry.work_minutes ?? entry.workMinutes));
       if (hasSnapshot) {
-        const shiftHours = round2(Number(entry.work_minutes ?? entry.workMinutes ?? 0) / 60);
-        const nightHours = round2(Number(entry.night_minutes ?? entry.nightMinutes ?? 0) / 60);
-        const holidayHours = round2(Number(entry.holiday_minutes ?? entry.holidayMinutes ?? 0) / 60);
-        const weekendHours = round2(Number(entry.weekend_minutes ?? entry.weekendMinutes ?? 0) / 60);
-
-        if (shiftHours > 0) {
-          summary.workedDays += 1;
-          summary.workedHours += shiftHours;
-          perDayWorkedHours.set(dateISO, round2((perDayWorkedHours.get(dateISO) || 0) + shiftHours));
+        shiftMinutes = Math.max(0, Number(entry.work_minutes ?? entry.workMinutes ?? 0));
+        nightMinutes = Math.max(0, Number(entry.night_minutes ?? entry.nightMinutes ?? 0));
+        holidayMinutes = Math.max(0, Number(entry.holiday_minutes ?? entry.holidayMinutes ?? 0));
+        weekendMinutes = Math.max(0, Number(entry.weekend_minutes ?? entry.weekendMinutes ?? 0));
+      } else {
+        if (shiftCode === 'P' || shiftCode === 'O' || shiftCode === 'B') {
+          continue;
         }
-        summary.nightWorkedHours += nightHours;
-        summary.holidayWorkedHours += holidayHours;
-        summary.weekendWorkedHours += weekendHours;
+
+        const shift = shiftByCode.get(shiftCode);
+        if (!shift) {
+          continue;
+        }
+
+        const start = shift.start_time || shift.start || '';
+        const end = shift.end_time || shift.end || '';
+        const shiftHours = calcShiftDurationHours(start, end, shift.hours);
+        shiftMinutes = Math.round(shiftHours * 60);
+        nightMinutes = Math.round(calcNightHours(start, end) * 60);
+
+        const dayType = calcDayType(dateISO);
+        holidayMinutes = dayType.isHoliday ? shiftMinutes : 0;
+        weekendMinutes = dayType.isWeekend ? shiftMinutes : 0;
+
+        const startMinutes = parseTimeToMinutes(start);
+        const endMinutesRaw = parseTimeToMinutes(end);
+        if (Number.isFinite(startMinutes) && Number.isFinite(endMinutesRaw)) {
+          const startAbs = (day - 1) * 24 * 60 + startMinutes;
+          const endAbs = (day - 1) * 24 * 60 + endMinutesRaw + (endMinutesRaw <= startMinutes ? 24 * 60 : 0);
+          intervalShifts.push({ dateISO, shiftCode, shiftMinutes, startAbs, endAbs });
+        }
+      }
+
+      if (shiftMinutes <= 0) {
         continue;
       }
 
-      if (shiftCode === 'P' || shiftCode === 'O' || shiftCode === 'B') {
-        continue;
-      }
-
-      const shift = shiftByCode.get(shiftCode);
-      if (!shift) {
-        continue;
-      }
-
-      const start = shift.start_time || shift.start || '';
-      const end = shift.end_time || shift.end || '';
-      const shiftHours = calcShiftDurationHours(start, end, shift.hours);
-      const nightHours = calcNightHours(start, end);
-      const { isWeekend, isHoliday } = calcDayType(dateISO);
-
+      rawSchedule.push({ workMinutes: shiftMinutes });
       summary.workedDays += 1;
-      summary.workedHours += shiftHours;
-      summary.nightWorkedHours += nightHours;
+      summary.workedMinutes += shiftMinutes;
+      summary.nightMinutes += nightMinutes;
+      summary.holidayMinutes += holidayMinutes;
+      summary.holidayWorkedHours += holidayMinutes / 60;
+      summary.weekendWorkedHours += weekendMinutes / 60;
+      summary.nightWorkedHours += nightMinutes / 60;
+      perDayWorkedMinutes.set(dateISO, (perDayWorkedMinutes.get(dateISO) || 0) + shiftMinutes);
+      workedDaySet.add(dateISO);
 
-      if (isHoliday) {
-        summary.holidayWorkedHours += shiftHours;
-      } else if (isWeekend) {
-        summary.weekendWorkedHours += shiftHours;
+      const dayType = calcDayType(dateISO);
+      if (dayType.isHoliday) {
+        minutesOnHolidays += shiftMinutes;
+      } else if (dayType.isWeekend) {
+        minutesOnRestDays += shiftMinutes;
+      } else {
+        minutesOnWeekdays += shiftMinutes;
       }
 
-      perDayWorkedHours.set(dateISO, round2((perDayWorkedHours.get(dateISO) || 0) + shiftHours));
-
-      const startMinutes = parseTimeToMinutes(start);
-      const endMinutesRaw = parseTimeToMinutes(end);
-      if (Number.isFinite(startMinutes) && Number.isFinite(endMinutesRaw)) {
-        const startAbs = (day - 1) * 24 * 60 + startMinutes;
-        const endAbs = (day - 1) * 24 * 60 + endMinutesRaw + (endMinutesRaw <= startMinutes ? 24 * 60 : 0);
-        intervalShifts.push({ dateISO, shiftCode, shiftHours, startAbs, endAbs });
-      }
-
-      if (shiftHours > MAX_SHIFT_HOURS) {
+      if ((shiftMinutes / 60) > MAX_SHIFT_HOURS) {
         summary.violations.push({
           type: 'MAX_SHIFT_HOURS',
           date: dateISO,
           shiftCode,
-          hours: shiftHours,
+          hours: round2(shiftMinutes / 60),
           limit: MAX_SHIFT_HOURS,
         });
       }
     }
+
+    summary.workedMinutes = calcWorkedMinutes(rawSchedule);
 
     intervalShifts.sort((a, b) => a.startAbs - b.startAbs);
     for (let i = 1; i < intervalShifts.length; i += 1) {
@@ -309,53 +377,65 @@ function computeMonthlySummary({
       }
     }
 
-    for (const [dateISO, workedHours] of perDayWorkedHours.entries()) {
-      const { isWeekend, isHoliday } = calcDayType(dateISO);
-      if (!isWeekend && !isHoliday) {
-        const overtimeInDay = Math.max(0, workedHours - 8);
-        if (overtimeInDay > 12) {
-          summary.violations.push({
-            type: 'OVERTIME_DAY_WORKDAY_LIMIT',
-            date: dateISO,
-            overtimeHours: round2(overtimeInDay),
-            limit: 12,
-          });
-        }
+    for (let i = 1; i < intervalShifts.length; i += 1) {
+      const prev = intervalShifts[i - 1];
+      const next = intervalShifts[i];
+      const restMinutes = next.startAbs - prev.endAbs;
+      if (restMinutes < WEEKLY_REST_MINUTES) {
+        summary.violations.push({
+          type: 'WEEKLY_REST_WARNING',
+          fromDate: prev.dateISO,
+          toDate: next.dateISO,
+          restHours: round2(restMinutes / 60),
+          minRestHours: 36,
+          severity: 'warning',
+        });
       }
     }
 
-    summary.workedHours = round2(summary.workedHours);
-    summary.normHours = round2(summary.normHours);
+    const workedDaysSorted = Array.from(workedDaySet).sort();
+    let consecutive = 0;
+    let previous = null;
+    for (const dateISO of workedDaysSorted) {
+      if (!previous) {
+        consecutive = 1;
+      } else {
+        const diff = (new Date(`${dateISO}T00:00:00Z`).getTime() - new Date(`${previous}T00:00:00Z`).getTime()) / (24 * 60 * 60 * 1000);
+        consecutive = diff === 1 ? consecutive + 1 : 1;
+      }
+      if (consecutive > MAX_CONSECUTIVE_WORK_DAYS) {
+        summary.violations.push({
+          type: 'MAX_CONSECUTIVE_DAYS_WARNING',
+          date: dateISO,
+          consecutiveDays: consecutive,
+          limit: MAX_CONSECUTIVE_WORK_DAYS,
+          severity: 'warning',
+        });
+      }
+      previous = dateISO;
+    }
+
+    summary.overtimeMinutes = Math.max(0, summary.workedMinutes - summary.normMinutes);
+    const distributed = distributeOvertime(summary.overtimeMinutes, minutesOnHolidays, minutesOnRestDays, minutesOnWeekdays);
+    summary.overtimeHolidayMinutes = distributed.overtimeHolidayMinutes;
+    summary.overtimeRestdayMinutes = distributed.overtimeRestdayMinutes;
+    summary.overtimeWeekdayMinutes = distributed.overtimeWeekdayMinutes;
+    summary.normalMinutes = Math.max(0, summary.workedMinutes - summary.overtimeMinutes);
+
+    summary.workedHours = round2(summary.workedMinutes / 60);
+    summary.normHours = round2(summary.normMinutes / 60);
     summary.deviation = round2(summary.workedHours - summary.normHours);
     summary.nightWorkedHours = round2(summary.nightWorkedHours);
     summary.nightConvertedHours = round2(summary.nightWorkedHours * NIGHT_HOURS_COEFFICIENT);
     summary.holidayWorkedHours = round2(summary.holidayWorkedHours);
     summary.weekendWorkedHours = round2(summary.weekendWorkedHours);
 
-    const overtimeMonthHours = Math.max(0, summary.workedHours - summary.normHours);
-    if (overtimeMonthHours > 100) {
-      summary.violations.push({
-        type: 'OVERTIME_MONTH_LIMIT',
-        overtimeHours: round2(overtimeMonthHours),
-        limit: 100,
-      });
-    }
-
-    const restDayOvertime = summary.holidayWorkedHours + summary.weekendWorkedHours;
-    if (restDayOvertime > 48) {
-      summary.violations.push({
-        type: 'OVERTIME_RESTDAY_LIMIT',
-        overtimeHours: round2(restDayOvertime),
-        limit: 48,
-      });
-    }
-
-    summary.payableHours = round2(
-      summary.workedHours +
-        summary.holidayWorkedHours * (Number(holidayRate) - 1) +
-        summary.weekendWorkedHours * (Number(weekendRate) - 1) +
-        (summary.nightConvertedHours - summary.nightWorkedHours)
-    );
+    const weekendPremiumMinutes = isSirv ? summary.overtimeRestdayMinutes : minutesOnRestDays;
+    const payableBase = summary.workedHours;
+    const holidayPremiumHours = (summary.holidayMinutes / 60) * (Number(holidayRate) - 1);
+    const weekendPremiumHours = (weekendPremiumMinutes / 60) * (Number(weekendRate) - 1);
+    const nightPremiumHours = summary.nightConvertedHours - summary.nightWorkedHours;
+    summary.payableHours = round2(payableBase + holidayPremiumHours + weekendPremiumHours + nightPremiumHours);
 
     result.set(employeeId, summary);
   }
@@ -363,12 +443,6 @@ function computeMonthlySummary({
   return result;
 }
 
-/*
-Правила/лимити:
-- Минимална междусменна почивка: 12ч (DAILY_REST_VIOLATION)
-- Максимална продължителност на смяна: 12ч (MAX_SHIFT_HOURS)
-- Технически аларми за извънреден труд: >100ч/месец, >12ч/ден в работен ден, >48ч в почивни дни
-*/
 module.exports = {
   NIGHT_HOURS_COEFFICIENT,
   DEFAULT_WEEKEND_RATE,
@@ -377,5 +451,8 @@ module.exports = {
   calcShiftDurationHours,
   calcNightHours,
   calcDayType,
+  calcNormMinutes,
+  calcWorkedMinutes,
+  distributeOvertime,
   computeMonthlySummary,
 };
