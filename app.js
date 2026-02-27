@@ -51,7 +51,7 @@ const state = {
   expandedDepartmentId: null,
   selectedDepartmentId: 'all',
   hasManualScheduleSelection: false,
-  backendAvailable: false,
+  backendAvailable: true,
   apiBaseUrl: '',
   userRole: loadUserRole(),
   rates: loadRates(),
@@ -1377,23 +1377,33 @@ function attachShiftForm() {
 }
 
 function attachLockAndExport() {
-  lockScheduleBtn.addEventListener('click', () => {
+  lockScheduleBtn.addEventListener('click', async () => {
     const active = getActiveSchedule();
     if (!active) {
       return;
     }
-    state.lockedMonths[active.id] = true;
-    saveLockedMonths();
+    const response = await apiFetch(`/api/schedules/${active.id}/lock`, { method: 'POST' });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      setStatus(payload.message || 'Неуспешно заключване.', false);
+      return;
+    }
+    await refreshMonthlyView();
     renderSchedule();
   });
 
-  unlockScheduleBtn.addEventListener('click', () => {
+  unlockScheduleBtn.addEventListener('click', async () => {
     const active = getActiveSchedule();
     if (!active) {
       return;
     }
-    delete state.lockedMonths[active.id];
-    saveLockedMonths();
+    const response = await apiFetch(`/api/schedules/${active.id}/unlock`, { method: 'POST' });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      setStatus(payload.message || 'Неуспешно отключване.', false);
+      return;
+    }
+    await refreshMonthlyView();
     renderSchedule();
   });
 
@@ -3895,7 +3905,7 @@ async function loadFromBackend() {
     saveScheduleLocal();
     return true;
   } catch (error) {
-    state.backendAvailable = false;
+    // keep backend mode active; surface error via status
 
     const message = cleanStoredValue(error?.message);
     const missingTenantContext = message.includes('Изберете организация (tenant)') || message.includes('Missing tenant context');
@@ -3959,7 +3969,7 @@ async function saveEmployeeBackend(employee) {
     }
 
     setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
-    state.backendAvailable = false;
+    // keep backend mode active; surface error via status
     return null;
   }
 }
@@ -4009,10 +4019,6 @@ async function deleteEmployeeBackend(employeeId) {
 }
 
 async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) {
-  if (!state.backendAvailable) {
-    return { ok: false };
-  }
-
   try {
     const scheduleId = options.scheduleId || getEmployeeScheduleId(employee);
     if (!scheduleId) {
@@ -4075,7 +4081,7 @@ async function saveShiftTemplateBackend(shift) {
     }
   } catch {
     setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
-    state.backendAvailable = false;
+    // keep backend mode active; surface error via status
   }
 }
 
@@ -4091,7 +4097,7 @@ async function deleteShiftTemplateBackend(code) {
     }
   } catch {
     setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
-    state.backendAvailable = false;
+    // keep backend mode active; surface error via status
   }
 }
 
@@ -4394,7 +4400,7 @@ function isMonthLocked(_month) {
   if (!active) {
     return false;
   }
-  return Boolean(state.lockedMonths[active.id]);
+  return String(active.status || '').toLowerCase() === 'locked';
 }
 
 function calcNightHours(start, end) {
