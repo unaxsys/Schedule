@@ -1564,3 +1564,13 @@ html.welcome-lock, html.welcome-lock body { height: 100%; overflow: hidden; }
   text-align: center;
   color: #64748b;
 }
+
+.schedule-generate-panel {
+  margin: 12px 0;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}

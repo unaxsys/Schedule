@@ -56,6 +56,9 @@ const state = {
   selectedDepartmentId: 'all',
   selectedDepartmentIds: [],
   scheduleViewMode: 'combined',
+  generatorDepartmentId: '',
+  generatorTemplateType: 'SIRV_12H_2_2',
+  generatorSelectedEmployeeIds: [],
   hasManualScheduleSelection: false,
   backendAvailable: true,
   apiBaseUrl: '',
@@ -120,6 +123,15 @@ const monthInfo = document.getElementById('monthInfo');
 const scheduleOverviewPanel = document.getElementById('scheduleOverviewPanel');
 const scheduleFilterDepartmentSelect = document.getElementById('scheduleFilterDepartmentSelect');
 const scheduleDepartmentSelect = document.getElementById('scheduleDepartmentSelect');
+const generateDepartmentSelect = document.getElementById('generateDepartmentSelect');
+const generateTemplateSelect = document.getElementById('generateTemplateSelect');
+const generateEmployeesSelect = document.getElementById('generateEmployeesSelect');
+const generateScheduleByTemplateBtn = document.getElementById('generateScheduleByTemplateBtn');
+const generateWarnings = document.getElementById('generateWarnings');
+const generateRotateEmployees = document.getElementById('generateRotateEmployees');
+const generateIncludeWeekends = document.getElementById('generateIncludeWeekends');
+const generateEnforce24h = document.getElementById('generateEnforce24h');
+const generateRestHoursInput = document.getElementById('generateRestHoursInput');
 const scheduleDepartmentMultiSelect = document.getElementById('scheduleDepartmentMultiSelect');
 const scheduleDepartmentChips = document.getElementById('scheduleDepartmentChips');
 const scheduleSelectAllDepartmentsBtn = document.getElementById('scheduleSelectAllDepartmentsBtn');
@@ -1343,6 +1355,26 @@ function attachDepartmentControls() {
       await createScheduleForCurrentMonth();
     });
   }
+
+  if (generateDepartmentSelect) {
+    generateDepartmentSelect.addEventListener('change', () => {
+      state.generatorDepartmentId = generateDepartmentSelect.value || '';
+      state.generatorSelectedEmployeeIds = [];
+      renderGeneratorControls();
+    });
+  }
+
+  if (generateTemplateSelect) {
+    generateTemplateSelect.addEventListener('change', () => {
+      state.generatorTemplateType = generateTemplateSelect.value || 'SIRV_12H_2_2';
+    });
+  }
+
+  if (generateScheduleByTemplateBtn) {
+    generateScheduleByTemplateBtn.addEventListener('click', async () => {
+      await generateScheduleByTemplate();
+    });
+  }
 }
 
 function renderDepartmentOptions() {
@@ -1391,6 +1423,7 @@ function renderDepartmentOptions() {
 
   renderDepartmentList();
   renderEmployeeDepartmentOptions();
+  renderGeneratorControls();
   updateScheduleNameSuggestion();
 }
 
@@ -1416,6 +1449,115 @@ function renderEmployeeDepartmentOptions() {
 
   const hasCurrent = state.departments.some((department) => department.id === currentValue);
   departmentInput.value = hasCurrent ? currentValue : '';
+}
+
+function renderGeneratorControls() {
+  if (!generateDepartmentSelect) {
+    return;
+  }
+
+  const prev = state.generatorDepartmentId;
+  generateDepartmentSelect.innerHTML = '';
+  state.departments.forEach((department) => {
+    const option = document.createElement('option');
+    option.value = department.id;
+    option.textContent = department.name;
+    generateDepartmentSelect.appendChild(option);
+  });
+
+  const hasPrev = state.departments.some((department) => department.id === prev);
+  state.generatorDepartmentId = hasPrev ? prev : (state.departments[0]?.id || '');
+  generateDepartmentSelect.value = state.generatorDepartmentId;
+
+  if (generateTemplateSelect) {
+    generateTemplateSelect.value = state.generatorTemplateType || 'SIRV_12H_2_2';
+  }
+
+  const departmentEmployees = state.employees.filter((employee) => employee.departmentId === state.generatorDepartmentId);
+  const selectedSet = new Set(state.generatorSelectedEmployeeIds || []);
+  if (generateEmployeesSelect) {
+    generateEmployeesSelect.innerHTML = '';
+    departmentEmployees.forEach((employee) => {
+      const row = document.createElement('label');
+      row.className = 'settings-checkbox';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.value = employee.id;
+      checkbox.checked = selectedSet.has(employee.id);
+      checkbox.addEventListener('change', () => {
+        const current = new Set(state.generatorSelectedEmployeeIds || []);
+        if (checkbox.checked) current.add(employee.id);
+        else current.delete(employee.id);
+        state.generatorSelectedEmployeeIds = Array.from(current);
+      });
+      row.appendChild(checkbox);
+      row.appendChild(document.createTextNode(employee.name));
+      generateEmployeesSelect.appendChild(row);
+    });
+  }
+}
+
+function getSelectedOverwriteMode() {
+  const selected = document.querySelector('input[name="generateOverwriteMode"]:checked');
+  return selected ? selected.value : 'empty_only';
+}
+
+async function generateScheduleByTemplate() {
+  const active = getActiveSchedule();
+  if (!active?.id) {
+    setStatus('Изберете активен график.', false);
+    return;
+  }
+
+  const departmentId = cleanStoredValue(generateDepartmentSelect?.value);
+  if (!departmentId) {
+    setStatus('Изберете отдел за генерация.', false);
+    return;
+  }
+
+  const templateType = cleanStoredValue(generateTemplateSelect?.value) || 'SIRV_12H_2_2';
+  state.generatorTemplateType = templateType;
+
+  const response = await apiFetch(`/api/schedules/${active.id}/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      department_id: departmentId,
+      employee_ids: state.generatorSelectedEmployeeIds,
+      template_type: templateType,
+      options: {
+        rotate_employees: Boolean(generateRotateEmployees?.checked),
+        include_weekends: Boolean(generateIncludeWeekends?.checked),
+        overwrite_mode: getSelectedOverwriteMode(),
+        rest_min_hours: Number(generateRestHoursInput?.value || 12),
+        enforce_24h_after_12h: Boolean(generateEnforce24h?.checked),
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = payload.message || 'Неуспешна генерация на график.';
+    setStatus(message, false);
+    if (generateWarnings) {
+      const missing = Array.isArray(payload.missingShifts) ? payload.missingShifts.join(', ') : '';
+      generateWarnings.textContent = missing ? `Липсват смени за този отдел: ${missing}` : '';
+    }
+    return;
+  }
+
+  await refreshMonthlyView();
+  renderAll();
+  const generatedCount = Number(payload.generatedCount || 0);
+  const skippedCount = Number(payload.skippedCount || 0);
+  setStatus(`Генерацията завърши: генерирани ${generatedCount}, пропуснати ${skippedCount}.`, true);
+
+  if (generateWarnings) {
+    const warnings = Array.isArray(payload.warnings) ? payload.warnings.slice(0, 6) : [];
+    generateWarnings.textContent = warnings.length
+      ? warnings.map((item) => `${item.date}: ${item.msg}`).join(' | ')
+      : '';
+  }
 }
 
 function updateScheduleNameSuggestion() {
@@ -2329,6 +2471,7 @@ function renderAll() {
   renderPlatformUserEmployeeOptions();
   renderShiftList();
   renderLegend();
+  renderGeneratorControls();
   updateCreateScheduleButtonState();
 }
 
