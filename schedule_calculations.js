@@ -167,6 +167,102 @@ function countBusinessDays(startISO, endISO, isHoliday = () => false) {
   return count;
 }
 
+function finalizeSirvOvertimeAllocations(entries, periodNormMinutes, dailyNormMinutes = 480) {
+  const source = Array.isArray(entries) ? entries : [];
+  const byEmployee = new Map();
+
+  for (const entry of source) {
+    const employeeId = String(entry.employee_id || entry.employeeId || '');
+    const dateISO = normalizeDate(entry.dateISO || entry.date || `${entry.month_key}-${String(entry.day || '').padStart(2, '0')}`);
+    const workedMinutes = Math.max(0, Number(entry.work_minutes_total ?? entry.workMinutesTotal ?? 0) || 0);
+    if (!employeeId || !dateISO) {
+      continue;
+    }
+    if (!byEmployee.has(employeeId)) {
+      byEmployee.set(employeeId, []);
+    }
+    byEmployee.get(employeeId).push({ ...entry, employeeId, dateISO, workedMinutes });
+  }
+
+  const updates = [];
+  const warnings = [];
+  const perEmployeeTotals = {};
+
+  for (const [employeeId, employeeEntries] of byEmployee.entries()) {
+    const workedTotal = employeeEntries.reduce((acc, entry) => acc + entry.workedMinutes, 0);
+    let remaining = Math.max(0, workedTotal - Math.max(0, Number(periodNormMinutes) || 0));
+    perEmployeeTotals[employeeId] = { workedMinutes: workedTotal, overtimeMinutes: remaining };
+
+    const byDate = new Map();
+    for (const entry of employeeEntries) {
+      if (!byDate.has(entry.dateISO)) {
+        byDate.set(entry.dateISO, []);
+      }
+      byDate.get(entry.dateISO).push(entry);
+    }
+
+    const sortedDatesDesc = [...byDate.keys()].sort((a, b) => (a < b ? 1 : -1));
+    const dateOvertime = new Map(sortedDatesDesc.map((dateISO) => {
+      const dayWorked = byDate.get(dateISO).reduce((acc, entry) => acc + entry.workedMinutes, 0);
+      return [dateISO, 0 + Math.max(0, dayWorked - dailyNormMinutes)];
+    }));
+
+    const dateAllocated = new Map(sortedDatesDesc.map((dateISO) => [dateISO, 0]));
+    for (const dateISO of sortedDatesDesc) {
+      if (remaining <= 0) {
+        break;
+      }
+      const alloc = Math.min(remaining, dateOvertime.get(dateISO) || 0);
+      dateAllocated.set(dateISO, alloc);
+      remaining -= alloc;
+    }
+
+    if (remaining > 0) {
+      warnings.push(`Employee ${employeeId}: fallback overtime allocation applied (${remaining}m).`);
+      for (const dateISO of sortedDatesDesc) {
+        if (remaining <= 0) {
+          break;
+        }
+        const dayWorked = byDate.get(dateISO).reduce((acc, entry) => acc + entry.workedMinutes, 0);
+        const already = dateAllocated.get(dateISO) || 0;
+        const capacity = Math.max(0, dayWorked - already);
+        const extra = Math.min(remaining, capacity);
+        dateAllocated.set(dateISO, already + extra);
+        remaining -= extra;
+      }
+    }
+
+    for (const dateISO of sortedDatesDesc) {
+      const rows = [...(byDate.get(dateISO) || [])].sort((a, b) => {
+        const keyA = `${a.schedule_id || ''}|${a.day || 0}`;
+        const keyB = `${b.schedule_id || ''}|${b.day || 0}`;
+        return keyA.localeCompare(keyB);
+      });
+      const dayOvertime = dateAllocated.get(dateISO) || 0;
+      const dayWorked = rows.reduce((acc, row) => acc + row.workedMinutes, 0);
+      let assigned = 0;
+
+      rows.forEach((row, index) => {
+        let overtime = 0;
+        if (dayOvertime > 0 && dayWorked > 0) {
+          overtime = index === rows.length - 1
+            ? Math.max(0, dayOvertime - assigned)
+            : Math.floor((dayOvertime * row.workedMinutes) / dayWorked);
+        }
+        assigned += overtime;
+        updates.push({
+          schedule_id: row.schedule_id,
+          employee_id: row.employee_id || row.employeeId,
+          day: row.day,
+          overtime_minutes: overtime,
+        });
+      });
+    }
+  }
+
+  return { updates, warnings, perEmployeeTotals };
+}
+
 module.exports = {
   parseTimeToMinutes,
   shiftSegmentsByDay,
@@ -175,4 +271,5 @@ module.exports = {
   holidayResolverFactory,
   countBusinessDays,
   dateAdd,
+  finalizeSirvOvertimeAllocations,
 };

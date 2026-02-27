@@ -5,6 +5,7 @@ const {
   computeEntryMetrics,
   holidayResolverFactory,
   countBusinessDays,
+  finalizeSirvOvertimeAllocations,
 } = require('./schedule_calculations');
 
 test('08:00-17:00 break 60 excluded => 480', () => {
