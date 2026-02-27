@@ -993,6 +993,9 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE shift_templates ALTER COLUMN id SET NOT NULL`);
   await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
   await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE schedule_entries ALTER COLUMN shift_code TYPE VARCHAR(16)`);
+  await pool.query(`ALTER TABLE audit_log ALTER COLUMN old_shift_code TYPE VARCHAR(16)`);
+  await pool.query(`ALTER TABLE audit_log ALTER COLUMN new_shift_code TYPE VARCHAR(16)`);
 
   await pool.query(`
     UPDATE schedules s
