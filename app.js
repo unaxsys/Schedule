@@ -3049,7 +3049,42 @@ function getEmployeesForSelectedSchedules() {
 
 
 function getEmployeeScheduleId(employee) {
-  return employee?.scheduleId || null;
+  if (employee?.scheduleId) {
+    return employee.scheduleId;
+  }
+
+  const employeeDepartmentId = employee?.departmentId || null;
+  const employeeDepartment = String(employee?.department || '').trim();
+
+  if (state.activeScheduleId) {
+    const active = state.schedules.find((schedule) => schedule.id === state.activeScheduleId);
+    if (active) {
+      return active.id;
+    }
+  }
+
+  const selectedSchedules = state.schedules.filter((schedule) => state.selectedScheduleIds.includes(schedule.id));
+  if (!selectedSchedules.length) {
+    return null;
+  }
+
+  if (selectedSchedules.length === 1) {
+    return selectedSchedules[0].id;
+  }
+
+  const byDepartmentId = selectedSchedules.find((schedule) => {
+    if (!employeeDepartmentId) {
+      return false;
+    }
+    const department = state.departments.find((item) => item.id === employeeDepartmentId);
+    return department && String(schedule.department || '').trim() === String(department.name || '').trim();
+  });
+  if (byDepartmentId) {
+    return byDepartmentId.id;
+  }
+
+  const byDepartmentName = selectedSchedules.find((schedule) => String(schedule.department || '').trim() === employeeDepartment);
+  return byDepartmentName?.id || selectedSchedules[0].id || null;
 }
 
 function getShiftCodeForCell(employee, month, day) {
@@ -3981,7 +4016,8 @@ async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) 
   try {
     const scheduleId = options.scheduleId || getEmployeeScheduleId(employee);
     if (!scheduleId) {
-      throw new Error('Липсва график за отдела.');
+      setStatus('Липсва график за отдела.', false);
+      return { ok: false, message: 'Липсва график за отдела.' };
     }
 
     const payload = {
@@ -4002,13 +4038,16 @@ async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) 
 
     const responsePayload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(responsePayload.message || 'Save schedule entry failed');
+      const message = responsePayload.message || response.statusText || 'Save schedule entry failed';
+      setStatus(message, false);
+      return { ok: false, message };
     }
 
     if (responsePayload?.entry) {
       state.schedule[scheduleKey(employee.id, options.monthKey || state.month, day)] = responsePayload.entry.shiftCode || shiftCode;
       state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = responsePayload.entry.shiftCode || shiftCode;
       saveScheduleLocal();
+      await refreshMonthlyView();
     }
 
     return { ok: true, data: responsePayload };

@@ -139,13 +139,70 @@ function addSummaries(target, source) {
 }
 
 
+const SYSTEM_SHIFT_TEMPLATES = [
+  { code: 'R', name: 'Редовна', start_time: '08:00', end_time: '17:00', hours: 8 },
+  { code: 'P', name: 'Почивка', start_time: '00:00', end_time: '00:00', hours: 0 },
+  { code: 'O', name: 'Отпуск', start_time: '00:00', end_time: '00:00', hours: 0 },
+  { code: 'B', name: 'Болничен', start_time: '00:00', end_time: '00:00', hours: 0 },
+];
+
+let shiftTemplatesHasTenantIdCache = null;
+
+async function hasShiftTemplatesTenantId() {
+  if (shiftTemplatesHasTenantIdCache === null) {
+    shiftTemplatesHasTenantIdCache = await tableHasColumn('shift_templates', 'tenant_id');
+  }
+  return shiftTemplatesHasTenantIdCache;
+}
+
 async function ensureDefaultShiftTemplatesForTenant(tenantId) {
-  await pool.query(
-    `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, hours)
-     VALUES ($1, 'R', 'Редовна', '08:00', '17:00', 8)
-     ON CONFLICT (tenant_id, code) DO NOTHING`,
-    [tenantId]
-  );
+  const hasTenantId = await hasShiftTemplatesTenantId();
+
+  if (hasTenantId) {
+    for (const shift of SYSTEM_SHIFT_TEMPLATES) {
+      await pool.query(
+        `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, hours)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (tenant_id, code) DO NOTHING`,
+        [tenantId, shift.code, shift.name, shift.start_time, shift.end_time, shift.hours]
+      );
+    }
+    return;
+  }
+
+  for (const shift of SYSTEM_SHIFT_TEMPLATES) {
+    await pool.query(
+      `INSERT INTO shift_templates (code, name, start_time, end_time, hours)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (code) DO NOTHING`,
+      [shift.code, shift.name, shift.start_time, shift.end_time, shift.hours]
+    );
+  }
+}
+
+function appendSystemShiftTemplates(shiftTemplates = []) {
+  const byCode = new Map();
+  for (const template of shiftTemplates) {
+    const code = cleanStr(template.code).toUpperCase();
+    if (!code) {
+      continue;
+    }
+    byCode.set(code, {
+      ...template,
+      code,
+      start_time: template.start_time || template.start || '',
+      end_time: template.end_time || template.end || '',
+      hours: Number(template.hours || 0),
+    });
+  }
+
+  for (const shift of SYSTEM_SHIFT_TEMPLATES) {
+    if (!byCode.has(shift.code)) {
+      byCode.set(shift.code, { ...shift });
+    }
+  }
+
+  return Array.from(byCode.values());
 }
 
 function signAccessToken({ user, tenantId = null, role = null }) {
@@ -988,6 +1045,7 @@ app.get('/api/health', async (_req, res) => {
 app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
   try {
     const tenantId = req.tenantId;
+    const hasTenantId = await hasShiftTemplatesTenantId();
     await ensureDefaultShiftTemplatesForTenant(tenantId);
     const [employees, schedules, scheduleEntries, shiftTemplates, departments] = await Promise.all([
       pool.query(
@@ -1013,16 +1071,25 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
          WHERE s.tenant_id = $1`,
         [tenantId]
       ),
-      pool.query(
-        `SELECT id, code, name,
-         start_time AS start,
-         end_time AS "end",
-         hours
-         FROM shift_templates
-         WHERE tenant_id = $1
-         ORDER BY created_at, code`,
-        [tenantId]
-      ),
+      hasTenantId
+        ? pool.query(
+          `SELECT id, code, name,
+           start_time AS start,
+           end_time AS "end",
+           hours
+           FROM shift_templates
+           WHERE tenant_id = $1
+           ORDER BY created_at, code`,
+          [tenantId]
+        )
+        : pool.query(
+          `SELECT id, code, name,
+           start_time AS start,
+           end_time AS "end",
+           hours
+           FROM shift_templates
+           ORDER BY created_at, code`
+        ),
       pool.query(
         `SELECT id, name, created_at AS "createdAt"
          FROM departments
@@ -1041,7 +1108,7 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
       employees: employees.rows,
       schedules: schedules.rows,
       schedule,
-      shiftTemplates: shiftTemplates.rows,
+      shiftTemplates: appendSystemShiftTemplates(shiftTemplates.rows),
       departments: departments.rows,
     });
   } catch (error) {
@@ -1576,6 +1643,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
   }
 
   try {
+    const hasTenantId = await hasShiftTemplatesTenantId();
     await ensureDefaultShiftTemplatesForTenant(req.tenantId);
 
     const scheduleResult = await pool.query(
@@ -1632,20 +1700,32 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       if (!isValidUuid(requestedShiftId)) {
         return res.status(400).json({ message: 'Невалиден shiftId.' });
       }
-      const shiftByIdResult = await pool.query(
-        `SELECT id, code FROM shift_templates WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
-        [requestedShiftId, req.tenantId]
-      );
+      const shiftByIdQuery = hasTenantId
+        ? {
+            text: `SELECT id, code FROM shift_templates WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+            values: [requestedShiftId, req.tenantId],
+          }
+        : {
+            text: `SELECT id, code FROM shift_templates WHERE id = $1 LIMIT 1`,
+            values: [requestedShiftId],
+          };
+      const shiftByIdResult = await pool.query(shiftByIdQuery.text, shiftByIdQuery.values);
       if (shiftByIdResult.rowCount === 0) {
         return res.status(404).json({ message: 'Смяната не е намерена.' });
       }
       resolvedShiftCode = cleanStr(shiftByIdResult.rows[0].code).toUpperCase();
       resolvedShiftId = shiftByIdResult.rows[0].id;
     } else if (requestedShiftCode && !['P', 'O', 'B', 'R'].includes(requestedShiftCode)) {
-      const shiftByCodeResult = await pool.query(
-        `SELECT id, code FROM shift_templates WHERE tenant_id = $1 AND UPPER(code) = $2 LIMIT 1`,
-        [req.tenantId, requestedShiftCode]
-      );
+      const shiftByCodeQuery = hasTenantId
+        ? {
+            text: `SELECT id, code FROM shift_templates WHERE tenant_id = $1 AND UPPER(code) = $2 LIMIT 1`,
+            values: [req.tenantId, requestedShiftCode],
+          }
+        : {
+            text: `SELECT id, code FROM shift_templates WHERE UPPER(code) = $1 LIMIT 1`,
+            values: [requestedShiftCode],
+          };
+      const shiftByCodeResult = await pool.query(shiftByCodeQuery.text, shiftByCodeQuery.values);
       if (shiftByCodeResult.rowCount > 0) {
         resolvedShiftCode = cleanStr(shiftByCodeResult.rows[0].code).toUpperCase();
         resolvedShiftId = shiftByCodeResult.rows[0].id;
@@ -1678,12 +1758,17 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     }
 
     const [shiftTemplatesResult, entriesResult, employeesResult] = await Promise.all([
-      pool.query(
-        `SELECT id, code, name, start_time, end_time, hours
-         FROM shift_templates
-         WHERE tenant_id = $1`,
-        [req.tenantId]
-      ),
+      hasTenantId
+        ? pool.query(
+          `SELECT id, code, name, start_time, end_time, hours
+           FROM shift_templates
+           WHERE tenant_id = $1`,
+          [req.tenantId]
+        )
+        : pool.query(
+          `SELECT id, code, name, start_time, end_time, hours
+           FROM shift_templates`
+        ),
       pool.query(
         `SELECT schedule_id, employee_id, day, shift_code
          FROM schedule_entries
@@ -1705,7 +1790,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       employees: employeesResult.rows,
       schedules: [{ id: scheduleId }],
       scheduleEntries: entriesResult.rows,
-      shiftTemplates: shiftTemplatesResult.rows.map((row) => ({
+      shiftTemplates: appendSystemShiftTemplates(shiftTemplatesResult.rows).map((row) => ({
         code: row.code,
         start: row.start_time,
         end: row.end_time,
@@ -1731,11 +1816,18 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       date: entryDate,
     };
 
-    const selectedShift = shiftTemplatesResult.rows.find((row) => String(row.id) === String(resolvedShiftId)) || null;
+    const selectedShift = appendSystemShiftTemplates(shiftTemplatesResult.rows).find((row) => {
+      if (resolvedShiftId) {
+        return String(row.id) === String(resolvedShiftId);
+      }
+      return cleanStr(row.code).toUpperCase() === resolvedShiftCode;
+    }) || null;
     const shiftHours = selectedShift
-      ? calcShiftDurationHours(selectedShift.start_time, selectedShift.end_time, selectedShift.hours)
+      ? calcShiftDurationHours(selectedShift.start_time || selectedShift.start, selectedShift.end_time || selectedShift.end, selectedShift.hours)
       : 0;
-    const nightHours = selectedShift ? calcNightHours(selectedShift.start_time, selectedShift.end_time) : 0;
+    const nightHours = selectedShift
+      ? calcNightHours(selectedShift.start_time || selectedShift.start, selectedShift.end_time || selectedShift.end)
+      : 0;
 
     return res.json({
       ok: true,
@@ -1764,17 +1856,32 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
   }
 
   try {
-    await pool.query(
-      `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, hours)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (tenant_id, code)
-       DO UPDATE SET
-         name = EXCLUDED.name,
-         start_time = EXCLUDED.start_time,
-         end_time = EXCLUDED.end_time,
-         hours = EXCLUDED.hours`,
-      [req.tenantId, code, name, start, end, hours]
-    );
+    const hasTenantId = await hasShiftTemplatesTenantId();
+    if (hasTenantId) {
+      await pool.query(
+        `INSERT INTO shift_templates (tenant_id, code, name, start_time, end_time, hours)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (tenant_id, code)
+         DO UPDATE SET
+           name = EXCLUDED.name,
+           start_time = EXCLUDED.start_time,
+           end_time = EXCLUDED.end_time,
+           hours = EXCLUDED.hours`,
+        [req.tenantId, code, name, start, end, hours]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO shift_templates (code, name, start_time, end_time, hours)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (code)
+         DO UPDATE SET
+           name = EXCLUDED.name,
+           start_time = EXCLUDED.start_time,
+           end_time = EXCLUDED.end_time,
+           hours = EXCLUDED.hours`,
+        [code, name, start, end, hours]
+      );
+    }
 
     res.json({ ok: true });
   } catch (error) {
@@ -1784,7 +1891,12 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
 
 app.delete('/api/shift-template/:code', requireAuth, requireTenantContext, async (req, res) => {
   try {
-    await pool.query('DELETE FROM shift_templates WHERE tenant_id = $1 AND code = $2', [req.tenantId, req.params.code]);
+    const hasTenantId = await hasShiftTemplatesTenantId();
+    if (hasTenantId) {
+      await pool.query('DELETE FROM shift_templates WHERE tenant_id = $1 AND code = $2', [req.tenantId, req.params.code]);
+    } else {
+      await pool.query('DELETE FROM shift_templates WHERE code = $1', [req.params.code]);
+    }
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -1793,6 +1905,7 @@ app.delete('/api/shift-template/:code', requireAuth, requireTenantContext, async
 
 app.post('/api/calc/summary', requireAuth, requireTenantContext, async (req, res, next) => {
   try {
+    const hasTenantId = await hasShiftTemplatesTenantId();
     await ensureDefaultShiftTemplatesForTenant(req.tenantId);
     const monthKey = cleanStr(req.body?.monthKey);
     if (!isValidMonthKey(monthKey)) {
@@ -1826,17 +1939,27 @@ app.post('/api/calc/summary', requireAuth, requireTenantContext, async (req, res
     const employees = employeeQuery.rows;
     const employeeIds = employees.map((employee) => employee.id);
 
-    const shiftTemplatesQuery = await pool.query(
-      `SELECT code,
-              name,
-              start_time,
-              end_time,
-              hours
-       FROM shift_templates
-       WHERE tenant_id = $1
-       ORDER BY code`,
-      [actor.tenantId]
-    );
+    const shiftTemplatesQuery = hasTenantId
+      ? await pool.query(
+        `SELECT code,
+                name,
+                start_time,
+                end_time,
+                hours
+         FROM shift_templates
+         WHERE tenant_id = $1
+         ORDER BY code`,
+        [actor.tenantId]
+      )
+      : await pool.query(
+        `SELECT code,
+                name,
+                start_time,
+                end_time,
+                hours
+         FROM shift_templates
+         ORDER BY code`
+      );
 
     const schedulesQuery = await pool.query(
       `SELECT id, name, month_key, department, status
@@ -1900,7 +2023,7 @@ app.post('/api/calc/summary', requireAuth, requireTenantContext, async (req, res
       employees,
       schedules: schedulesQuery.rows,
       scheduleEntries: entriesQuery.rows,
-      shiftTemplates: shiftTemplatesQuery.rows,
+      shiftTemplates: appendSystemShiftTemplates(shiftTemplatesQuery.rows),
       selectedScheduleIds,
       weekendRate,
       holidayRate,
