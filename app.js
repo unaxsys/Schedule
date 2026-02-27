@@ -44,6 +44,7 @@ const state = {
   scheduleEmployees: [],
   schedule: {},
   scheduleEntriesById: {},
+  scheduleEntrySnapshotsById: {},
   schedules: [],
   selectedScheduleIds: [],
   activeScheduleId: null,
@@ -770,6 +771,7 @@ function resetTenantScopedState({ clearLocalStorage = false } = {}) {
   state.scheduleEmployees = [];
   state.schedule = {};
   state.scheduleEntriesById = {};
+  state.scheduleEntrySnapshotsById = {};
   state.schedules = [];
   state.selectedScheduleIds = [];
   state.activeScheduleId = null;
@@ -3237,8 +3239,8 @@ function renderSchedule() {
 
         state.shiftTemplates.forEach((shift) => {
           const option = document.createElement('option');
-          option.value = shift.id || `code:${shift.code}`;
-          option.textContent = shift.label;
+          option.value = shift.code;
+          option.textContent = shift.label || shift.code;
           option.dataset.shiftCode = shift.code;
           option.dataset.shiftId = shift.id || '';
           option.selected = shift.code === currentShift;
@@ -3251,9 +3253,9 @@ function renderSchedule() {
           }
 
           const selectedOption = select.options[select.selectedIndex];
-          const toShift = selectedOption?.dataset.shiftCode || currentShift;
+          const toShift = normalizeShiftCodeForApi(selectedOption?.value || selectedOption?.dataset.shiftCode || currentShift);
           const toShiftId = selectedOption?.dataset.shiftId || null;
-          const scheduleId = options.scheduleId || getEmployeeScheduleId(employee);
+          const scheduleId = getEmployeeScheduleId(employee);
           const key = scheduleKey(employee.id, month, day);
           const previousShift = state.schedule[key] || currentShift;
 
@@ -3282,7 +3284,11 @@ function renderSchedule() {
 
         cell.appendChild(select);
         row.appendChild(cell);
-        collectSummary(summary, currentShift, holiday, weekend, inEmployment);
+        const scheduleIdForSnapshot = getEmployeeScheduleId(employee);
+        const entrySnapshot = scheduleIdForSnapshot
+          ? state.scheduleEntrySnapshotsById[`${scheduleIdForSnapshot}|${employee.id}|${day}`] || null
+          : null;
+        collectSummary(summary, currentShift, holiday, weekend, inEmployment, entrySnapshot);
         if (inEmployment && !holiday && !weekend) {
           summary.monthNormHours += 8;
         }
@@ -3417,12 +3423,37 @@ function getWorkShiftHours(shift) {
   return getStoredShiftHours(shift);
 }
 
-function collectSummary(summary, shiftCode, holiday, weekend, inEmployment = true) {
+function collectSummary(summary, shiftCode, holiday, weekend, inEmployment = true, snapshot = null) {
   if (!inEmployment) {
     return;
   }
 
   const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
+
+  const hasSnapshotMinutes = snapshot && Number.isFinite(Number(snapshot.workMinutes));
+  if (hasSnapshotMinutes) {
+    const workHours = Number(snapshot.workMinutes || 0) / 60;
+    const nightHours = Number(snapshot.nightMinutes || 0) / 60;
+    const holidayHours = Number(snapshot.holidayMinutes || 0) / 60;
+    const weekendHours = Number(snapshot.weekendMinutes || 0) / 60;
+
+    if (workHours > 0) {
+      summary.workedDays += 1;
+      summary.workedHours += workHours;
+    }
+    summary.nightWorkedHours += nightHours;
+    summary.nightConvertedHours += nightHours * (NIGHT_HOURS_COEFFICIENT - 1);
+    summary.holidayWorkedHours += holidayHours;
+    summary.weekendWorkedHours += weekendHours;
+
+    if (shift.type === 'vacation') {
+      summary.vacationDays += 1;
+    }
+    if (shift.type === 'sick') {
+      summary.sickDays += 1;
+    }
+    return;
+  }
 
   if (shift.type === 'work') {
     const shiftHours = getWorkShiftHours(shift);
@@ -3446,6 +3477,29 @@ function collectSummary(summary, shiftCode, holiday, weekend, inEmployment = tru
   if (shift.type === 'sick') {
     summary.sickDays += 1;
   }
+}
+
+
+function normalizeShiftCodeForApi(input) {
+  const raw = String(input || '').trim();
+  if (!raw) {
+    return '';
+  }
+  const latinUpper = raw.toUpperCase();
+  if (['R', 'P', 'O', 'B'].includes(latinUpper)) {
+    return latinUpper;
+  }
+  const cyrillicMap = {
+    'Р': 'R',
+    'р': 'R',
+    'П': 'P',
+    'п': 'P',
+    'О': 'O',
+    'о': 'O',
+    'Б': 'B',
+    'б': 'B',
+  };
+  return cyrillicMap[raw] || latinUpper;
 }
 
 function getShiftByCode(code) {
@@ -3828,6 +3882,7 @@ async function refreshMonthlyView() {
   if (!state.selectedScheduleIds.length) {
     state.scheduleEmployees = [];
     state.scheduleEntriesById = {};
+    state.scheduleEntrySnapshotsById = {};
     return;
   }
 
@@ -3837,6 +3892,7 @@ async function refreshMonthlyView() {
 
   const employeeById = new Map();
   const mappedEntries = {};
+  const mappedEntrySnapshots = {};
 
   details.forEach((detail) => {
     const schedule = detail.schedule || {};
@@ -3871,7 +3927,15 @@ async function refreshMonthlyView() {
       if (!allowedIds.has(entry.employeeId)) {
         return;
       }
-      mappedEntries[`${schedule.id}|${entry.employeeId}|${entry.day}`] = entry.shiftCode;
+      const entryKey = `${schedule.id}|${entry.employeeId}|${entry.day}`;
+      mappedEntries[entryKey] = entry.shiftCode;
+      mappedEntrySnapshots[entryKey] = {
+        workMinutes: Number(entry.workMinutes ?? 0),
+        nightMinutes: Number(entry.nightMinutes ?? 0),
+        holidayMinutes: Number(entry.holidayMinutes ?? 0),
+        weekendMinutes: Number(entry.weekendMinutes ?? 0),
+        overtimeMinutes: Number(entry.overtimeMinutes ?? 0),
+      };
     });
   });
 
@@ -3879,6 +3943,7 @@ async function refreshMonthlyView() {
   mergedEmployees.sort((a, b) => a.name.localeCompare(b.name, 'bg'));
   state.scheduleEmployees = mergedEmployees.map(normalizeEmployeeVacationData);
   state.scheduleEntriesById = mappedEntries;
+  state.scheduleEntrySnapshotsById = mappedEntrySnapshots;
 }
 
 async function loadFromBackend() {
@@ -4029,7 +4094,7 @@ async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) 
     const payload = {
       employee_id: employee.id,
       day,
-      shift_code: shiftCode,
+      shift_code: normalizeShiftCodeForApi(shiftCode),
       month_key: options.monthKey || state.month,
     };
     if (options.shiftId) {
@@ -4052,6 +4117,13 @@ async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) 
     if (responsePayload?.entry) {
       state.schedule[scheduleKey(employee.id, options.monthKey || state.month, day)] = responsePayload.entry.shiftCode || shiftCode;
       state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = responsePayload.entry.shiftCode || shiftCode;
+      state.scheduleEntrySnapshotsById[`${scheduleId}|${employee.id}|${day}`] = {
+        workMinutes: Number(responsePayload.entry.workMinutes ?? 0),
+        nightMinutes: Number(responsePayload.entry.nightMinutes ?? 0),
+        holidayMinutes: Number(responsePayload.entry.holidayMinutes ?? 0),
+        weekendMinutes: Number(responsePayload.entry.weekendMinutes ?? 0),
+        overtimeMinutes: Number(responsePayload.entry.overtimeMinutes ?? 0),
+      };
       saveScheduleLocal();
       await refreshMonthlyView();
     }

@@ -224,13 +224,30 @@ function computeMonthlySummary({
 
       if (shiftCode === 'O') {
         summary.vacationDays += 1;
-        continue;
       }
       if (shiftCode === 'B') {
         summary.sickDays += 1;
+      }
+
+      const hasSnapshot = Number.isFinite(Number(entry.work_minutes ?? entry.workMinutes));
+      if (hasSnapshot) {
+        const shiftHours = round2(Number(entry.work_minutes ?? entry.workMinutes ?? 0) / 60);
+        const nightHours = round2(Number(entry.night_minutes ?? entry.nightMinutes ?? 0) / 60);
+        const holidayHours = round2(Number(entry.holiday_minutes ?? entry.holidayMinutes ?? 0) / 60);
+        const weekendHours = round2(Number(entry.weekend_minutes ?? entry.weekendMinutes ?? 0) / 60);
+
+        if (shiftHours > 0) {
+          summary.workedDays += 1;
+          summary.workedHours += shiftHours;
+          perDayWorkedHours.set(dateISO, round2((perDayWorkedHours.get(dateISO) || 0) + shiftHours));
+        }
+        summary.nightWorkedHours += nightHours;
+        summary.holidayWorkedHours += holidayHours;
+        summary.weekendWorkedHours += weekendHours;
         continue;
       }
-      if (shiftCode === 'P') {
+
+      if (shiftCode === 'P' || shiftCode === 'O' || shiftCode === 'B') {
         continue;
       }
 
