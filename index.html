@@ -154,43 +154,9 @@
             </div>
           </div>
 
-                    <div class="panel schedule-generate-panel">
-            <h3>Генериране</h3>
-            <div class="schedule-controls-row">
-              <label for="generateDepartmentSelect">Отдел</label>
-              <select id="generateDepartmentSelect"></select>
-              <label for="generateTemplateSelect">Шаблон</label>
-              <select id="generateTemplateSelect">
-                <option value="SIRV_12H_2_2">SIRV 12ч 2/2</option>
-                <option value="SIRV_12H_2_4">SIRV 12ч 2/4</option>
-                <option value="3_SHIFT_8H">3 смени 8ч</option>
-                <option value="8H_STANDARD_WEEKDAYS">8ч пон-пет</option>
-              </select>
-            </div>
-            <div class="schedule-controls-row schedule-controls-row--stacked">
-              <strong>Служители (празно = всички в отдела)</strong>
-              <div id="generateEmployeesSelect" class="schedule-multi-select"></div>
-            </div>
-            <div class="schedule-controls-row schedule-controls-row--stacked">
-              <label class="settings-checkbox"><input id="generateOverwriteEmptyOnly" type="radio" name="generateOverwriteMode" value="empty_only" checked />Попълни само празните клетки</label>
-              <label class="settings-checkbox"><input id="generateOverwriteAutoOnly" type="radio" name="generateOverwriteMode" value="overwrite_auto_only" />Презапиши само автоматичните</label>
-              <label class="settings-checkbox"><input id="generateOverwriteAll" type="radio" name="generateOverwriteMode" value="overwrite_all" />Презапиши всичко</label>
-              <label class="settings-checkbox"><input id="generateRotateEmployees" type="checkbox" />Разминавай цикъла между служителите</label>
-              <label class="settings-checkbox"><input id="generateIncludeWeekends" type="checkbox" />Включи уикенди (за 8ч шаблон)</label>
-              <label class="settings-checkbox"><input id="generateEnforce24h" type="checkbox" checked />24ч почивка след 12ч смяна</label>
-              <label for="generateRestHoursInput">Минимална почивка (часове)</label>
-              <input id="generateRestHoursInput" type="number" min="0" step="1" value="12" />
-            </div>
-            <div class="schedule-controls-row">
-              <button id="generateScheduleByTemplateBtn" type="button">Генерирай</button>
-              <a href="#settingsTab" class="button-link">Смени на отдела</a>
-            </div>
-            <div id="generateWarnings" class="field-help"></div>
-          </div>
-
-<div class="row actions-row">
-            <button id="lockScheduleBtn" type="button">Заключи графика</button>
-            <button id="unlockScheduleBtn" type="button">Отключи графика</button>
+          <div class="row actions-row">
+            <button id="lockScheduleBtn" type="button">Заключи график</button>
+            <button id="unlockScheduleBtn" type="button">Отключи</button>
             <button id="exportExcelBtn" type="button">Експорт Excel</button>
             <button id="exportPdfBtn" type="button">Експорт PDF</button>
             <span id="lockStatus" class="lock-status">Статус: Отключен</span>
@@ -500,8 +466,8 @@
             <article>
               <h3>8) Заключване и експорт</h3>
               <ul>
-                <li><strong>„Заключи графика“</strong> спира редакции за текущия месец.</li>
-                <li><strong>„Отключи графика“</strong> връща възможността за промени.</li>
+                <li><strong>„Заключи график“</strong> спира редакции за текущия месец.</li>
+                <li><strong>„Отключи“</strong> връща възможността за промени.</li>
                 <li>Експортите <strong>Excel</strong> и <strong>PDF</strong> генерират текущата таблица за отчет и архив.</li>
               </ul>
             </article>

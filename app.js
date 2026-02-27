@@ -291,7 +291,7 @@ function renderScheduleOverviewTotals(totals) {
     ['Нощни', totals.nightMinutes],
     ['Уикенд', totals.weekendMinutes],
     ['Празнични', totals.holidayMinutes],
-    ['Извънредни', totals.overtimeMinutes],
+    [isMonthLocked(state.month) ? 'Финални извънредни (СИРВ)' : 'Извънредни', totals.overtimeMinutes],
   ];
   scheduleOverviewPanel.innerHTML = `
     <div class="schedule-overview-title">Обобщение</div>
@@ -2179,12 +2179,20 @@ function attachLockAndExport() {
     renderSchedule();
   });
 
-  exportExcelBtn.addEventListener('click', () => {
-    exportScheduleToExcel();
+  exportExcelBtn.addEventListener('click', async () => {
+    const active = getActiveSchedule();
+    if (!active) {
+      return;
+    }
+    await downloadScheduleFile(active.id, 'xlsx');
   });
 
-  exportPdfBtn.addEventListener('click', () => {
-    exportScheduleToPdf();
+  exportPdfBtn.addEventListener('click', async () => {
+    const active = getActiveSchedule();
+    if (!active) {
+      return;
+    }
+    await downloadScheduleFile(active.id, 'pdf');
   });
 }
 
@@ -4005,6 +4013,9 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       select.classList.add('shift-select--inactive');
     }
     select.disabled = monthLocked || !inEmployment;
+    if (monthLocked) {
+      select.title = 'Графикът е заключен';
+    }
 
     const scheduleId = getEmployeeScheduleId(employee);
     const employeeDepartmentId = cleanStoredValue(employee.departmentId || employee.department_id) || null;
@@ -4094,7 +4105,10 @@ function renderSchedule() {
   const monthLocked = isMonthLocked(month);
   const activeSchedule = getActiveSchedule();
 
-  lockStatus.textContent = `Статус: ${monthLocked ? 'Заключен' : 'Отключен'}${activeSchedule ? ` · Активен: ${activeSchedule.name}` : ''}`;
+  lockStatus.textContent = `Статус: ${monthLocked ? 'Locked' : 'Draft'}${activeSchedule ? ` · Активен: ${activeSchedule.name}` : ''}`;
+  lockStatus.classList.toggle('lock-status--locked', monthLocked);
+  lockScheduleBtn.disabled = monthLocked || !canManageScheduleLock();
+  unlockScheduleBtn.disabled = !monthLocked || !canUnlockSchedule();
 
   monthInfo.innerHTML = `
     <b>Работни дни по календар:</b> ${monthStats.workingDays} ·
@@ -5338,6 +5352,34 @@ async function deleteShiftTemplateBackend(code, departmentId = null) {
     setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
     // keep backend mode active; surface error via status
   }
+}
+
+function canManageScheduleLock() {
+  const role = String(state.currentUser?.role || state.userRole || '').toLowerCase();
+  return ['owner', 'admin', 'manager'].includes(role);
+}
+
+function canUnlockSchedule() {
+  const role = String(state.currentUser?.role || state.userRole || '').toLowerCase();
+  return ['owner', 'admin'].includes(role);
+}
+
+async function downloadScheduleFile(scheduleId, extension) {
+  const response = await apiFetch(`/api/schedules/${scheduleId}/export.${extension}`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    setStatus(payload.message || `Неуспешен експорт ${extension.toUpperCase()}.`, false);
+    return;
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `schedule-${scheduleId}.${extension}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function exportScheduleToExcel() {

@@ -27,6 +27,7 @@ const {
   validateScheduleEntry,
   countBusinessDays,
   dateAdd,
+  finalizeSirvOvertimeAllocations,
 } = require('./schedule_calculations');
 const {
   getDaysOfMonth,
@@ -721,6 +722,17 @@ async function requireTenantContext(req, res, next) {
   }
 }
 
+async function requireTenantRoles(req, allowedRoles = []) {
+  const actor = await resolveActorTenant(req);
+  if (req.user?.is_super_admin === true) {
+    return actor;
+  }
+  if (!allowedRoles.includes(actor.role)) {
+    throw createHttpError(403, 'Нямате права за това действие.');
+  }
+  return actor;
+}
+
 async function insertAuditLog(action, entity, payload = {}) {
   try {
     const hasScheduleId = await tableHasColumn('audit_log', 'schedule_id');
@@ -1147,6 +1159,9 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL`);
   await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS sirv_enabled BOOLEAN NOT NULL DEFAULT FALSE`);
   await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS sirv_period_months INTEGER NOT NULL DEFAULT 1`);
+  await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS lock_note TEXT NULL`);
+  await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ NULL`);
+  await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS locked_by UUID NULL`);
   await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS id UUID`);
   await pool.query(`UPDATE shift_templates SET id = gen_random_uuid() WHERE id IS NULL`);
   await pool.query(`ALTER TABLE shift_templates ALTER COLUMN id SET DEFAULT gen_random_uuid()`);
@@ -1159,8 +1174,11 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE schedule_entries ALTER COLUMN shift_code TYPE VARCHAR(16)`);
   await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS work_minutes_total INTEGER NULL`);
   await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS break_minutes_applied INTEGER NULL`);
+  await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS overtime_estimated_minutes INTEGER NULL`);
   await pool.query(`ALTER TABLE audit_log ALTER COLUMN old_shift_code TYPE VARCHAR(16)`);
   await pool.query(`ALTER TABLE audit_log ALTER COLUMN new_shift_code TYPE VARCHAR(16)`);
+  await pool.query(`ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS event_type TEXT NULL`);
+  await pool.query(`ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS metadata JSONB NULL`);
 
   await pool.query(`
     UPDATE schedules s
@@ -4086,14 +4104,15 @@ app.use((error, req, res, next) => {
 });
 
 
+
 app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (req, res) => {
   const scheduleId = req.params.id;
-  const period = cleanStr(req.query?.period || 'month').toLowerCase();
+  const scope = cleanStr(req.query?.scope || req.query?.period || 'month').toLowerCase();
   if (!isValidUuid(scheduleId)) {
     return res.status(400).json({ message: 'Невалиден schedule id.' });
   }
-  if (!['month', 'sirv'].includes(period)) {
-    return res.status(400).json({ message: 'period трябва да е month|sirv.' });
+  if (!['month', 'sirv_period', 'sirv'].includes(scope)) {
+    return res.status(400).json({ message: 'scope трябва да е month|sirv_period.' });
   }
 
   try {
@@ -4108,8 +4127,133 @@ app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (r
     }
     const schedule = scheduleResult.rows[0];
 
-    const sumMonth = await pool.query(
-      `SELECT COALESCE(SUM(COALESCE(work_minutes_total, work_minutes, 0)),0)::int AS total_work,
+    const monthTotalsResult = await pool.query(
+      `SELECT COALESCE(SUM(COALESCE(work_minutes_total, work_minutes, 0)),0)::int AS work,
+              COALESCE(SUM(COALESCE(night_minutes, 0)),0)::int AS night,
+              COALESCE(SUM(COALESCE(weekend_minutes, 0)),0)::int AS weekend,
+              COALESCE(SUM(COALESCE(holiday_minutes, 0)),0)::int AS holiday,
+              COALESCE(SUM(COALESCE(CASE WHEN $2 = 'locked' THEN overtime_minutes ELSE COALESCE(overtime_estimated_minutes, overtime_minutes, 0) END, 0)),0)::int AS overtime
+       FROM schedule_entries
+       WHERE schedule_id = $1`,
+      [scheduleId, schedule.status]
+    );
+
+    if (scope === 'month' || (!schedule.sirv_enabled)) {
+      return res.json({ ok: true, scope: 'month', totals: monthTotalsResult.rows[0] });
+    }
+
+    const bounds = getSirvPeriodBounds(schedule.month_key, schedule.sirv_period_months);
+    const scopeSchedulesResult = await pool.query(
+      `SELECT id FROM schedules
+       WHERE tenant_id = $1 AND month_key >= $2 AND month_key <= $3`,
+      [req.tenantId, bounds.periodStart.slice(0, 7), bounds.periodEnd.slice(0, 7)]
+    );
+    const scopeIds = scopeSchedulesResult.rows.map((row) => row.id);
+
+    const totalsResult = scopeIds.length
+      ? await pool.query(
+        `SELECT COALESCE(SUM(COALESCE(work_minutes_total, work_minutes, 0)),0)::int AS work,
+                COALESCE(SUM(COALESCE(night_minutes, 0)),0)::int AS night,
+                COALESCE(SUM(COALESCE(weekend_minutes, 0)),0)::int AS weekend,
+                COALESCE(SUM(COALESCE(holiday_minutes, 0)),0)::int AS holiday,
+                COALESCE(SUM(COALESCE(CASE WHEN $2 = 'locked' THEN overtime_minutes ELSE COALESCE(overtime_estimated_minutes, overtime_minutes, 0) END, 0)),0)::int AS overtime
+         FROM schedule_entries
+         WHERE schedule_id = ANY($1::uuid[])`,
+        [scopeIds, schedule.status]
+      )
+      : { rows: [{ work: 0, night: 0, weekend: 0, holiday: 0, overtime: 0 }] };
+
+    return res.json({
+      ok: true,
+      scope: 'sirv_period',
+      period_start: bounds.periodStart,
+      period_end: bounds.periodEnd,
+      totals: totalsResult.rows[0],
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/api/schedules/:id/lock', requireAuth, requireTenantContext, async (req, res) => {
+  const scheduleId = req.params.id;
+  const note = cleanStr(req.body?.note || '') || null;
+  if (!isValidUuid(scheduleId)) {
+    return res.status(400).json({ message: 'Невалиден schedule id.' });
+  }
+
+  try {
+    await requireTenantRoles(req, ['owner', 'admin', 'manager']);
+
+    const scheduleMetaResult = await pool.query(
+      `SELECT id, month_key, status, COALESCE(sirv_enabled, FALSE) AS sirv_enabled, COALESCE(sirv_period_months,1) AS sirv_period_months,
+              locked_at, locked_by
+       FROM schedules
+       WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId]
+    );
+    if (!scheduleMetaResult.rowCount) {
+      return res.status(404).json({ message: 'Графикът не е намерен.' });
+    }
+
+    const scheduleMeta = scheduleMetaResult.rows[0];
+    const warnings = [];
+    if (scheduleMeta.status !== 'locked') {
+      await pool.query(
+        `UPDATE schedules
+         SET status = 'locked', locked_at = NOW(), locked_by = $3, lock_note = $4
+         WHERE id = $1 AND tenant_id = $2`,
+        [scheduleId, req.tenantId, req.user?.id || null, note]
+      );
+    }
+
+    if (scheduleMeta.sirv_enabled) {
+      const bounds = getSirvPeriodBounds(scheduleMeta.month_key, scheduleMeta.sirv_period_months);
+      const scheduleIdsRes = await pool.query(
+        `SELECT id FROM schedules WHERE tenant_id = $1 AND month_key >= $2 AND month_key <= $3`,
+        [req.tenantId, bounds.periodStart.slice(0, 7), bounds.periodEnd.slice(0, 7)]
+      );
+      const scopeIds = scheduleIdsRes.rows.map((r) => r.id);
+      const rowsRes = scopeIds.length
+        ? await pool.query(
+          `SELECT se.schedule_id, se.employee_id, se.day, s.month_key,
+                  CONCAT(s.month_key, '-', LPAD(se.day::text, 2, '0')) AS date,
+                  COALESCE(se.work_minutes_total, se.work_minutes, 0)::int AS work_minutes_total
+           FROM schedule_entries se
+           JOIN schedules s ON s.id = se.schedule_id
+           WHERE se.schedule_id = ANY($1::uuid[])
+           ORDER BY se.employee_id, date, se.schedule_id`,
+          [scopeIds]
+        )
+        : { rows: [] };
+
+      const holidayResolver = await buildHolidayResolver();
+      const businessDays = countBusinessDays(bounds.periodStart, bounds.periodEnd, holidayResolver);
+      const periodNorm = businessDays * 480;
+      const finalized = finalizeSirvOvertimeAllocations(rowsRes.rows, periodNorm, 480);
+      warnings.push(...finalized.warnings);
+
+      for (const up of finalized.updates) {
+        await pool.query(
+          `UPDATE schedule_entries
+           SET overtime_minutes = $1,
+               overtime_estimated_minutes = NULL,
+               updated_at = NOW()
+           WHERE schedule_id = $2 AND employee_id = $3 AND day = $4`,
+          [up.overtime_minutes, up.schedule_id, up.employee_id, up.day]
+        );
+      }
+    }
+
+    const finalStateResult = await pool.query(
+      `SELECT id, status, locked_at, locked_by
+       FROM schedules
+       WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId]
+    );
+
+    const totalsResult = await pool.query(
+      `SELECT COALESCE(SUM(COALESCE(work_minutes_total, work_minutes, 0)),0)::int AS work,
               COALESCE(SUM(COALESCE(night_minutes, 0)),0)::int AS night,
               COALESCE(SUM(COALESCE(weekend_minutes, 0)),0)::int AS weekend,
               COALESCE(SUM(COALESCE(holiday_minutes, 0)),0)::int AS holiday,
@@ -4119,49 +4263,180 @@ app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (r
       [scheduleId]
     );
 
-    const totals = sumMonth.rows[0];
-    if (period === 'month' || !schedule.sirv_enabled) {
-      return res.json({ ok: true, period: 'month', totals, overtime_mode: 'daily' });
-    }
-
-    const bounds = getSirvPeriodBounds(schedule.month_key, schedule.sirv_period_months);
-    const periodScheduleIds = await pool.query(
-      `SELECT id FROM schedules
-       WHERE tenant_id = $1 AND month_key >= $2 AND month_key <= $3`,
-      [req.tenantId, bounds.periodStart.slice(0, 7), bounds.periodEnd.slice(0, 7)]
-    );
-    const ids = periodScheduleIds.rows.map((r) => r.id);
-    const periodWorkedResult = ids.length
-      ? await pool.query(
-        `SELECT COALESCE(SUM(COALESCE(work_minutes_total, work_minutes, 0)), 0)::int AS worked
-         FROM schedule_entries
-         WHERE schedule_id = ANY($1::uuid[])`,
-        [ids]
-      )
-      : { rows: [{ worked: 0 }] };
-
-    const holidayResolver = await buildHolidayResolver();
-    const businessDays = countBusinessDays(bounds.periodStart, bounds.periodEnd, holidayResolver);
-    const periodNorm = businessDays * 480;
-    const overtimePeriod = Math.max(0, Number(periodWorkedResult.rows[0].worked || 0) - periodNorm);
-
-    return res.json({
-      ok: true,
-      period: 'sirv',
-      period_start: bounds.periodStart,
-      period_end: bounds.periodEnd,
-      totals: {
-        ...totals,
-        overtime_estimated: schedule.status === 'locked' ? undefined : overtimePeriod,
-        overtime_final: schedule.status === 'locked' ? overtimePeriod : undefined,
-      },
-      sirv_enabled: true,
+    await insertAuditLog('schedule_lock', 'schedule', {
+      tenantId: req.tenantId,
+      actorUserId: req.user?.id,
+      scheduleId,
+      entityId: scheduleId,
+      after: { ...finalStateResult.rows[0], note },
+      ip: req.ip,
+      userAgent: req.get('user-agent') || null,
     });
+
+    return res.json({ ...finalStateResult.rows[0], totals: totalsResult.rows[0], warnings });
   } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
     return res.status(500).json({ message: error.message });
   }
 });
 
+app.post('/api/schedules/:id/unlock', requireAuth, requireTenantContext, async (req, res) => {
+  const scheduleId = req.params.id;
+  const note = cleanStr(req.body?.note || '') || null;
+  if (!isValidUuid(scheduleId)) {
+    return res.status(400).json({ message: 'Невалиден schedule id.' });
+  }
+
+  try {
+    await requireTenantRoles(req, ['owner', 'admin']);
+
+    const scheduleCheck = await pool.query(
+      `SELECT id, status FROM schedules WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId]
+    );
+    if (!scheduleCheck.rowCount) {
+      return res.status(404).json({ message: 'Графикът не е намерен.' });
+    }
+
+    await pool.query(
+      `UPDATE schedules
+       SET status = 'draft', locked_at = NULL, locked_by = NULL, lock_note = $3
+       WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId, note]
+    );
+
+    await pool.query(
+      `UPDATE schedule_entries
+       SET overtime_minutes = NULL,
+           updated_at = NOW()
+       WHERE schedule_id = $1`,
+      [scheduleId]
+    );
+
+    await insertAuditLog('schedule_unlock', 'schedule', {
+      tenantId: req.tenantId,
+      actorUserId: req.user?.id,
+      scheduleId,
+      entityId: scheduleId,
+      after: { status: 'draft', note },
+      ip: req.ip,
+      userAgent: req.get('user-agent') || null,
+    });
+
+    return res.json({ status: 'draft' });
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.get('/api/schedules/:id/export.xlsx', requireAuth, requireTenantContext, async (req, res) => {
+  const scheduleId = req.params.id;
+  if (!isValidUuid(scheduleId)) {
+    return res.status(400).json({ message: 'Невалиден schedule id.' });
+  }
+
+  try {
+    await requireTenantRoles(req, ['owner', 'admin', 'manager']);
+    const data = await pool.query(
+      `SELECT s.id, s.name, s.month_key, s.status, e.name AS employee_name, se.day, se.shift_code,
+              COALESCE(se.work_minutes_total, 0) AS work_minutes_total,
+              COALESCE(se.night_minutes, 0) AS night_minutes,
+              COALESCE(se.weekend_minutes, 0) AS weekend_minutes,
+              COALESCE(se.holiday_minutes, 0) AS holiday_minutes,
+              COALESCE(CASE WHEN s.status = 'locked' THEN se.overtime_minutes ELSE COALESCE(se.overtime_estimated_minutes, se.overtime_minutes, 0) END, 0) AS overtime_minutes
+       FROM schedules s
+       LEFT JOIN schedule_entries se ON se.schedule_id = s.id
+       LEFT JOIN employees e ON e.id = se.employee_id
+       WHERE s.id = $1 AND s.tenant_id = $2
+       ORDER BY e.name NULLS LAST, se.day`,
+      [scheduleId, req.tenantId]
+    );
+    if (!data.rowCount) {
+      return res.status(404).json({ message: 'Графикът не е намерен.' });
+    }
+
+    const header = 'Employee,Day,Shift,Work(h),Night(h),Weekend(h),Holiday(h),Overtime(h)';
+    const lines = [header];
+    data.rows.forEach((row) => {
+      if (!row.employee_name) return;
+      lines.push([
+        row.employee_name,
+        row.day,
+        row.shift_code,
+        (Number(row.work_minutes_total) / 60).toFixed(2),
+        (Number(row.night_minutes) / 60).toFixed(2),
+        (Number(row.weekend_minutes) / 60).toFixed(2),
+        (Number(row.holiday_minutes) / 60).toFixed(2),
+        (Number(row.overtime_minutes) / 60).toFixed(2),
+      ].join(','));
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="schedule-${scheduleId}.xlsx"`);
+    return res.send(lines.join('\n'));
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.get('/api/schedules/:id/export.pdf', requireAuth, requireTenantContext, async (req, res) => {
+  const scheduleId = req.params.id;
+  if (!isValidUuid(scheduleId)) {
+    return res.status(400).json({ message: 'Невалиден schedule id.' });
+  }
+
+  try {
+    await requireTenantRoles(req, ['owner', 'admin', 'manager']);
+    const scheduleResult = await pool.query(
+      `SELECT id, name, month_key, status FROM schedules WHERE id = $1 AND tenant_id = $2`,
+      [scheduleId, req.tenantId]
+    );
+    if (!scheduleResult.rowCount) {
+      return res.status(404).json({ message: 'Графикът не е намерен.' });
+    }
+
+    const rows = await pool.query(
+      `SELECT e.name AS employee_name,
+              COALESCE(SUM(COALESCE(se.work_minutes_total, 0)),0)::int AS work,
+              COALESCE(SUM(COALESCE(se.night_minutes, 0)),0)::int AS night,
+              COALESCE(SUM(COALESCE(se.weekend_minutes, 0)),0)::int AS weekend,
+              COALESCE(SUM(COALESCE(se.holiday_minutes, 0)),0)::int AS holiday,
+              COALESCE(SUM(COALESCE(CASE WHEN $3 = 'locked' THEN se.overtime_minutes ELSE COALESCE(se.overtime_estimated_minutes, se.overtime_minutes, 0) END, 0)),0)::int AS overtime
+       FROM schedule_entries se
+       JOIN employees e ON e.id = se.employee_id
+       WHERE se.schedule_id = $1
+       GROUP BY e.name
+       ORDER BY e.name`,
+      [scheduleId, req.tenantId, scheduleResult.rows[0].status]
+    );
+
+    const lines = [
+      `Schedule: ${scheduleResult.rows[0].name}`,
+      `Month: ${scheduleResult.rows[0].month_key}`,
+      `Status: ${scheduleResult.rows[0].status}`,
+      '',
+      'Employee | Work(h) | Night(h) | Weekend(h) | Holiday(h) | Overtime(h)',
+      ...rows.rows.map((row) => `${row.employee_name} | ${(row.work / 60).toFixed(2)} | ${(row.night / 60).toFixed(2)} | ${(row.weekend / 60).toFixed(2)} | ${(row.holiday / 60).toFixed(2)} | ${(row.overtime / 60).toFixed(2)}`),
+    ];
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="schedule-${scheduleId}.pdf"`);
+    return res.send(lines.join('\n'));
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
+    return res.status(500).json({ message: error.message });
+  }
+});
 
 initDatabase()
   .then(() => {
@@ -4173,147 +4448,3 @@ initDatabase()
     console.error('Database init error:', error);
     process.exit(1);
   });
-
-app.post('/api/schedules/:id/lock', requireAuth, requireTenantContext, async (req, res) => {
-  const scheduleId = req.params.id;
-  if (!isValidUuid(scheduleId)) {
-    return res.status(400).json({ message: 'Невалиден schedule id.' });
-  }
-  try {
-    const result = await pool.query(
-      `UPDATE schedules
-       SET status = 'locked', locked_at = NOW(), locked_by = $3
-       WHERE id = $1 AND tenant_id = $2 AND status <> 'locked'
-       RETURNING id, status, locked_at, locked_by`,
-      [scheduleId, req.tenantId, req.user?.id || null]
-    );
-    if (!result.rowCount) {
-      return res.status(409).json({ message: 'Графикът е вече заключен или липсва.' });
-    }
-
-    const scheduleMetaResult = await pool.query(
-      `SELECT month_key, COALESCE(sirv_enabled, FALSE) AS sirv_enabled, COALESCE(sirv_period_months,1) AS sirv_period_months
-       FROM schedules
-       WHERE id = $1 AND tenant_id = $2`,
-      [scheduleId, req.tenantId]
-    );
-    const scheduleMeta = scheduleMetaResult.rows[0] || null;
-    if (scheduleMeta?.sirv_enabled) {
-      const bounds = getSirvPeriodBounds(scheduleMeta.month_key, scheduleMeta.sirv_period_months);
-      const scheduleIdsRes = await pool.query(
-        `SELECT id FROM schedules WHERE tenant_id = $1 AND month_key >= $2 AND month_key <= $3`,
-        [req.tenantId, bounds.periodStart.slice(0, 7), bounds.periodEnd.slice(0, 7)]
-      );
-      const scopeIds = scheduleIdsRes.rows.map((r) => r.id);
-      const rowsRes = scopeIds.length
-        ? await pool.query(
-          `SELECT se.schedule_id, se.employee_id, se.day, s.month_key,
-                  COALESCE(se.work_minutes_total, se.work_minutes, 0)::int AS work_minutes_total
-           FROM schedule_entries se
-           JOIN schedules s ON s.id = se.schedule_id
-           WHERE se.schedule_id = ANY($1::uuid[])
-           ORDER BY se.employee_id, s.month_key, se.day`,
-          [scopeIds]
-        )
-        : { rows: [] };
-
-      const holidayResolver = await buildHolidayResolver();
-      const businessDays = countBusinessDays(bounds.periodStart, bounds.periodEnd, holidayResolver);
-      const periodNorm = businessDays * 480;
-
-      const byEmployee = new Map();
-      for (const row of rowsRes.rows) {
-        const key = String(row.employee_id);
-        if (!byEmployee.has(key)) byEmployee.set(key, []);
-        byEmployee.get(key).push(row);
-      }
-
-      for (const [, entries] of byEmployee.entries()) {
-        const worked = entries.reduce((acc, r) => acc + Number(r.work_minutes_total || 0), 0);
-        let remaining = Math.max(0, worked - periodNorm);
-        const updates = [];
-
-        const dailyCandidate = new Map(entries.map((e) => [`${e.schedule_id}|${e.employee_id}|${e.day}`, Math.max(0, Number(e.work_minutes_total || 0) - 480)]));
-        for (let i = entries.length - 1; i >= 0; i -= 1) {
-          const e = entries[i];
-          const key = `${e.schedule_id}|${e.employee_id}|${e.day}`;
-          const candidate = dailyCandidate.get(key) || 0;
-          const assigned = Math.min(remaining, candidate);
-          updates.push({ ...e, overtime: assigned });
-          remaining -= assigned;
-        }
-        if (remaining > 0) {
-          for (let i = 0; i < updates.length && remaining > 0; i += 1) {
-            const extra = Math.min(remaining, Number(updates[i].work_minutes_total || 0));
-            updates[i].overtime += extra;
-            remaining -= extra;
-          }
-        }
-
-        for (const up of updates) {
-          await pool.query(
-            `UPDATE schedule_entries
-             SET overtime_minutes = $1
-             WHERE schedule_id = $2 AND employee_id = $3 AND day = $4`,
-            [up.overtime, up.schedule_id, up.employee_id, up.day]
-          );
-        }
-      }
-    }
-
-    await insertAuditLog('lock_schedule', 'schedule', {
-      tenantId: req.tenantId,
-      actorUserId: req.user?.id,
-      scheduleId,
-      employeeId: req.user?.id,
-      entryDate: normalizeDateOnly(new Date().toISOString().slice(0, 10)),
-      after: result.rows[0],
-      ip: req.ip,
-      userAgent: req.get('user-agent') || null,
-    });
-
-    return res.json({ ok: true, schedule: result.rows[0] });
-  } catch (error) {
-    return res.status(500).json({ message: error.message });
-  }
-});
-
-app.post('/api/schedules/:id/unlock', requireAuth, requireTenantContext, async (req, res) => {
-  const scheduleId = req.params.id;
-  if (!isValidUuid(scheduleId)) {
-    return res.status(400).json({ message: 'Невалиден schedule id.' });
-  }
-
-  const role = cleanStr(req.user?.role || req.get('x-user-role')).toLowerCase();
-  if (!['owner', 'super_admin'].includes(role) && req.user?.is_super_admin !== true) {
-    return res.status(403).json({ message: 'Само owner/superadmin може да отключва.' });
-  }
-
-  try {
-    const result = await pool.query(
-      `UPDATE schedules
-       SET status = 'draft', locked_at = NULL, locked_by = NULL
-       WHERE id = $1 AND tenant_id = $2 AND status <> 'draft'
-       RETURNING id, status, locked_at, locked_by`,
-      [scheduleId, req.tenantId]
-    );
-    if (!result.rowCount) {
-      return res.status(409).json({ message: 'Графикът е вече отключен или липсва.' });
-    }
-
-    await insertAuditLog('unlock_schedule', 'schedule', {
-      tenantId: req.tenantId,
-      actorUserId: req.user?.id,
-      scheduleId,
-      employeeId: req.user?.id,
-      entryDate: normalizeDateOnly(new Date().toISOString().slice(0, 10)),
-      after: result.rows[0],
-      ip: req.ip,
-      userAgent: req.get('user-agent') || null,
-    });
-
-    return res.json({ ok: true, schedule: result.rows[0] });
-  } catch (error) {
-    return res.status(500).json({ message: error.message });
-  }
-});
