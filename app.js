@@ -3718,7 +3718,8 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
       }
 
       const key = scheduleKey(employeeId, monthKey, day);
-      const shiftCode = state.schedule[key] || state.sirvSchedule[key] || 'P';
+      const rawShiftCode = state.schedule[key] || state.sirvSchedule[key] || 'P';
+      const shiftCode = normalizeShiftCodeForApi(rawShiftCode);
       const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
       if (shift.type !== 'work') {
         continue;
@@ -4158,7 +4159,7 @@ async function buildSirvScheduleCache(referenceMonth, employees) {
         if (!sirvEmployeeIds.has(entry.employeeId)) {
           return;
         }
-        cache[scheduleKey(entry.employeeId, detailMonth, entry.day)] = entry.shiftCode;
+        cache[scheduleKey(entry.employeeId, detailMonth, entry.day)] = normalizeShiftCodeForApi(entry.shiftCode);
       });
     });
   }
@@ -4235,7 +4236,7 @@ async function refreshMonthlyView() {
         return;
       }
       const entryKey = `${schedule.id}|${entry.employeeId}|${entry.day}`;
-      mappedEntries[entryKey] = entry.shiftCode;
+      mappedEntries[entryKey] = normalizeShiftCodeForApi(entry.shiftCode);
       mappedEntrySnapshots[entryKey] = {
         workMinutes: Number(entry.workMinutes ?? 0),
         nightMinutes: Number(entry.nightMinutes ?? 0),
