@@ -22,6 +22,11 @@ const {
   countBusinessDays,
   dateAdd,
 } = require('./schedule_calculations');
+const {
+  enumerateDates: enumerateLeaveDates,
+  computeAdjustedNormMinutes,
+  computeLeaveMinutesForRange,
+} = require('./leave_utils');
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -602,6 +607,78 @@ async function requireTenantContext(req, res, next) {
   }
 }
 
+
+async function requireTenantManagerRole(req, res) {
+  const actor = await resolveActorTenant(req);
+  if (!['owner', 'admin', 'manager', 'super_admin'].includes(actor.role)) {
+    res.status(403).json({ message: 'Нямате права за управление на отсъствия.' });
+    return null;
+  }
+  return actor;
+}
+
+async function assertLeavesUnlocked(tenantId, dateFrom, dateTo) {
+  const from = normalizeDateOnly(dateFrom);
+  const to = normalizeDateOnly(dateTo);
+  if (!from || !to) {
+    return;
+  }
+  const fromMonth = from.slice(0, 7);
+  const toMonth = to.slice(0, 7);
+  const locked = await pool.query(
+    `SELECT id FROM schedules
+     WHERE tenant_id = $1
+       AND status = 'locked'
+       AND month_key >= $2 AND month_key <= $3
+     LIMIT 1`,
+    [tenantId, fromMonth, toMonth]
+  );
+  if (locked.rowCount) {
+    throw createHttpError(403, 'Графикът е заключен за избрания период.');
+  }
+}
+
+async function findLeaveOverlap({ tenantId, employeeId, dateFrom, dateTo, excludeId = null }) {
+  const params = [tenantId, employeeId, dateFrom, dateTo];
+  let whereExclude = '';
+  if (excludeId !== null) {
+    params.push(excludeId);
+    whereExclude = ` AND id <> $${params.length}`;
+  }
+  const overlap = await pool.query(
+    `SELECT id FROM employee_leaves
+     WHERE tenant_id = $1
+       AND employee_id = $2
+       AND daterange(date_from, date_to, '[]') && daterange($3::date, $4::date, '[]')
+       ${whereExclude}
+     LIMIT 1`,
+    params
+  );
+  return overlap.rowCount > 0;
+}
+
+async function fetchLeavesForSchedule({ tenantId, scheduleId }) {
+  const scheduleResult = await pool.query(
+    `SELECT month_key FROM schedules WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+    [scheduleId, tenantId]
+  );
+  if (!scheduleResult.rowCount) {
+    return [];
+  }
+  const bounds = getMonthBounds(scheduleResult.rows[0].month_key);
+  const result = await pool.query(
+    `SELECT el.id, el.employee_id, el.leave_type_id, el.date_from::text AS date_from, el.date_to::text AS date_to,
+            el.minutes_per_day, el.note,
+            lt.code AS leave_code, lt.name AS leave_name, lt.counts_as_work, lt.affects_norm
+     FROM employee_leaves el
+     JOIN leave_types lt ON lt.id = el.leave_type_id
+     WHERE el.tenant_id = $1
+       AND daterange(el.date_from, el.date_to, '[]') && daterange($2::date, $3::date, '[]')`,
+    [tenantId, bounds.monthStart, bounds.monthEnd]
+  );
+  return result.rows;
+}
+
 async function insertAuditLog(action, entity, payload = {}) {
   try {
     const hasScheduleId = await tableHasColumn('audit_log', 'schedule_id');
@@ -969,6 +1046,39 @@ async function initDatabase() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS leave_types (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      code TEXT NOT NULL,
+      name TEXT NOT NULL,
+      affects_norm BOOLEAN NOT NULL DEFAULT TRUE,
+      counts_as_work BOOLEAN NOT NULL DEFAULT FALSE,
+      color TEXT NULL,
+      is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (tenant_id, code)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS employee_leaves (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+      leave_type_id BIGINT NOT NULL REFERENCES leave_types(id) ON DELETE RESTRICT,
+      date_from DATE NOT NULL,
+      date_to DATE NOT NULL,
+      minutes_per_day INTEGER NULL,
+      note TEXT NULL,
+      created_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT employee_leaves_range_check CHECK (date_from <= date_to)
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS shift_templates (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -1039,6 +1149,28 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE shift_templates ADD COLUMN IF NOT EXISTS is_sirv_shift BOOLEAN NULL`);
   await pool.query(`ALTER TABLE schedule_entries ALTER COLUMN shift_code TYPE VARCHAR(16)`);
   await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS work_minutes_total INTEGER NULL`);
+
+  await pool.query(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE`);
+  await pool.query(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS code TEXT`);
+  await pool.query(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS name TEXT`);
+  await pool.query(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS affects_norm BOOLEAN NOT NULL DEFAULT TRUE`);
+  await pool.query(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS counts_as_work BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS color TEXT NULL`);
+  await pool.query(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS is_enabled BOOLEAN NOT NULL DEFAULT TRUE`);
+  await pool.query(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await pool.query(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+
+  await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS tenant_id UUID`);
+  await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS employee_id UUID`);
+  await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS leave_type_id BIGINT`);
+  await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS date_from DATE`);
+  await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS date_to DATE`);
+  await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS minutes_per_day INTEGER NULL`);
+  await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS note TEXT NULL`);
+  await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS created_by UUID NULL`);
+  await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+
   await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS break_minutes_applied INTEGER NULL`);
   await pool.query(`ALTER TABLE audit_log ALTER COLUMN old_shift_code TYPE VARCHAR(16)`);
   await pool.query(`ALTER TABLE audit_log ALTER COLUMN new_shift_code TYPE VARCHAR(16)`);
@@ -1197,6 +1329,9 @@ async function initDatabase() {
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_schedules_tenant_month_department_unique ON schedules(tenant_id, month_key, department)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedules_tenant_id ON schedules(tenant_id)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_entries_month_key ON schedule_entries(month_key)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_employee_leaves_tenant_employee_range ON employee_leaves(tenant_id, employee_id, date_from, date_to)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leave_types_tenant_code_unique ON leave_types(tenant_id, code)`);
+
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_shift_templates_tenant_department_code_unique ON shift_templates(tenant_id, department_id, code) WHERE department_id IS NOT NULL`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_shift_templates_tenant_global_code_unique ON shift_templates(tenant_id, code) WHERE department_id IS NULL`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_shift_templates_tenant_id ON shift_templates(tenant_id)`);
@@ -1255,6 +1390,32 @@ async function initDatabase() {
     }
   } catch (shiftTemplateBootstrapError) {
     console.error('SHIFT TEMPLATE TENANT BACKFILL WARN:', shiftTemplateBootstrapError.message);
+  }
+
+  try {
+    const tenantRows = await pool.query(`SELECT id FROM tenants`);
+    const defaults = [
+      { code: 'SICK', name: 'Болничен' },
+      { code: 'PAID_LEAVE', name: 'Платен отпуск' },
+      { code: 'UNPAID', name: 'Неплатен отпуск' },
+      { code: 'MATERNITY', name: 'Майчинство' },
+      { code: 'OTHER', name: 'Друго' },
+    ];
+
+    for (const tenant of tenantRows.rows) {
+      for (const item of defaults) {
+        await pool.query(
+          `INSERT INTO leave_types (tenant_id, code, name, affects_norm, counts_as_work, is_enabled)
+           VALUES ($1, $2, $3, TRUE, FALSE, TRUE)
+           ON CONFLICT (tenant_id, code)
+           DO UPDATE SET name = EXCLUDED.name, affects_norm = EXCLUDED.affects_norm,
+                         counts_as_work = EXCLUDED.counts_as_work, is_enabled = TRUE, updated_at = NOW()`,
+          [tenant.id, item.code, item.name]
+        );
+      }
+    }
+  } catch (leaveSeedError) {
+    console.error('LEAVE TYPES SEED WARN:', leaveSeedError.message);
   }
 
   await pool.query(`
@@ -1913,6 +2074,18 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
       scopedShiftTemplates.values
     );
 
+    const leavesResult = await pool.query(
+      `SELECT el.id, el.employee_id, el.date_from::text AS date_from, el.date_to::text AS date_to,
+              el.minutes_per_day, el.note,
+              lt.id AS leave_type_id, lt.code AS leave_type_code, lt.name AS leave_type_name,
+              lt.counts_as_work, lt.affects_norm
+       FROM employee_leaves el
+       JOIN leave_types lt ON lt.id = el.leave_type_id
+       WHERE el.tenant_id = $1
+         AND daterange(el.date_from, el.date_to, '[]') && daterange($2::date, $3::date, '[]')`,
+      [req.tenantId, bounds.monthStart, bounds.monthEnd]
+    );
+
     res.json({
       schedule,
       employees: employeesResult.rows,
@@ -1920,6 +2093,7 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
         ...entry,
         validation: { errors: [], warnings: [] },
       })),
+      leaves: leavesResult.rows,
       shiftTemplates: appendSystemShiftTemplates(shiftTemplatesResult.rows),
     });
   } catch (error) {
@@ -2072,6 +2246,18 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     const hasShiftTemplatesSirvShift = await tableHasColumn('shift_templates', 'is_sirv_shift');
     const shiftTemplatesSelect = `SELECT id, code, name, start_time, end_time, hours${hasShiftTemplatesBreakMinutes ? ', COALESCE(break_minutes, 0) AS break_minutes' : ', 0::integer AS break_minutes'}${hasShiftTemplatesBreakIncluded ? ', COALESCE(break_included, FALSE) AS break_included' : ', FALSE::boolean AS break_included'}${hasShiftTemplatesSirvShift ? ', is_sirv_shift' : ', NULL::boolean AS is_sirv_shift'} FROM shift_templates`;
 
+    const leaveOnDayResult = await pool.query(
+      `SELECT el.minutes_per_day, lt.counts_as_work
+       FROM employee_leaves el
+       JOIN leave_types lt ON lt.id = el.leave_type_id
+       WHERE el.tenant_id = $1
+         AND el.employee_id = $2
+         AND $3::date BETWEEN el.date_from AND el.date_to
+       ORDER BY el.id DESC
+       LIMIT 1`,
+      [req.tenantId, employeeId, entryDate]
+    );
+
     const holidayResolver = await buildHolidayResolver();
     let snapshot = computeSystemShiftSnapshot(resolvedShiftCode, entryDate);
 
@@ -2096,6 +2282,32 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         sirvEnabled: Boolean(schedule.sirv_enabled),
         dailyNormMinutes: Number(employee.workdayMinutes || 480),
       });
+    }
+
+    if (leaveOnDayResult.rowCount) {
+      const leaveOnDay = leaveOnDayResult.rows[0];
+      if (leaveOnDay.counts_as_work) {
+        const leaveMinutes = Number(leaveOnDay.minutes_per_day) > 0 ? Number(leaveOnDay.minutes_per_day) : 480;
+        snapshot = {
+          ...snapshot,
+          work_minutes: leaveMinutes,
+          work_minutes_total: leaveMinutes,
+          night_minutes: 0,
+          holiday_minutes: 0,
+          weekend_minutes: 0,
+          overtime_minutes: 0,
+        };
+      } else {
+        snapshot = {
+          ...snapshot,
+          work_minutes: 0,
+          work_minutes_total: 0,
+          night_minutes: 0,
+          holiday_minutes: 0,
+          weekend_minutes: 0,
+          overtime_minutes: 0,
+        };
+      }
     }
 
     const previousDay = dateAdd(entryDate, -1);
@@ -3578,6 +3790,197 @@ app.use((error, req, res, next) => {
 });
 
 
+
+app.get('/api/leaves/types', requireAuth, requireTenantContext, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, code, name, affects_norm, counts_as_work, color
+       FROM leave_types
+       WHERE tenant_id = $1 AND is_enabled = TRUE
+       ORDER BY id`,
+      [req.tenantId]
+    );
+    return res.json({ leave_types: result.rows });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.get('/api/leaves', requireAuth, requireTenantContext, async (req, res) => {
+  const monthKey = cleanStr(req.query.month);
+  if (!isValidMonthKey(monthKey)) {
+    return res.status(400).json({ message: 'month трябва да е YYYY-MM.' });
+  }
+
+  try {
+    const bounds = getMonthBounds(monthKey);
+    const departmentId = cleanStr(req.query.department_id || req.query.departmentId) || null;
+    const values = [req.tenantId, bounds.monthStart, bounds.monthEnd];
+    let departmentSql = '';
+    if (departmentId) {
+      values.push(departmentId);
+      departmentSql = ` AND e.department_id = $${values.length}`;
+    }
+
+    const result = await pool.query(
+      `SELECT el.id, el.employee_id, el.date_from::text AS date_from, el.date_to::text AS date_to,
+              el.minutes_per_day, el.note,
+              lt.id AS leave_type_id, lt.code AS leave_type_code, lt.name AS leave_type_name
+       FROM employee_leaves el
+       JOIN leave_types lt ON lt.id = el.leave_type_id
+       JOIN employees e ON e.id = el.employee_id AND e.tenant_id = el.tenant_id
+       WHERE el.tenant_id = $1
+         AND daterange(el.date_from, el.date_to, '[]') && daterange($2::date, $3::date, '[]')
+         ${departmentSql}
+       ORDER BY el.employee_id, el.date_from`,
+      values
+    );
+
+    return res.json({ leaves: result.rows.map((row) => ({
+      id: row.id,
+      employee_id: row.employee_id,
+      date_from: row.date_from,
+      date_to: row.date_to,
+      minutes_per_day: row.minutes_per_day,
+      note: row.note,
+      leave_type: { id: row.leave_type_id, code: row.leave_type_code, name: row.leave_type_name },
+    })) });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/api/leaves', requireAuth, requireTenantContext, async (req, res) => {
+  try {
+    const actor = await requireTenantManagerRole(req, res);
+    if (!actor) return;
+
+    const employeeId = cleanStr(req.body?.employee_id || req.body?.employeeId);
+    const leaveTypeId = Number(req.body?.leave_type_id || req.body?.leaveTypeId);
+    const dateFrom = normalizeDateOnly(req.body?.date_from || req.body?.dateFrom);
+    const dateTo = normalizeDateOnly(req.body?.date_to || req.body?.dateTo);
+    const minutesPerDayRaw = req.body?.minutes_per_day ?? req.body?.minutesPerDay;
+    const note = cleanStr(req.body?.note || '') || null;
+
+    if (!isValidUuid(employeeId) || !Number.isInteger(leaveTypeId) || !dateFrom || !dateTo) {
+      return res.status(400).json({ message: 'Невалидни данни за отсъствие.' });
+    }
+    if (dateFrom > dateTo) {
+      return res.status(400).json({ message: 'date_from трябва да е <= date_to.' });
+    }
+
+    await assertLeavesUnlocked(req.tenantId, dateFrom, dateTo);
+
+    const employeeResult = await pool.query(`SELECT id FROM employees WHERE id = $1 AND tenant_id = $2`, [employeeId, req.tenantId]);
+    if (!employeeResult.rowCount) {
+      return res.status(404).json({ message: 'Служителят не е намерен.' });
+    }
+
+    const typeResult = await pool.query(`SELECT id FROM leave_types WHERE id = $1 AND tenant_id = $2 AND is_enabled = TRUE`, [leaveTypeId, req.tenantId]);
+    if (!typeResult.rowCount) {
+      return res.status(404).json({ message: 'Типът отсъствие не е намерен.' });
+    }
+
+    const hasOverlap = await findLeaveOverlap({ tenantId: req.tenantId, employeeId, dateFrom, dateTo });
+    if (hasOverlap) {
+      return res.status(409).json({ message: 'Има припокриване с друго отсъствие.' });
+    }
+
+    const minutesPerDay = Number(minutesPerDayRaw);
+    const normalizedMinutesPerDay = Number.isFinite(minutesPerDay) && minutesPerDay > 0 ? Math.trunc(minutesPerDay) : null;
+
+    const created = await pool.query(
+      `INSERT INTO employee_leaves (tenant_id, employee_id, leave_type_id, date_from, date_to, minutes_per_day, note, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING id, tenant_id, employee_id, leave_type_id, date_from::text, date_to::text, minutes_per_day, note`,
+      [req.tenantId, employeeId, leaveTypeId, dateFrom, dateTo, normalizedMinutesPerDay, note, req.user?.id || null]
+    );
+
+    return res.status(201).json({ leave: created.rows[0] });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ message: error.message });
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.patch('/api/leaves/:id', requireAuth, requireTenantContext, async (req, res) => {
+  const leaveId = Number(req.params.id);
+  if (!Number.isInteger(leaveId)) {
+    return res.status(400).json({ message: 'Невалиден leave id.' });
+  }
+
+  try {
+    const actor = await requireTenantManagerRole(req, res);
+    if (!actor) return;
+
+    const existing = await pool.query(`SELECT * FROM employee_leaves WHERE id = $1 AND tenant_id = $2`, [leaveId, req.tenantId]);
+    if (!existing.rowCount) {
+      return res.status(404).json({ message: 'Отсъствието не е намерено.' });
+    }
+    const current = existing.rows[0];
+
+    const employeeId = cleanStr(req.body?.employee_id || req.body?.employeeId || current.employee_id);
+    const leaveTypeId = Number(req.body?.leave_type_id || req.body?.leaveTypeId || current.leave_type_id);
+    const dateFrom = normalizeDateOnly(req.body?.date_from || req.body?.dateFrom || current.date_from);
+    const dateTo = normalizeDateOnly(req.body?.date_to || req.body?.dateTo || current.date_to);
+    const note = cleanStr(req.body?.note ?? current.note ?? '') || null;
+    const minutesPerDayRaw = req.body?.minutes_per_day ?? req.body?.minutesPerDay ?? current.minutes_per_day;
+    const minutesPerDayNum = Number(minutesPerDayRaw);
+    const minutesPerDay = Number.isFinite(minutesPerDayNum) && minutesPerDayNum > 0 ? Math.trunc(minutesPerDayNum) : null;
+
+    if (!isValidUuid(employeeId) || !Number.isInteger(leaveTypeId) || !dateFrom || !dateTo || dateFrom > dateTo) {
+      return res.status(400).json({ message: 'Невалидни данни за отсъствие.' });
+    }
+
+    await assertLeavesUnlocked(req.tenantId, dateFrom, dateTo);
+    await assertLeavesUnlocked(req.tenantId, current.date_from, current.date_to);
+
+    const hasOverlap = await findLeaveOverlap({ tenantId: req.tenantId, employeeId, dateFrom, dateTo, excludeId: leaveId });
+    if (hasOverlap) {
+      return res.status(409).json({ message: 'Има припокриване с друго отсъствие.' });
+    }
+
+    const updated = await pool.query(
+      `UPDATE employee_leaves
+       SET employee_id = $1, leave_type_id = $2, date_from = $3, date_to = $4, minutes_per_day = $5, note = $6, updated_at = NOW()
+       WHERE id = $7 AND tenant_id = $8
+       RETURNING id, tenant_id, employee_id, leave_type_id, date_from::text, date_to::text, minutes_per_day, note`,
+      [employeeId, leaveTypeId, dateFrom, dateTo, minutesPerDay, note, leaveId, req.tenantId]
+    );
+
+    return res.json({ leave: updated.rows[0] });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ message: error.message });
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+app.delete('/api/leaves/:id', requireAuth, requireTenantContext, async (req, res) => {
+  const leaveId = Number(req.params.id);
+  if (!Number.isInteger(leaveId)) {
+    return res.status(400).json({ message: 'Невалиден leave id.' });
+  }
+
+  try {
+    const actor = await requireTenantManagerRole(req, res);
+    if (!actor) return;
+
+    const existing = await pool.query(`SELECT id, date_from::text, date_to::text FROM employee_leaves WHERE id = $1 AND tenant_id = $2`, [leaveId, req.tenantId]);
+    if (!existing.rowCount) {
+      return res.status(404).json({ message: 'Отсъствието не е намерено.' });
+    }
+
+    await assertLeavesUnlocked(req.tenantId, existing.rows[0].date_from, existing.rows[0].date_to);
+
+    await pool.query(`DELETE FROM employee_leaves WHERE id = $1 AND tenant_id = $2`, [leaveId, req.tenantId]);
+    return res.json({ ok: true });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ message: error.message });
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+
 app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (req, res) => {
   const scheduleId = req.params.id;
   const period = cleanStr(req.query?.period || 'month').toLowerCase();
@@ -3611,7 +4014,33 @@ app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (r
       [scheduleId]
     );
 
-    const totals = sumMonth.rows[0];
+    const monthBounds = getMonthBounds(schedule.month_key);
+    const monthLeaves = await pool.query(
+      `SELECT el.employee_id, el.date_from::text AS date_from, el.date_to::text AS date_to,
+              el.minutes_per_day, lt.code, lt.name, lt.affects_norm
+       FROM employee_leaves el
+       JOIN leave_types lt ON lt.id = el.leave_type_id
+       WHERE el.tenant_id = $1
+         AND daterange(el.date_from, el.date_to, '[]') && daterange($2::date, $3::date, '[]')`,
+      [req.tenantId, monthBounds.monthStart, monthBounds.monthEnd]
+    );
+    const leaveDaysByType = {};
+    let leaveMinutesTotal = 0;
+    for (const leave of monthLeaves.rows) {
+      const days = enumerateLeaveDates(
+        leave.date_from < monthBounds.monthStart ? monthBounds.monthStart : leave.date_from,
+        leave.date_to > monthBounds.monthEnd ? monthBounds.monthEnd : leave.date_to
+      );
+      leaveDaysByType[leave.code] = (leaveDaysByType[leave.code] || 0) + days.length;
+      leaveMinutesTotal += computeLeaveMinutesForRange({ ...leave, date_from: days[0], date_to: days[days.length - 1] }, 480);
+    }
+
+    const totals = {
+      ...sumMonth.rows[0],
+      leave_days_by_type: leaveDaysByType,
+      leave_minutes_total: leaveMinutesTotal,
+    };
+
     if (period === 'month' || !schedule.sirv_enabled) {
       return res.json({ ok: true, period: 'month', totals, overtime_mode: 'daily' });
     }
@@ -3632,10 +4061,21 @@ app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (r
       )
       : { rows: [{ worked: 0 }] };
 
+    const periodLeavesResult = await pool.query(
+      `SELECT el.date_from::text AS date_from, el.date_to::text AS date_to, el.minutes_per_day,
+              lt.affects_norm
+       FROM employee_leaves el
+       JOIN leave_types lt ON lt.id = el.leave_type_id
+       WHERE el.tenant_id = $1
+         AND daterange(el.date_from, el.date_to, '[]') && daterange($2::date, $3::date, '[]')`,
+      [req.tenantId, bounds.periodStart, bounds.periodEnd]
+    );
+
     const holidayResolver = await buildHolidayResolver();
     const businessDays = countBusinessDays(bounds.periodStart, bounds.periodEnd, holidayResolver);
     const periodNorm = businessDays * 480;
-    const overtimePeriod = Math.max(0, Number(periodWorkedResult.rows[0].worked || 0) - periodNorm);
+    const adjustedNorm = computeAdjustedNormMinutes(periodNorm, periodLeavesResult.rows, 480);
+    const overtimePeriod = Math.max(0, Number(periodWorkedResult.rows[0].worked || 0) - adjustedNorm);
 
     return res.json({
       ok: true,
@@ -3644,6 +4084,7 @@ app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (r
       period_end: bounds.periodEnd,
       totals: {
         ...totals,
+        adjusted_norm_minutes: adjustedNorm,
         overtime_estimated: schedule.status === 'locked' ? undefined : overtimePeriod,
         overtime_final: schedule.status === 'locked' ? overtimePeriod : undefined,
       },
