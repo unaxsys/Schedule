@@ -24,6 +24,7 @@ const {
   buildDuplicateKey,
   buildImportPreview,
 } = require('./shift_import');
+const { validateShiftTemplatePayload } = require('./shift_templates_utils');
 const {
   DEFAULT_WEEKEND_RATE,
   DEFAULT_HOLIDAY_RATE,
@@ -2302,11 +2303,14 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
        FROM employees e
        LEFT JOIN departments d ON d.id = e.department_id
        WHERE e.tenant_id = $1
-         AND ($2::text IS NULL OR COALESCE(d.name, e.department) = $2)
-         AND e.start_date <= $4::date
-         AND (e.end_date IS NULL OR e.end_date >= $3::date)
+         AND (
+           ($2::uuid IS NOT NULL AND e.department_id = $2::uuid)
+           OR ($2::uuid IS NULL AND ($3::text IS NULL OR COALESCE(d.name, e.department) = $3::text))
+         )
+         AND e.start_date <= $5::date
+         AND (e.end_date IS NULL OR e.end_date >= $4::date)
        ORDER BY e.name`,
-      [req.tenantId, schedule.department, bounds.monthStart, bounds.monthEnd]
+      [req.tenantId, schedule.department_id || null, schedule.department || null, bounds.monthStart, bounds.monthEnd]
     );
 
     const hasWorkMinutes = await tableHasColumn('schedule_entries', 'work_minutes');
@@ -2538,9 +2542,16 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       ? { rows: [] }
       : await pool.query(`${shiftTemplatesSelect} ${shiftScope.whereSql}`, shiftScope.values);
 
+    const shiftTemplatesForCalc = snapshot
+      ? []
+      : shiftTemplatesForCalcResult.rows.map((row) => ({
+        ...row,
+        code: normalizeShiftCode(row.code),
+      }));
+
     const selectedShiftForSnapshot = snapshot
       ? null
-      : (appendSystemShiftTemplates(shiftTemplatesForCalcResult.rows).find((row) => {
+      : (shiftTemplatesForCalc.find((row) => {
         if (resolvedShiftId) {
           return String(row.id) === String(resolvedShiftId);
         }
@@ -2597,7 +2608,9 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       let prevShiftEndAt = null;
       if (prevEntryResult.rowCount) {
         const prevCode = normalizeShiftCode(prevEntryResult.rows[0].shift_code);
-        const prevShift = appendSystemShiftTemplates(shiftTemplatesForCalcResult.rows).find((row) => normalizeShiftCode(row.code) === prevCode);
+        const prevShiftId = cleanStr(prevEntryResult.rows[0].shift_id);
+        const prevShift = shiftTemplatesForCalc.find((row) => prevShiftId && String(row.id) === String(prevShiftId))
+          || shiftTemplatesForCalc.find((row) => normalizeShiftCode(row.code) === prevCode);
         if (prevShift) {
           const prevEnd = String(prevShift.end_time || prevShift.end || '00:00');
           const [h, m] = prevEnd.split(':').map(Number);
@@ -2605,6 +2618,12 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         }
       }
       validation = validateScheduleEntry({ prevShiftEndAt, shift: selectedShiftForSnapshot });
+      if (validation.errors.includes('insufficient_interdaily_rest')) {
+        return res.status(400).json({
+          message: 'Невалидна смяна: трябва да има минимум 12 часа междудневна почивка след предходната смяна.',
+          validation,
+        });
+      }
     }
 
     const isManual = Boolean(req.body?.is_manual ?? req.body?.isManual ?? false);
@@ -3103,11 +3122,87 @@ app.post('/api/schedules/:id/generate', requireAuth, requireTenantContext, async
 });
 
 
+app.post('/api/departments/:departmentId/shifts', requireAuth, requireTenantContext, async (req, res) => {
+  const validation = validateShiftTemplatePayload(req.body || {});
+  if (!validation.ok) {
+    return res.status(400).json({ message: validation.message });
+  }
+
+  const code = cleanStr(req.body?.code).toUpperCase();
+  if (!code) {
+    return res.status(400).json({ message: 'Невалиден код за смяна.' });
+  }
+
+  try {
+    const departmentId = await resolveTenantDepartmentOrThrow({
+      departmentId: req.params.departmentId,
+      tenantId: req.tenantId,
+    });
+
+    const hasTenantId = await hasShiftTemplatesTenantId();
+    const hasDepartmentId = await hasShiftTemplatesDepartmentId();
+    if (!hasDepartmentId) {
+      return res.status(501).json({ message: 'Липсва колона department_id в shift_templates.' });
+    }
+
+    const { name, startTime, endTime, breakMinutes, breakIncluded, hours } = validation.value;
+
+    if (hasTenantId) {
+      await pool.query(
+        `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, break_minutes, break_included, hours)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (tenant_id, department_id, code) WHERE department_id IS NOT NULL
+         DO UPDATE SET
+           name = EXCLUDED.name,
+           start_time = EXCLUDED.start_time,
+           end_time = EXCLUDED.end_time,
+           break_minutes = EXCLUDED.break_minutes,
+           break_included = EXCLUDED.break_included,
+           hours = EXCLUDED.hours`,
+        [req.tenantId, departmentId, code, name, startTime, endTime, breakMinutes, breakIncluded, hours]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO shift_templates (department_id, code, name, start_time, end_time, break_minutes, break_included, hours)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (department_id, code) WHERE department_id IS NOT NULL
+         DO UPDATE SET
+           name = EXCLUDED.name,
+           start_time = EXCLUDED.start_time,
+           end_time = EXCLUDED.end_time,
+           break_minutes = EXCLUDED.break_minutes,
+           break_included = EXCLUDED.break_included,
+           hours = EXCLUDED.hours`,
+        [departmentId, code, name, startTime, endTime, breakMinutes, breakIncluded, hours]
+      );
+    }
+
+    return res.json({
+      ok: true,
+      shift: {
+        code,
+        name,
+        department_id: departmentId,
+        start_time: startTime,
+        end_time: endTime,
+        break_minutes: breakMinutes,
+        break_included: breakIncluded,
+        hours,
+      },
+    });
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
+    return res.status(500).json({ message: error.message });
+  }
+});
+
 app.get('/api/departments/:departmentId/shifts', requireAuth, requireTenantContext, async (req, res) => {
   try {
     const hasDepartmentId = await hasShiftTemplatesDepartmentId();
     if (!hasDepartmentId) {
-      return res.json([]);
+      return res.json({ shifts: [] });
     }
 
     const departmentId = await resolveTenantDepartmentOrThrow({
@@ -3133,7 +3228,7 @@ app.get('/api/departments/:departmentId/shifts', requireAuth, requireTenantConte
     `;
     const values = hasTenantId ? [departmentId, req.tenantId] : [departmentId];
     const result = await pool.query(queryText, values);
-    return res.json(result.rows);
+    return res.json({ shifts: result.rows });
   } catch (error) {
     if (error.status) {
       return res.status(error.status).json({ message: error.message });
