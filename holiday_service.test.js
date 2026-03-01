@@ -58,8 +58,15 @@ test('seed includes observed day when official holiday falls on weekend', () => 
   const observed = rows.find((row) => row.date === '2026-09-07');
 
   assert.ok(observed);
-  assert.equal(observed.name, 'Съединението (компенсация)');
+  assert.equal(observed.name, 'Съединението (компенсация по КТ)');
   assert.equal(observed.source, 'BG official (observed)');
+});
+
+test('seed does not add compensatory day for easter weekend dates', () => {
+  const rows = getBgHolidaySeedRows(2026);
+  const easterObserved = rows.find((row) => row.name.includes('Великден') && row.source === 'BG official (observed)');
+
+  assert.equal(easterObserved, undefined);
 });
 
 test('seed observed days avoid duplicates and weekends', () => {
