@@ -26,6 +26,46 @@ function toISODate(date) {
   return date.toISOString().slice(0, 10);
 }
 
+function isWeekendDate(date) {
+  const day = date.getUTCDay();
+  return day === 0 || day === 6;
+}
+
+function buildObservedNonWorkingDays(rows) {
+  const occupiedDates = new Set(rows.map((row) => row.date));
+  const observedRows = [];
+  const weekendRows = rows
+    .filter((row) => {
+      const date = new Date(`${row.date}T00:00:00.000Z`);
+      return !Number.isNaN(date.valueOf()) && isWeekendDate(date);
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  for (const weekendHoliday of weekendRows) {
+    const cursor = new Date(`${weekendHoliday.date}T00:00:00.000Z`);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+
+    while (true) {
+      const candidate = toISODate(cursor);
+      const isBusy = occupiedDates.has(candidate);
+      const isWeekend = isWeekendDate(cursor);
+      if (!isBusy && !isWeekend) {
+        occupiedDates.add(candidate);
+        observedRows.push({
+          date: candidate,
+          name: `${weekendHoliday.name} (компенсация)`,
+          is_official: true,
+          source: 'BG official (observed)'
+        });
+        break;
+      }
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+  }
+
+  return observedRows;
+}
+
 function getBgHolidaySeedRows(year) {
   const fixed = [
     ['01-01', 'Нова година'],
@@ -46,6 +86,8 @@ function getBgHolidaySeedRows(year) {
   rows.push({ date: toISODate(addDays(easter, -1)), name: 'Велика събота', is_official: true, source: 'BG official' });
   rows.push({ date: toISODate(easter), name: 'Великден', is_official: true, source: 'BG official' });
   rows.push({ date: toISODate(addDays(easter, 1)), name: 'Великден', is_official: true, source: 'BG official' });
+
+  rows.push(...buildObservedNonWorkingDays(rows));
 
   return Array.from(new Map(rows.map((row) => [row.date, row])).values()).sort((a, b) => a.date.localeCompare(b.date));
 }
