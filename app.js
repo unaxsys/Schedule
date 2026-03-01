@@ -4327,9 +4327,13 @@ function renderSchedule() {
     return selectedSet.has(cleanStoredValue(employee.departmentId));
   });
 
-  const grouped = window.ScheduleGrouping?.groupEmployeesByDepartment
-    ? window.ScheduleGrouping.groupEmployeesByDepartment({ employees: visibleEmployees, departments: state.departments })
-    : { order: ['all'], map: { all: { deptId: 'all', deptName: 'Всички отдели', employees: visibleEmployees } } };
+  const shouldGroupByDepartments = state.selectedDepartmentId === DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS
+    || ![DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId);
+  const grouped = shouldGroupByDepartments
+    ? (window.ScheduleGrouping?.groupEmployeesByDepartment
+      ? window.ScheduleGrouping.groupEmployeesByDepartment({ employees: visibleEmployees, departments: state.departments })
+      : { order: ['all'], map: { all: { deptId: 'all', deptName: 'Всички отдели', employees: visibleEmployees } } })
+    : { order: ['all'], map: { all: { deptId: 'all', deptName: 'Всички служители', employees: visibleEmployees } } };
 
   const header = document.createElement('tr');
   header.innerHTML = '<th class="sticky">Служител / Отдел / Длъжност</th>';
@@ -4379,13 +4383,15 @@ function renderSchedule() {
     const group = grouped.map[deptId] || { deptName: 'Без отдел', employees: [] };
     const groupEmployees = Array.isArray(group.employees) ? group.employees : [];
 
-    const sectionRow = document.createElement('tr');
-    sectionRow.className = 'schedule-department-header-row';
-    const sectionCell = document.createElement('td');
-    sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length + 5;
-    sectionCell.innerHTML = `<b>${group.deptName}</b> <small>(${groupEmployees.length} служители)</small>`;
-    sectionRow.appendChild(sectionCell);
-    scheduleTable.appendChild(sectionRow);
+    if (shouldGroupByDepartments) {
+      const sectionRow = document.createElement('tr');
+      sectionRow.className = 'schedule-department-header-row';
+      const sectionCell = document.createElement('td');
+      sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length + 5;
+      sectionCell.innerHTML = `<b>${group.deptName}</b> <small>(${groupEmployees.length} служители)</small>`;
+      sectionRow.appendChild(sectionCell);
+      scheduleTable.appendChild(sectionRow);
+    }
 
     if (!groupEmployees.length) {
       const emptyRow = document.createElement('tr');
@@ -4412,25 +4418,27 @@ function renderSchedule() {
       ? window.ScheduleTotals.sumGridTotals(employeeSnapshotTotalsList)
       : sumGridTotals(employeeSnapshotTotalsList);
 
-    const deptRow = document.createElement('tr');
-    const deptLabel = document.createElement('td');
-    deptLabel.className = 'sticky';
-    deptLabel.innerHTML = `<b>Общо ${group.deptName}</b>`;
-    deptRow.appendChild(deptLabel);
-    for (let day = 1; day <= totalDays; day += 1) {
-      const filler = document.createElement('td');
-      filler.className = 'summary-col';
-      filler.textContent = mode === 'sections' ? '·' : '—';
-      deptRow.appendChild(filler);
+    if (shouldGroupByDepartments) {
+      const deptRow = document.createElement('tr');
+      const deptLabel = document.createElement('td');
+      deptLabel.className = 'sticky';
+      deptLabel.innerHTML = `<b>Общо ${group.deptName}</b>`;
+      deptRow.appendChild(deptLabel);
+      for (let day = 1; day <= totalDays; day += 1) {
+        const filler = document.createElement('td');
+        filler.className = 'summary-col';
+        filler.textContent = mode === 'sections' ? '·' : '—';
+        deptRow.appendChild(filler);
+      }
+      for (let idx = 0; idx < visibleSummaryColumns.length; idx += 1) {
+        const filler = document.createElement('td');
+        filler.className = 'summary-col';
+        filler.textContent = '—';
+        deptRow.appendChild(filler);
+      }
+      appendSnapshotTotalsColumns(deptRow, deptTotals, true);
+      scheduleTable.appendChild(deptRow);
     }
-    for (let idx = 0; idx < visibleSummaryColumns.length; idx += 1) {
-      const filler = document.createElement('td');
-      filler.className = 'summary-col';
-      filler.textContent = '—';
-      deptRow.appendChild(filler);
-    }
-    appendSnapshotTotalsColumns(deptRow, deptTotals, true);
-    scheduleTable.appendChild(deptRow);
   });
 
   if (visibleEmployees.length) {
