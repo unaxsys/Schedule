@@ -3400,9 +3400,15 @@ function renderLeavesPanel() {
   });
 
   const month = state.month || todayMonth();
-  const rows = (state.leaves || []).filter((leave) => String(leave.date_from || '').startsWith(month) || String(leave.date_to || '').startsWith(month));
+  const rows = (state.leaves || []).filter((leave) => {
+    const leaveCode = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
+    if (leaveCode === 'PAID_LEAVE') {
+      return false;
+    }
+    return String(leave.date_from || '').startsWith(month) || String(leave.date_to || '').startsWith(month);
+  });
   if (!rows.length) {
-    leaveList.innerHTML = '<small>Няма отсъствия за избрания месец.</small>';
+    leaveList.innerHTML = '<small>Няма отсъствия за избрания месец (платеният отпуск е в досието).</small>';
     return;
   }
 
@@ -6033,8 +6039,15 @@ function enumerateLeaveDays(dateFrom, dateTo) {
 
 function getLeaveBadgeLabel(leaveType) {
   const code = String(leaveType?.code || '').toUpperCase();
-  if (code === 'SICK') {
-    return 'Б';
+  const map = {
+    SICK: 'Б',
+    UNPAID: 'Н',
+    MATERNITY: 'М',
+    SELF_ABSENCE: 'С',
+    ABSENCE: 'С',
+  };
+  if (map[code]) {
+    return map[code];
   }
   return String(leaveType?.name || code || 'L').slice(0, 2).toUpperCase();
 }

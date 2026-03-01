@@ -1574,6 +1574,7 @@ async function initDatabase() {
       { code: 'PAID_LEAVE', name: 'Платен отпуск' },
       { code: 'UNPAID', name: 'Неплатен отпуск' },
       { code: 'MATERNITY', name: 'Майчинство' },
+      { code: 'SELF_ABSENCE', name: 'Самоотлъчка' },
       { code: 'OTHER', name: 'Друго' },
     ];
 
