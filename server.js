@@ -769,6 +769,23 @@ async function requireTenantManagerRole(req, res) {
   return actor;
 }
 
+async function requireTenantRoles(req, roles = []) {
+  const actor = await resolveActorTenant(req);
+  const allowedRoles = Array.isArray(roles)
+    ? roles.map((role) => cleanStr(role).toLowerCase()).filter(Boolean)
+    : [];
+
+  if (!allowedRoles.length) {
+    return actor;
+  }
+
+  if (!allowedRoles.includes(actor.role) && actor.role !== 'super_admin') {
+    throw createHttpError(403, 'Нямате права за това действие.');
+  }
+
+  return actor;
+}
+
 async function assertLeavesUnlocked(tenantId, dateFrom, dateTo) {
   const from = normalizeDateOnly(dateFrom);
   const to = normalizeDateOnly(dateTo);
