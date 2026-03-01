@@ -14,10 +14,18 @@ function createMockPool({ tenant = [], official = [] } = {}) {
         return { rows: [{ exists: true }], rowCount: 1 };
       }
       if (text.includes('FROM tenant_holidays')) {
+        if (text.includes('BETWEEN')) {
+          const rows = tenant.filter((item) => item.tenant_id === values[0] && item.date >= values[1] && item.date <= values[2]);
+          return { rows, rowCount: rows.length };
+        }
         const row = tenant.find((item) => item.tenant_id === values[0] && item.date === values[1]);
         return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
       }
       if (text.includes('FROM holidays')) {
+        if (text.includes('BETWEEN')) {
+          const rows = official.filter((item) => item.date >= values[0] && item.date <= values[1]);
+          return { rows, rowCount: rows.length };
+        }
         const row = official.find((item) => item.date === values[0]);
         return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
       }
@@ -77,4 +85,26 @@ test('seed observed days avoid duplicates and weekends', () => {
   assert.ok(newYearObserved);
   assert.ok(christmasObserved);
   assert.equal(rows.filter((row) => row.date === '2022-12-27').length, 1);
+});
+
+
+test('isHoliday falls back to Bulgarian official calendar when table has no row', async () => {
+  const pool = createMockPool({ official: [] });
+  const service = createHolidayService(pool);
+  const result = await service.isHoliday('t1', '2026-03-03');
+
+  assert.equal(result.isHoliday, true);
+  assert.equal(result.type, 'official');
+  assert.equal(result.name, 'Освобождение на България');
+});
+
+test('listCombined includes fallback official holidays for the selected range', async () => {
+  const pool = createMockPool({ official: [] });
+  const service = createHolidayService(pool);
+  const rows = await service.listCombined('t1', '2026-03-01', '2026-03-31');
+
+  const march3 = rows.find((row) => row.date === '2026-03-03');
+  assert.ok(march3);
+  assert.equal(march3.isHoliday, true);
+  assert.equal(march3.type, 'official');
 });
