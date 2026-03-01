@@ -36,6 +36,7 @@ function buildObservedNonWorkingDays(rows) {
   const observedRows = [];
   const weekendRows = rows
     .filter((row) => {
+      if (String(row.source || '').includes('(easter)')) return false;
       const date = new Date(`${row.date}T00:00:00.000Z`);
       return !Number.isNaN(date.valueOf()) && isWeekendDate(date);
     })
@@ -53,7 +54,7 @@ function buildObservedNonWorkingDays(rows) {
         occupiedDates.add(candidate);
         observedRows.push({
           date: candidate,
-          name: `${weekendHoliday.name} (компенсация)`,
+          name: `${weekendHoliday.name} (компенсация по КТ)`,
           is_official: true,
           source: 'BG official (observed)'
         });
@@ -82,14 +83,32 @@ function getBgHolidaySeedRows(year) {
 
   const rows = fixed.map(([mmdd, name]) => ({ date: `${year}-${mmdd}`, name, is_official: true, source: 'BG official' }));
   const easter = orthodoxEasterDate(year);
-  rows.push({ date: toISODate(addDays(easter, -2)), name: 'Велики петък', is_official: true, source: 'BG official' });
-  rows.push({ date: toISODate(addDays(easter, -1)), name: 'Велика събота', is_official: true, source: 'BG official' });
-  rows.push({ date: toISODate(easter), name: 'Великден', is_official: true, source: 'BG official' });
-  rows.push({ date: toISODate(addDays(easter, 1)), name: 'Великден', is_official: true, source: 'BG official' });
+  rows.push({ date: toISODate(addDays(easter, -2)), name: 'Велики петък', is_official: true, source: 'BG official (easter)' });
+  rows.push({ date: toISODate(addDays(easter, -1)), name: 'Велика събота', is_official: true, source: 'BG official (easter)' });
+  rows.push({ date: toISODate(easter), name: 'Великден', is_official: true, source: 'BG official (easter)' });
+  rows.push({ date: toISODate(addDays(easter, 1)), name: 'Великден', is_official: true, source: 'BG official (easter)' });
 
   rows.push(...buildObservedNonWorkingDays(rows));
 
   return Array.from(new Map(rows.map((row) => [row.date, row])).values()).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+
+function getBgOfficialHolidayMapForRange(fromISO, toISO) {
+  const fromYear = Number(String(fromISO).slice(0, 4));
+  const toYear = Number(String(toISO).slice(0, 4));
+  if (!Number.isInteger(fromYear) || !Number.isInteger(toYear)) return new Map();
+
+  const byDate = new Map();
+  for (let year = fromYear; year <= toYear; year += 1) {
+    const rows = getBgHolidaySeedRows(year);
+    for (const row of rows) {
+      if (row.date >= fromISO && row.date <= toISO) {
+        byDate.set(row.date, row);
+      }
+    }
+  }
+  return byDate;
 }
 
 function createHolidayService(pool) {
@@ -139,10 +158,13 @@ function createHolidayService(pool) {
     }
 
     const table = await publicTableName();
-    if (!table) return { isHoliday: false, type: 'none' };
+    if (table) {
+      const officialRes = await pool.query(`SELECT name FROM ${table} WHERE date = $1::date LIMIT 1`, [date]);
+      if (officialRes.rowCount) return { isHoliday: true, name: officialRes.rows[0].name, type: 'official' };
+    }
 
-    const officialRes = await pool.query(`SELECT name FROM ${table} WHERE date = $1::date LIMIT 1`, [date]);
-    if (officialRes.rowCount) return { isHoliday: true, name: officialRes.rows[0].name, type: 'official' };
+    const fallback = getBgOfficialHolidayMapForRange(date, date).get(date);
+    if (fallback) return { isHoliday: true, name: fallback.name, type: 'official' };
     return { isHoliday: false, type: 'none' };
   }
 
@@ -152,6 +174,11 @@ function createHolidayService(pool) {
     if (!from || !to || from > to) return [];
 
     const byDate = new Map();
+    const fallbackOfficial = getBgOfficialHolidayMapForRange(from, to);
+    for (const [date, row] of fallbackOfficial.entries()) {
+      byDate.set(date, { date, name: row.name, type: 'official', isHoliday: true });
+    }
+
     const table = await publicTableName();
     if (table) {
       const officialRows = await pool.query(`SELECT date::text AS date, name FROM ${table} WHERE date BETWEEN $1::date AND $2::date ORDER BY date`, [from, to]);
