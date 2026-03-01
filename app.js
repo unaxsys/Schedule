@@ -3400,9 +3400,15 @@ function renderLeavesPanel() {
   });
 
   const month = state.month || todayMonth();
-  const rows = (state.leaves || []).filter((leave) => String(leave.date_from || '').startsWith(month) || String(leave.date_to || '').startsWith(month));
+  const rows = (state.leaves || []).filter((leave) => {
+    const leaveCode = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
+    if (leaveCode === 'PAID_LEAVE') {
+      return false;
+    }
+    return String(leave.date_from || '').startsWith(month) || String(leave.date_to || '').startsWith(month);
+  });
   if (!rows.length) {
-    leaveList.innerHTML = '<small>Няма отсъствия за избрания месец.</small>';
+    leaveList.innerHTML = '<small>Няма отсъствия за избрания месец (платеният отпуск е в досието).</small>';
     return;
   }
 
@@ -3427,6 +3433,49 @@ function renderLeavesPanel() {
       }
     });
   });
+}
+
+function isPaidLeaveType(leaveType) {
+  return String(leaveType?.code || '').toUpperCase() === 'PAID_LEAVE';
+}
+
+function getPaidLeaveType() {
+  return (state.leaveTypes || []).find((type) => isPaidLeaveType(type)) || null;
+}
+
+async function ensurePaidLeaveForScheduleCell(employee, monthKey, day) {
+  const paidLeaveType = getPaidLeaveType();
+  if (!paidLeaveType) {
+    return { created: false, skipped: true };
+  }
+
+  const dateKey = `${monthKey}-${String(day).padStart(2, '0')}`;
+  if (getLeaveForCell(employee.id, monthKey, day)) {
+    return { created: false, skipped: true };
+  }
+
+  const response = await apiFetch('/api/leaves', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      employee_id: employee.id,
+      leave_type_id: Number(paidLeaveType.id),
+      date_from: dateKey,
+      date_to: dateKey,
+      minutes_per_day: null,
+    }),
+  });
+
+  if (response.ok) {
+    return { created: true, skipped: false };
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  if (response.status === 409) {
+    return { created: false, skipped: true };
+  }
+
+  throw new Error(payload.message || 'Неуспешно добавяне на платен отпуск от графика.');
 }
 
 function attachLeavesControls() {
@@ -3457,6 +3506,15 @@ function attachLeavesControls() {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.message || 'Неуспешно добавяне на отсъствие');
       }
+
+      const selectedLeaveType = (state.leaveTypes || []).find((type) => String(type.id) === String(leaveTypeSelect.value));
+      if (isPaidLeaveType(selectedLeaveType)) {
+        const employee = state.employees.find((entry) => entry.id === String(leaveEmployeeSelect.value));
+        if (employee) {
+          await setVacationShiftForDateRange(employee, body.date_from, body.date_to, 'O', { ensureSchedule: true });
+        }
+      }
+
       await refreshMonthlyView();
       renderAll();
       setStatus('Отсъствието е добавено.', true);
@@ -3919,16 +3977,25 @@ async function setVacationShiftForDateRange(employee, startDateKey, endDateKey, 
 async function setShiftForCell({ employee, day, month, shiftCode }) {
   const monthKey = month || state.month || todayMonth();
   const localKey = scheduleKey(employee.id, monthKey, day);
+  const previousShiftCode = String(state.schedule[localKey] || 'P').toUpperCase();
   state.schedule[localKey] = shiftCode;
   saveScheduleLocal();
 
   const scheduleId = getEmployeeScheduleId(employee);
-  if (!scheduleId) {
+  if (scheduleId) {
+    state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = shiftCode;
+    await saveScheduleEntryBackend({ ...employee, scheduleId }, day, shiftCode, { monthKey, scheduleId });
+  }
+
+  if (String(shiftCode || '').toUpperCase() !== 'O' || previousShiftCode === 'O') {
     return;
   }
 
-  state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = shiftCode;
-  await saveScheduleEntryBackend({ ...employee, scheduleId }, day, shiftCode, { monthKey, scheduleId });
+  const leaveSync = await ensurePaidLeaveForScheduleCell(employee, monthKey, day);
+  if (leaveSync.created) {
+    await refreshMonthlyView();
+    setStatus('Смяната "О" е синхронизирана с таб Отпуски.', true);
+  }
 }
 
 async function correctVacationPeriod(employee, oldStartDateKey, oldEndDateKey, newStartDateKey, newWorkingDays) {
@@ -4327,9 +4394,13 @@ function renderSchedule() {
     return selectedSet.has(cleanStoredValue(employee.departmentId));
   });
 
-  const grouped = window.ScheduleGrouping?.groupEmployeesByDepartment
-    ? window.ScheduleGrouping.groupEmployeesByDepartment({ employees: visibleEmployees, departments: state.departments })
-    : { order: ['all'], map: { all: { deptId: 'all', deptName: 'Всички отдели', employees: visibleEmployees } } };
+  const shouldGroupByDepartments = state.selectedDepartmentId === DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS
+    || ![DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId);
+  const grouped = shouldGroupByDepartments
+    ? (window.ScheduleGrouping?.groupEmployeesByDepartment
+      ? window.ScheduleGrouping.groupEmployeesByDepartment({ employees: visibleEmployees, departments: state.departments })
+      : { order: ['all'], map: { all: { deptId: 'all', deptName: 'Всички отдели', employees: visibleEmployees } } })
+    : { order: ['all'], map: { all: { deptId: 'all', deptName: 'Всички служители', employees: visibleEmployees } } };
 
   const header = document.createElement('tr');
   header.innerHTML = '<th class="sticky">Служител / Отдел / Длъжност</th>';
@@ -4379,13 +4450,15 @@ function renderSchedule() {
     const group = grouped.map[deptId] || { deptName: 'Без отдел', employees: [] };
     const groupEmployees = Array.isArray(group.employees) ? group.employees : [];
 
-    const sectionRow = document.createElement('tr');
-    sectionRow.className = 'schedule-department-header-row';
-    const sectionCell = document.createElement('td');
-    sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length + 5;
-    sectionCell.innerHTML = `<b>${group.deptName}</b> <small>(${groupEmployees.length} служители)</small>`;
-    sectionRow.appendChild(sectionCell);
-    scheduleTable.appendChild(sectionRow);
+    if (shouldGroupByDepartments) {
+      const sectionRow = document.createElement('tr');
+      sectionRow.className = 'schedule-department-header-row';
+      const sectionCell = document.createElement('td');
+      sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length + 5;
+      sectionCell.innerHTML = `<b>${group.deptName}</b> <small>(${groupEmployees.length} служители)</small>`;
+      sectionRow.appendChild(sectionCell);
+      scheduleTable.appendChild(sectionRow);
+    }
 
     if (!groupEmployees.length) {
       const emptyRow = document.createElement('tr');
@@ -4412,25 +4485,27 @@ function renderSchedule() {
       ? window.ScheduleTotals.sumGridTotals(employeeSnapshotTotalsList)
       : sumGridTotals(employeeSnapshotTotalsList);
 
-    const deptRow = document.createElement('tr');
-    const deptLabel = document.createElement('td');
-    deptLabel.className = 'sticky';
-    deptLabel.innerHTML = `<b>Общо ${group.deptName}</b>`;
-    deptRow.appendChild(deptLabel);
-    for (let day = 1; day <= totalDays; day += 1) {
-      const filler = document.createElement('td');
-      filler.className = 'summary-col';
-      filler.textContent = mode === 'sections' ? '·' : '—';
-      deptRow.appendChild(filler);
+    if (shouldGroupByDepartments) {
+      const deptRow = document.createElement('tr');
+      const deptLabel = document.createElement('td');
+      deptLabel.className = 'sticky';
+      deptLabel.innerHTML = `<b>Общо ${group.deptName}</b>`;
+      deptRow.appendChild(deptLabel);
+      for (let day = 1; day <= totalDays; day += 1) {
+        const filler = document.createElement('td');
+        filler.className = 'summary-col';
+        filler.textContent = mode === 'sections' ? '·' : '—';
+        deptRow.appendChild(filler);
+      }
+      for (let idx = 0; idx < visibleSummaryColumns.length; idx += 1) {
+        const filler = document.createElement('td');
+        filler.className = 'summary-col';
+        filler.textContent = '—';
+        deptRow.appendChild(filler);
+      }
+      appendSnapshotTotalsColumns(deptRow, deptTotals, true);
+      scheduleTable.appendChild(deptRow);
     }
-    for (let idx = 0; idx < visibleSummaryColumns.length; idx += 1) {
-      const filler = document.createElement('td');
-      filler.className = 'summary-col';
-      filler.textContent = '—';
-      deptRow.appendChild(filler);
-    }
-    appendSnapshotTotalsColumns(deptRow, deptTotals, true);
-    scheduleTable.appendChild(deptRow);
   });
 
   if (visibleEmployees.length) {
@@ -5964,8 +6039,15 @@ function enumerateLeaveDays(dateFrom, dateTo) {
 
 function getLeaveBadgeLabel(leaveType) {
   const code = String(leaveType?.code || '').toUpperCase();
-  if (code === 'SICK') {
-    return 'Б';
+  const map = {
+    SICK: 'Б',
+    UNPAID: 'Н',
+    MATERNITY: 'М',
+    SELF_ABSENCE: 'С',
+    ABSENCE: 'С',
+  };
+  if (map[code]) {
+    return map[code];
   }
   return String(leaveType?.name || code || 'L').slice(0, 2).toUpperCase();
 }
