@@ -36,6 +36,7 @@ function buildObservedNonWorkingDays(rows) {
   const observedRows = [];
   const weekendRows = rows
     .filter((row) => {
+      if (String(row.source || '').includes('(easter)')) return false;
       const date = new Date(`${row.date}T00:00:00.000Z`);
       return !Number.isNaN(date.valueOf()) && isWeekendDate(date);
     })
@@ -53,7 +54,7 @@ function buildObservedNonWorkingDays(rows) {
         occupiedDates.add(candidate);
         observedRows.push({
           date: candidate,
-          name: `${weekendHoliday.name} (компенсация)`,
+          name: `${weekendHoliday.name} (компенсация по КТ)`,
           is_official: true,
           source: 'BG official (observed)'
         });
@@ -82,10 +83,10 @@ function getBgHolidaySeedRows(year) {
 
   const rows = fixed.map(([mmdd, name]) => ({ date: `${year}-${mmdd}`, name, is_official: true, source: 'BG official' }));
   const easter = orthodoxEasterDate(year);
-  rows.push({ date: toISODate(addDays(easter, -2)), name: 'Велики петък', is_official: true, source: 'BG official' });
-  rows.push({ date: toISODate(addDays(easter, -1)), name: 'Велика събота', is_official: true, source: 'BG official' });
-  rows.push({ date: toISODate(easter), name: 'Великден', is_official: true, source: 'BG official' });
-  rows.push({ date: toISODate(addDays(easter, 1)), name: 'Великден', is_official: true, source: 'BG official' });
+  rows.push({ date: toISODate(addDays(easter, -2)), name: 'Велики петък', is_official: true, source: 'BG official (easter)' });
+  rows.push({ date: toISODate(addDays(easter, -1)), name: 'Велика събота', is_official: true, source: 'BG official (easter)' });
+  rows.push({ date: toISODate(easter), name: 'Великден', is_official: true, source: 'BG official (easter)' });
+  rows.push({ date: toISODate(addDays(easter, 1)), name: 'Великден', is_official: true, source: 'BG official (easter)' });
 
   rows.push(...buildObservedNonWorkingDays(rows));
 
