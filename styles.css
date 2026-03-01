@@ -240,6 +240,12 @@ header p {
 .schedule-controls-row label {
   font-weight: 600;
 }
+
+#scheduleFilterDepartmentSelect,
+#scheduleDepartmentSelect {
+  min-width: 220px;
+}
+
 .lock-status {
   font-weight: 700;
 }
@@ -1432,6 +1438,12 @@ html.welcome-lock, html.welcome-lock body { height: 100%; overflow: hidden; }
   }
 }
 
+
+.vacation-leave-panel {
+  margin-bottom: 0.9rem;
+  box-shadow: none;
+  border: 1px solid #dbeafe;
+}
 
 .vacation-filters-row {
   margin-top: 10px;

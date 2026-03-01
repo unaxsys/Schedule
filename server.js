@@ -1574,6 +1574,7 @@ async function initDatabase() {
       { code: 'PAID_LEAVE', name: 'Платен отпуск' },
       { code: 'UNPAID', name: 'Неплатен отпуск' },
       { code: 'MATERNITY', name: 'Майчинство' },
+      { code: 'SELF_ABSENCE', name: 'Самоотлъчка' },
       { code: 'OTHER', name: 'Друго' },
     ];
 
@@ -3097,6 +3098,46 @@ app.post('/api/schedules/:id/generate', requireAuth, requireTenantContext, async
 
     return res.json({ generatedCount, skippedCount, warnings, errors });
   } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+
+app.get('/api/departments/:departmentId/shifts', requireAuth, requireTenantContext, async (req, res) => {
+  try {
+    const hasDepartmentId = await hasShiftTemplatesDepartmentId();
+    if (!hasDepartmentId) {
+      return res.json([]);
+    }
+
+    const departmentId = await resolveTenantDepartmentOrThrow({
+      departmentId: req.params.departmentId,
+      tenantId: req.tenantId,
+    });
+
+    const hasTenantId = await hasShiftTemplatesTenantId();
+    const queryText = `
+      SELECT
+        id,
+        code,
+        name,
+        start_time,
+        end_time,
+        COALESCE(break_minutes, 0) AS break_minutes,
+        COALESCE(break_included, FALSE) AS break_included,
+        hours
+      FROM shift_templates
+      WHERE department_id = $1
+      ${hasTenantId ? 'AND tenant_id = $2' : ''}
+      ORDER BY code ASC
+    `;
+    const values = hasTenantId ? [departmentId, req.tenantId] : [departmentId];
+    const result = await pool.query(queryText, values);
+    return res.json(result.rows);
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
     return res.status(500).json({ message: error.message });
   }
 });
