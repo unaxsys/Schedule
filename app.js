@@ -88,7 +88,8 @@ const state = {
   lastConnectionErrorSignature: '',
   leaveTypes: [],
   leaves: [],
-  leavesByEmployeeDay: {}
+  leavesByEmployeeDay: {},
+  holidaysByMonthCache: {}
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -4279,6 +4280,9 @@ async function loadHolidayRangeForMonth(monthKey) {
   if (!bounds) {
     return;
   }
+  if (!state.holidaysByMonthCache || typeof state.holidaysByMonthCache !== 'object') {
+    state.holidaysByMonthCache = {};
+  }
   if (state.holidaysByMonthCache[monthKey]) {
     return;
   }
@@ -4294,6 +4298,9 @@ async function loadHolidayRangeForMonth(monthKey) {
 
 function getHolidayMeta(dateISO) {
   const monthKey = String(dateISO || '').slice(0, 7);
+  if (!state.holidaysByMonthCache || typeof state.holidaysByMonthCache !== 'object') {
+    return null;
+  }
   const map = state.holidaysByMonthCache[monthKey];
   if (!map) {
     return null;
