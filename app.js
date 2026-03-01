@@ -48,6 +48,7 @@ const state = {
   scheduleEntrySnapshotsById: {},
   scheduleEntryValidationsById: {},
   scheduleShiftTemplatesById: {},
+  departmentShiftsCache: {},
   schedules: [],
   selectedScheduleIds: [],
   activeScheduleId: null,
@@ -914,6 +915,7 @@ function resetTenantScopedState({ clearLocalStorage = false } = {}) {
   state.scheduleEntriesById = {};
   state.scheduleEntrySnapshotsById = {};
   state.scheduleEntryValidationsById = {};
+  state.departmentShiftsCache = {};
   state.schedules = [];
   state.selectedScheduleIds = [];
   state.activeScheduleId = null;
