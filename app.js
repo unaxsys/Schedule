@@ -6096,19 +6096,14 @@ function saveShiftTemplates() {
 }
 
 function mergeShiftTemplates(backendShiftTemplates) {
-  // FIX: normalize break minutes (supports break_minutes and breakMinutes)
-  function __getBreakMinutes(obj) {
+  function getBreakMinutes(obj) {
     const v = obj && (obj.break_minutes ?? obj.breakMinutes ?? 0);
     const n = Number(v);
     return Number.isFinite(n) ? n : 0;
   }
 
-
-  // FIX: normalize break minutes (supports break_minutes and breakMinutes)
-  function __getBreakMinutes(obj) {
-    const v = obj && (obj.break_minutes ?? obj.breakMinutes ?? 0);
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
+  function getBreakIncluded(obj) {
+    return Boolean(obj && (obj.break_included ?? obj.breakIncluded));
   }
 
 
@@ -6134,8 +6129,8 @@ function mergeShiftTemplates(backendShiftTemplates) {
       end: String(shift.end || ''),
       hours: getStoredShiftHours(shift),
       locked: false,
-      break_minutes: breakMinutes,
-      break_included: breakIncluded
+      break_minutes: getBreakMinutes(shift),
+      break_included: getBreakIncluded(shift)
     });
   });
 
