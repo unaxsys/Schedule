@@ -98,10 +98,7 @@ const DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS = 'all_by_departments';
 const API_FALLBACK_COOLDOWN_MS = 60 * 1000;
 const apiFallbackBlockedUntilByBase = new Map();
 
-const departmentShiftsCache = new Map();
-const departmentShiftsInFlight = new Map();
-const DEPARTMENT_SHIFTS_CACHE_TTL_MS = 60 * 1000;
-let lastLoadedDepartmentShiftsId = null;
+const departmentShiftsCache = Object.create(null);
 
 const monthPicker = document.getElementById('monthPicker');
 const generateBtn = document.getElementById('generateBtn');
@@ -1281,16 +1278,7 @@ function getSelectedDepartmentIdsSet() {
 }
 
 function setSelectedDepartments(nextIds) {
-  const normalizedIds = Array.from(new Set((nextIds || []).map((item) => cleanStoredValue(item)).filter(Boolean)));
-  const previousSingleDepartmentFilter = getEffectiveSingleDepartmentFilter();
-
-  state.selectedDepartmentIds = normalizedIds;
-
-  const nextSingleDepartmentFilter = getEffectiveSingleDepartmentFilter();
-  if (previousSingleDepartmentFilter !== nextSingleDepartmentFilter) {
-    lastLoadedDepartmentShiftsId = null;
-  }
-
+  state.selectedDepartmentIds = Array.from(new Set((nextIds || []).map((item) => cleanStoredValue(item)).filter(Boolean)));
   persistScheduleReviewPreferences();
   renderDepartmentMultiSelect();
   renderSchedule();
@@ -1371,14 +1359,9 @@ function renderDepartmentMultiSelect() {
 function attachDepartmentControls() {
   if (scheduleFilterDepartmentSelect) {
     scheduleFilterDepartmentSelect.addEventListener('change', async () => {
-      const previousSingleDepartmentFilter = getEffectiveSingleDepartmentFilter();
       state.selectedDepartmentId = scheduleFilterDepartmentSelect.value || DEPARTMENT_VIEW_ALL;
       if (![DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)) {
         setSelectedDepartments([state.selectedDepartmentId]);
-      }
-      const nextSingleDepartmentFilter = getEffectiveSingleDepartmentFilter();
-      if (previousSingleDepartmentFilter !== nextSingleDepartmentFilter) {
-        lastLoadedDepartmentShiftsId = null;
       }
       await refreshMonthlyView();
       renderAll();
@@ -4215,12 +4198,15 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
 
     const scheduleId = getEmployeeScheduleId(employee);
     const employeeDepartmentId = cleanStoredValue(employee.departmentId || employee.department_id) || null;
-    const departmentShiftTemplates = employeeDepartmentId ? departmentShiftsCache.get(employeeDepartmentId) : null;
-    const scopedShiftTemplates = employeeDepartmentId && Array.isArray(departmentShiftTemplates)
-      ? departmentShiftTemplates
+    const scopedShiftTemplates = employeeDepartmentId && Array.isArray(departmentShiftsCache[employeeDepartmentId])
+      ? departmentShiftsCache[employeeDepartmentId]
       : (scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
         ? state.scheduleShiftTemplatesById[scheduleId]
         : state.shiftTemplates);
+
+    if (employeeDepartmentId && !Array.isArray(departmentShiftsCache[employeeDepartmentId])) {
+      void loadDepartmentShifts(employeeDepartmentId).then(() => renderSchedule());
+    }
 
     scopedShiftTemplates.forEach((shift) => {
       const option = document.createElement('option');
@@ -5429,21 +5415,6 @@ async function buildSirvScheduleCache(referenceMonth, employees) {
   return cache;
 }
 
-
-async function ensureDepartmentShiftsForCurrentContext(options = {}) {
-  const singleDepartmentFilter = getEffectiveSingleDepartmentFilter();
-  const normalizedDepartmentId = cleanStoredValue(singleDepartmentFilter);
-  if (!normalizedDepartmentId) {
-    lastLoadedDepartmentShiftsId = null;
-    return;
-  }
-
-  await loadDepartmentShifts(normalizedDepartmentId, {
-    force: Boolean(options.force),
-    guardDepartmentId: normalizedDepartmentId
-  });
-}
-
 async function refreshMonthlyView() {
   if (!state.backendAvailable) {
     return;
@@ -5462,7 +5433,6 @@ async function refreshMonthlyView() {
 
   const monthParam = encodeURIComponent(month);
   const singleDepartmentFilter = getEffectiveSingleDepartmentFilter();
-  await ensureDepartmentShiftsForCurrentContext();
   const employeeQuery = singleDepartmentFilter
     ? `/api/employees?department_id=${encodeURIComponent(singleDepartmentFilter)}&month_key=${monthParam}`
     : `/api/employees?month_key=${monthParam}`;
@@ -6335,66 +6305,33 @@ async function saveDepartmentShiftBackend(departmentId, payload) {
 }
 
 async function loadDepartmentShifts(departmentId, options = {}) {
-  const normalizedDepartmentId = cleanStoredValue(departmentId);
-  if (!normalizedDepartmentId || !state.backendAvailable) return [];
-
-  const forceRefresh = Boolean(options.force);
-  const guardDepartmentId = cleanStoredValue(options.guardDepartmentId);
-  if (!forceRefresh && guardDepartmentId && lastLoadedDepartmentShiftsId === guardDepartmentId) {
-    const guardedCache = departmentShiftsCache.get(guardDepartmentId);
-    if (guardedCache && Array.isArray(guardedCache.shifts)) {
-      return guardedCache.shifts;
-    }
+  if (!departmentId || !state.backendAvailable) return [];
+  if (!options.force && Array.isArray(departmentShiftsCache[departmentId])) {
+    return departmentShiftsCache[departmentId];
   }
 
-  const now = Date.now();
-  const cachedEntry = departmentShiftsCache.get(normalizedDepartmentId);
-  if (!forceRefresh && cachedEntry && Array.isArray(cachedEntry.shifts) && now - cachedEntry.loadedAt < DEPARTMENT_SHIFTS_CACHE_TTL_MS) {
-    lastLoadedDepartmentShiftsId = normalizedDepartmentId;
-    return cachedEntry.shifts;
+  try {
+    const response = await apiFetch(`/api/departments/${encodeURIComponent(departmentId)}/shifts`);
+    if (!response.ok) throw new Error('Неуспешно зареждане на смени за отдел.');
+    const payload = await response.json();
+    const mapped = Array.isArray(payload.shifts) ? payload.shifts.map((shift) => ({
+      id: shift.id || null,
+      code: String(shift.code || '').toUpperCase(),
+      label: String(shift.code || '').toUpperCase(),
+      name: String(shift.name || shift.code || ''),
+      departmentId: cleanStoredValue(shift.departmentId || shift.department_id) || null,
+      type: 'work',
+      start: String(shift.start || shift.start_time || ''),
+      end: String(shift.end || shift.end_time || ''),
+      hours: Number(shift.hours || calcShiftHours(shift.start || shift.start_time || '', shift.end || shift.end_time || '')) || 0,
+      break_minutes: Number(shift.break_minutes || 0),
+      break_included: Boolean(shift.break_included),
+      locked: ['P', 'O', 'B', 'R'].includes(String(shift.code || '').toUpperCase())
+    })) : [];
+    departmentShiftsCache[departmentId] = mergeShiftTemplates(mapped);
+    return departmentShiftsCache[departmentId];
+  } catch (error) {
+    setStatus(error.message || 'Неуспешно зареждане на departmental смени. Ползва се fallback.', false);
+    return state.shiftTemplates.filter((shift) => !cleanStoredValue(shift.departmentId) || cleanStoredValue(shift.departmentId) === cleanStoredValue(departmentId));
   }
-
-  if (!forceRefresh && departmentShiftsInFlight.has(normalizedDepartmentId)) {
-    return departmentShiftsInFlight.get(normalizedDepartmentId);
-  }
-
-  const requestPromise = (async () => {
-    try {
-      const response = await apiFetch(`/api/departments/${encodeURIComponent(normalizedDepartmentId)}/shifts`);
-      if (!response.ok) throw new Error('Неуспешно зареждане на смени за отдел.');
-      const payload = await response.json();
-      const mapped = Array.isArray(payload.shifts) ? payload.shifts.map((shift) => ({
-        id: shift.id || null,
-        code: String(shift.code || '').toUpperCase(),
-        label: String(shift.code || '').toUpperCase(),
-        name: String(shift.name || shift.code || ''),
-        departmentId: cleanStoredValue(shift.departmentId || shift.department_id) || null,
-        type: 'work',
-        start: String(shift.start || shift.start_time || ''),
-        end: String(shift.end || shift.end_time || ''),
-        hours: Number(shift.hours || calcShiftHours(shift.start || shift.start_time || '', shift.end || shift.end_time || '')) || 0,
-        break_minutes: Number(shift.break_minutes || 0),
-        break_included: Boolean(shift.break_included),
-        locked: ['P', 'O', 'B', 'R'].includes(String(shift.code || '').toUpperCase())
-      })) : [];
-      const mergedShifts = mergeShiftTemplates(mapped);
-      departmentShiftsCache.set(normalizedDepartmentId, {
-        shifts: mergedShifts,
-        loadedAt: Date.now()
-      });
-      lastLoadedDepartmentShiftsId = normalizedDepartmentId;
-      return mergedShifts;
-    } catch (error) {
-      setStatus(error.message || 'Неуспешно зареждане на departmental смени. Ползва се fallback.', false);
-      if (cachedEntry && Array.isArray(cachedEntry.shifts)) {
-        return cachedEntry.shifts;
-      }
-      return state.shiftTemplates.filter((shift) => !cleanStoredValue(shift.departmentId) || cleanStoredValue(shift.departmentId) === normalizedDepartmentId);
-    } finally {
-      departmentShiftsInFlight.delete(normalizedDepartmentId);
-    }
-  })();
-
-  departmentShiftsInFlight.set(normalizedDepartmentId, requestPromise);
-  return requestPromise;
 }
