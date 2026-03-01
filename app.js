@@ -15,7 +15,10 @@ const DEFAULT_BASE_VACATION_ALLOWANCE = 20;
 const SYSTEM_SHIFTS = [
   { code: 'P', label: 'П', name: 'Почивка', type: 'rest', start: '', end: '', hours: 0, locked: true },
   { code: 'O', label: 'О', name: 'Отпуск', type: 'vacation', start: '', end: '', hours: 0, locked: true },
-  { code: 'B', label: 'Б', name: 'Болничен', type: 'sick', start: '', end: '', hours: 0, locked: true }
+  { code: 'B', label: 'Б', name: 'Болничен', type: 'sick', start: '', end: '', hours: 0, locked: true },
+  { code: 'N', label: 'Н', name: 'Неплатен отпуск', type: 'leave', start: '', end: '', hours: 0, locked: true },
+  { code: 'S', label: 'С', name: 'Самоотлъчка', type: 'leave', start: '', end: '', hours: 0, locked: true },
+  { code: 'M', label: 'М', name: 'Майчинство', type: 'leave', start: '', end: '', hours: 0, locked: true }
 ];
 
 const DEFAULT_WORK_SHIFT = { code: 'R', label: 'Р', name: 'Редовна', type: 'work', start: '08:00', end: '17:00', hours: 8, locked: true };
@@ -3746,6 +3749,7 @@ function renderVacationLedger() {
       const detailRow = document.createElement('tr');
       detailRow.className = 'vacation-dossier-row';
       const ranges = getVacationRangesForYear(employee.id, year);
+      const supplementaryDossiers = getSupplementaryLeaveDossiersForYear(employee.id, year);
       const rows = ranges.length
         ? ranges.map(([start, end], index) => {
           const formattedStart = formatDateForDisplay(start);
@@ -3755,6 +3759,27 @@ function renderVacationLedger() {
         }).join('')
         : '<tr><td colspan="3">Няма записани отпуски за годината.</td></tr>';
 
+      const supplementarySections = supplementaryDossiers.length
+        ? supplementaryDossiers.map((dossier) => {
+          const dossierRows = dossier.ranges.length
+            ? dossier.ranges.map(([start, end], index) => {
+              const formattedStart = formatDateForDisplay(start);
+              const formattedEnd = formatDateForDisplay(end);
+              const period = start === end ? formattedStart : `${formattedStart} - ${formattedEnd}`;
+              return `<tr><td>${index + 1}</td><td>${period}</td></tr>`;
+            }).join('')
+            : '<tr><td colspan="2">Няма периоди за тази година.</td></tr>';
+
+          return `
+            <div class="vacation-dossier-title" style="margin-top:10px;">${dossier.title}</div>
+            <table class="vacation-dossier-table">
+              <tr><th>#</th><th>Период</th></tr>
+              ${dossierRows}
+            </table>
+          `;
+        }).join('')
+        : '';
+
       detailRow.innerHTML = `
         <td colspan="${hasCarryoverColumn ? 5 : 4}">
           <div class="vacation-dossier-wrap">
@@ -3763,6 +3788,7 @@ function renderVacationLedger() {
               <tr><th>#</th><th>Период</th><th>Действие</th></tr>
               ${rows}
             </table>
+            ${supplementarySections}
           </div>
         </td>
       `;
@@ -3828,6 +3854,67 @@ function renderVacationLedger() {
       setStatus('Периодът отпуск е изтрит успешно.', true);
     });
   });
+}
+
+function getSupplementaryLeaveDossiersForYear(employeeId, year) {
+  const tracked = [
+    { codes: ['SICK'], title: 'Досие: Болнични' },
+    { codes: ['UNPAID'], title: 'Досие: Неплатен отпуск' },
+    { codes: ['MATERNITY'], title: 'Досие: Майчинство' },
+    { codes: ['SELF_ABSENCE', 'ABSENCE'], title: 'Досие: Самоотлъчка' },
+  ];
+
+  return tracked
+    .map((entry) => ({
+      title: entry.title,
+      ranges: getLeaveRangesForYearByCodes(employeeId, year, entry.codes),
+    }))
+    .filter((entry) => entry.ranges.length);
+}
+
+function getLeaveRangesForYearByCodes(employeeId, year, leaveCodes) {
+  const codeSet = new Set((leaveCodes || []).map((code) => String(code || '').toUpperCase()));
+  if (!codeSet.size) {
+    return [];
+  }
+
+  const entries = new Set();
+  (state.leaves || []).forEach((leave) => {
+    if (String(leave.employee_id || '') !== String(employeeId || '')) {
+      return;
+    }
+    const leaveCode = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
+    if (!codeSet.has(leaveCode)) {
+      return;
+    }
+    enumerateLeaveDays(leave.date_from, leave.date_to).forEach((dateKey) => {
+      if (dateKey.startsWith(`${year}-`)) {
+        entries.add(dateKey);
+      }
+    });
+  });
+
+  const sorted = Array.from(entries).sort();
+  if (!sorted.length) {
+    return [];
+  }
+
+  const ranges = [];
+  let rangeStart = sorted[0];
+  let previous = sorted[0];
+
+  for (let index = 1; index < sorted.length; index += 1) {
+    const current = sorted[index];
+    if (isContinuousVacationPeriod(previous, current)) {
+      previous = current;
+      continue;
+    }
+    ranges.push([rangeStart, previous]);
+    rangeStart = current;
+    previous = current;
+  }
+  ranges.push([rangeStart, previous]);
+  return ranges;
 }
 
 function openVacationCorrectionModal(employee, rangeStart, rangeEnd) {
@@ -4186,6 +4273,8 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
 
     const leave = getLeaveForCell(employee.id, month, day);
     const effectiveShift = holiday ? 'P' : currentShift;
+    const leaveShiftCodeForDisplay = getLeaveShiftCodeForDisplay(leave);
+    const selectedShiftCodeForUI = leaveShiftCodeForDisplay || effectiveShift;
 
     if (holiday && currentShift !== 'P') {
       state.schedule[scheduleKey(employee.id, month, day)] = 'P';
@@ -4216,9 +4305,17 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       option.textContent = shift.label || shift.code;
       option.dataset.shiftCode = shift.code;
       option.dataset.shiftId = shift.id || '';
-      option.selected = shift.code === effectiveShift;
+      option.selected = String(shift.code || '').toUpperCase() === String(selectedShiftCodeForUI || '').toUpperCase();
       select.appendChild(option);
     });
+
+    if (!optionsToRender.some((shift) => String(shift.code || '').toUpperCase() === String(selectedShiftCodeForUI || '').toUpperCase())) {
+      const extraOption = document.createElement('option');
+      extraOption.value = selectedShiftCodeForUI;
+      extraOption.textContent = getLeaveBadgeLabel({ code: leave?.leave_type_code || leave?.leave_type?.code || selectedShiftCodeForUI });
+      extraOption.selected = true;
+      select.appendChild(extraOption);
+    }
 
     select.addEventListener('change', async () => {
       await setShiftForCell({ employee, day, month, shiftCode: select.value });
@@ -4708,7 +4805,7 @@ function normalizeShiftCodeForApi(input) {
     return '';
   }
   const latinUpper = raw.toUpperCase();
-  if (['R', 'P', 'O', 'B'].includes(latinUpper)) {
+  if (['R', 'P', 'O', 'B', 'N', 'S', 'M'].includes(latinUpper)) {
     return latinUpper;
   }
   const cyrillicMap = {
@@ -4718,6 +4815,12 @@ function normalizeShiftCodeForApi(input) {
     'п': 'P',
     'О': 'O',
     'о': 'O',
+    'Н': 'N',
+    'н': 'N',
+    'С': 'S',
+    'с': 'S',
+    'М': 'M',
+    'м': 'M',
     'Б': 'B',
     'б': 'B',
   };
@@ -6052,6 +6155,18 @@ function getLeaveBadgeLabel(leaveType) {
   return String(leaveType?.name || code || 'L').slice(0, 2).toUpperCase();
 }
 
+function getLeaveShiftCodeForDisplay(leave) {
+  const code = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
+  const map = {
+    SICK: 'B',
+    UNPAID: 'N',
+    MATERNITY: 'M',
+    SELF_ABSENCE: 'S',
+    ABSENCE: 'S',
+  };
+  return map[code] || null;
+}
+
 function rebuildLeavesIndex() {
   const byDay = {};
   (state.leaves || []).forEach((leave) => {
@@ -6332,7 +6447,7 @@ async function loadDepartmentShifts(departmentId, options = {}) {
         hours: Number(shift.hours || calcShiftHours(shift.start || shift.start_time || '', shift.end || shift.end_time || '')) || 0,
         break_minutes: Number(shift.break_minutes || 0),
         break_included: Boolean(shift.break_included),
-        locked: ['P', 'O', 'B', 'R'].includes(String(shift.code || '').toUpperCase())
+        locked: ['P', 'O', 'B', 'N', 'S', 'M', 'R'].includes(String(shift.code || '').toUpperCase())
       })) : [];
       state.departmentShiftsCache[departmentId] = mergeShiftTemplates(mapped);
       return state.departmentShiftsCache[departmentId];
