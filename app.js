@@ -438,7 +438,7 @@ function updateSuperAdminPortalVisibility() {
     return;
   }
 
-  const isSuperAdmin = state.userRole === 'super_admin';
+  const isSuperAdmin = state.currentUser?.is_super_admin === true;
   superAdminPortalLink.classList.toggle('hidden', !isSuperAdmin);
 }
 
@@ -959,9 +959,7 @@ function syncRoleFromAuthenticatedUser() {
     return;
   }
 
-  if (state.currentUser.is_super_admin === true) {
-    state.userRole = 'super_admin';
-  } else if (state.userRole === 'super_admin') {
+  if (state.userRole === 'super_admin') {
     state.userRole = 'user';
   }
 
@@ -5092,8 +5090,13 @@ function detectApiBaseUrl() {
     return normalizeApiBaseUrl(window.__API_BASE_URL__);
   }
 
-  // Prefer same-origin first (reverse proxy deployments), and let reconnect fallback
-  // logic try host:4000 if needed.
+  // In most deployments front-end and API are split: static files on one port,
+  // backend API on :4000 of the same host.
+  if (window.location.port && window.location.port !== '4000') {
+    return normalizeApiBaseUrl(`${window.location.protocol}//${window.location.hostname}:4000`);
+  }
+
+  // If already on :4000 (or default port), same-origin is a safe default.
   return normalizeApiBaseUrl(window.location.origin);
 }
 
