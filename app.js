@@ -4063,6 +4063,12 @@ function getShiftCodeForCell(employee, month, day) {
   return localValue;
 }
 
+
+function isAdditionalShiftCode(shiftCode) {
+  const normalized = String(shiftCode || '').trim().toUpperCase();
+  return /^\d+\s*[CС][MМ]$/.test(normalized);
+}
+
 function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDays, monthLocked, visibleSummaryColumns, totals, employeeSnapshotTotalsList }) {
   const row = document.createElement('tr');
   const nameCell = document.createElement('td');
@@ -4112,6 +4118,11 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
     }
 
     const leave = getLeaveForCell(employee.id, month, day);
+    const effectiveShift = holiday ? 'P' : currentShift;
+
+    if (holiday && currentShift !== 'P') {
+      state.schedule[scheduleKey(employee.id, month, day)] = 'P';
+    }
 
     const select = document.createElement('select');
     select.className = 'shift-select';
@@ -4119,18 +4130,26 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       cell.classList.add('day-outside-employment');
       select.classList.add('shift-select--inactive');
     }
-    select.disabled = monthLocked || !inEmployment;
+    if (holiday) {
+      select.classList.add('shift-select--inactive');
+    }
+    select.disabled = monthLocked || !inEmployment || holiday;
     if (leave) {
       select.title = 'Има отсъствие за деня. Смяната може да се редактира, но отсъствието остава активно.';
+    } else if (holiday) {
+      select.title = holidayMeta?.name || 'Официален празник';
     }
 
-    scopedShiftTemplates.forEach((shift) => {
+    const holidayOptions = scopedShiftTemplates.filter((shift) => shift.code === 'P');
+    const optionsToRender = holiday ? (holidayOptions.length ? holidayOptions : [{ code: 'P', label: 'П' }]) : scopedShiftTemplates;
+
+    optionsToRender.forEach((shift) => {
       const option = document.createElement('option');
       option.value = shift.code;
       option.textContent = shift.label || shift.code;
       option.dataset.shiftCode = shift.code;
       option.dataset.shiftId = shift.id || '';
-      option.selected = shift.code === currentShift;
+      option.selected = shift.code === effectiveShift;
       select.appendChild(option);
     });
 
@@ -4166,7 +4185,7 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       cell.appendChild(marker);
     }
 
-    if (safeNum(entrySnapshot?.overtimeMinutes) > 0) {
+    if (!isAdditionalShiftCode(effectiveShift) && safeNum(entrySnapshot?.overtimeMinutes) > 0) {
       const overtimeBadge = document.createElement('span');
       overtimeBadge.className = 'cell-ot-badge';
       overtimeBadge.textContent = 'OT';
@@ -4175,7 +4194,7 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       cell.appendChild(overtimeBadge);
     }
 
-    if (leave?.leave_type_code || leave?.leave_type?.code) {
+    if (!isAdditionalShiftCode(effectiveShift) && (leave?.leave_type_code || leave?.leave_type?.code)) {
       const leaveCode = String(leave.leave_type_code || leave.leave_type?.code || '').toUpperCase();
       const leaveName = leave.leave_type_name || leave.leave_type?.name || 'Отсъствие';
       const leaveBadge = document.createElement('span');
@@ -4186,7 +4205,7 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
     }
 
     row.appendChild(cell);
-    collectSummary(summary, currentShift, holiday, weekend, inEmployment, entrySnapshot);
+    collectSummary(summary, effectiveShift, holiday, weekend, inEmployment, entrySnapshot);
     if (inEmployment && !holiday && !weekend) {
       summary.monthNormHours += 8;
     }
@@ -4328,11 +4347,7 @@ function renderSchedule() {
       th.className = 'day-weekend';
     }
     if (holiday) {
-      const badge = document.createElement('span');
-      badge.className = 'holiday-day-badge';
-      badge.textContent = ' Празник';
-      badge.title = holidayMeta?.name || 'Празник';
-      th.appendChild(badge);
+      th.title = holidayMeta?.name || 'Празник';
     }
     header.appendChild(th);
   }
