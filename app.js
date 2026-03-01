@@ -48,6 +48,7 @@ const state = {
   scheduleEntrySnapshotsById: {},
   scheduleEntryValidationsById: {},
   scheduleShiftTemplatesById: {},
+  departmentShiftsCache: {},
   schedules: [],
   selectedScheduleIds: [],
   activeScheduleId: null,
@@ -97,6 +98,7 @@ const DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS = 'all_by_departments';
 
 const API_FALLBACK_COOLDOWN_MS = 60 * 1000;
 const apiFallbackBlockedUntilByBase = new Map();
+const departmentShiftLoadPromises = new Map();
 
 const monthPicker = document.getElementById('monthPicker');
 const generateBtn = document.getElementById('generateBtn');
@@ -914,6 +916,7 @@ function resetTenantScopedState({ clearLocalStorage = false } = {}) {
   state.scheduleEntriesById = {};
   state.scheduleEntrySnapshotsById = {};
   state.scheduleEntryValidationsById = {};
+  state.departmentShiftsCache = {};
   state.schedules = [];
   state.selectedScheduleIds = [];
   state.activeScheduleId = null;
@@ -4080,6 +4083,19 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
   };
   const snapshotEntriesByDay = [];
 
+  const scheduleId = getEmployeeScheduleId(employee);
+  const employeeDepartmentId = cleanStoredValue(employee.departmentId || employee.department_id) || null;
+  const hasDepartmentShiftCache = employeeDepartmentId && Array.isArray(state.departmentShiftsCache[employeeDepartmentId]);
+  const scopedShiftTemplates = hasDepartmentShiftCache
+    ? state.departmentShiftsCache[employeeDepartmentId]
+    : (scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
+      ? state.scheduleShiftTemplatesById[scheduleId]
+      : state.shiftTemplates);
+
+  if (employeeDepartmentId && !hasDepartmentShiftCache) {
+    void loadDepartmentShifts(employeeDepartmentId, { silent: true }).then(() => renderSchedule());
+  }
+
   for (let day = 1; day <= totalDays; day += 1) {
     const inEmployment = isEmployeeActiveOnDay(employee, year, monthIndex, day);
     const currentShift = getShiftCodeForCell(employee, month, day);
@@ -4106,18 +4122,6 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
     select.disabled = monthLocked || !inEmployment;
     if (leave) {
       select.title = 'Има отсъствие за деня. Смяната може да се редактира, но отсъствието остава активно.';
-    }
-
-    const scheduleId = getEmployeeScheduleId(employee);
-    const employeeDepartmentId = cleanStoredValue(employee.departmentId || employee.department_id) || null;
-    const scopedShiftTemplates = employeeDepartmentId && Array.isArray(state.departmentShiftsCache[employeeDepartmentId])
-      ? state.departmentShiftsCache[employeeDepartmentId]
-      : (scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
-        ? state.scheduleShiftTemplatesById[scheduleId]
-        : state.shiftTemplates);
-
-    if (employeeDepartmentId && !Array.isArray(state.departmentShiftsCache[employeeDepartmentId])) {
-      void loadDepartmentShifts(employeeDepartmentId).then(() => renderSchedule());
     }
 
     scopedShiftTemplates.forEach((shift) => {
@@ -6210,28 +6214,43 @@ async function loadDepartmentShifts(departmentId, options = {}) {
     return state.departmentShiftsCache[departmentId];
   }
 
-  try {
-    const response = await apiFetch(`/api/departments/${encodeURIComponent(departmentId)}/shifts`);
-    if (!response.ok) throw new Error('Неуспешно зареждане на смени за отдел.');
-    const payload = await response.json();
-    const mapped = Array.isArray(payload.shifts) ? payload.shifts.map((shift) => ({
-      id: shift.id || null,
-      code: String(shift.code || '').toUpperCase(),
-      label: String(shift.code || '').toUpperCase(),
-      name: String(shift.name || shift.code || ''),
-      departmentId: cleanStoredValue(shift.departmentId || shift.department_id) || null,
-      type: 'work',
-      start: String(shift.start || shift.start_time || ''),
-      end: String(shift.end || shift.end_time || ''),
-      hours: Number(shift.hours || calcShiftHours(shift.start || shift.start_time || '', shift.end || shift.end_time || '')) || 0,
-      break_minutes: Number(shift.break_minutes || 0),
-      break_included: Boolean(shift.break_included),
-      locked: ['P', 'O', 'B', 'R'].includes(String(shift.code || '').toUpperCase())
-    })) : [];
-    state.departmentShiftsCache[departmentId] = mergeShiftTemplates(mapped);
-    return state.departmentShiftsCache[departmentId];
-  } catch (error) {
-    setStatus(error.message || 'Неуспешно зареждане на departmental смени. Ползва се fallback.', false);
-    return state.shiftTemplates.filter((shift) => !cleanStoredValue(shift.departmentId) || cleanStoredValue(shift.departmentId) === cleanStoredValue(departmentId));
+  if (!options.force && departmentShiftLoadPromises.has(departmentId)) {
+    return departmentShiftLoadPromises.get(departmentId);
   }
+
+  const loadPromise = (async () => {
+    try {
+      const response = await apiFetch(`/api/departments/${encodeURIComponent(departmentId)}/shifts`);
+      if (!response.ok) throw new Error('Неуспешно зареждане на смени за отдел.');
+      const payload = await response.json();
+      const mapped = Array.isArray(payload.shifts) ? payload.shifts.map((shift) => ({
+        id: shift.id || null,
+        code: String(shift.code || '').toUpperCase(),
+        label: String(shift.code || '').toUpperCase(),
+        name: String(shift.name || shift.code || ''),
+        departmentId: cleanStoredValue(shift.departmentId || shift.department_id) || null,
+        type: 'work',
+        start: String(shift.start || shift.start_time || ''),
+        end: String(shift.end || shift.end_time || ''),
+        hours: Number(shift.hours || calcShiftHours(shift.start || shift.start_time || '', shift.end || shift.end_time || '')) || 0,
+        break_minutes: Number(shift.break_minutes || 0),
+        break_included: Boolean(shift.break_included),
+        locked: ['P', 'O', 'B', 'R'].includes(String(shift.code || '').toUpperCase())
+      })) : [];
+      state.departmentShiftsCache[departmentId] = mergeShiftTemplates(mapped);
+      return state.departmentShiftsCache[departmentId];
+    } catch (error) {
+      if (!options.silent) {
+        setStatus(error.message || 'Неуспешно зареждане на departmental смени. Ползва се fallback.', false);
+      }
+      const fallbackShifts = state.shiftTemplates.filter((shift) => !cleanStoredValue(shift.departmentId) || cleanStoredValue(shift.departmentId) === cleanStoredValue(departmentId));
+      state.departmentShiftsCache[departmentId] = fallbackShifts;
+      return fallbackShifts;
+    } finally {
+      departmentShiftLoadPromises.delete(departmentId);
+    }
+  })();
+
+  departmentShiftLoadPromises.set(departmentId, loadPromise);
+  return loadPromise;
 }
