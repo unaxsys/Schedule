@@ -88,8 +88,7 @@ const state = {
   lastConnectionErrorSignature: '',
   leaveTypes: [],
   leaves: [],
-  leavesByEmployeeDay: {},
-  holidaysByMonthCache: {}
+  leavesByEmployeeDay: {}
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
