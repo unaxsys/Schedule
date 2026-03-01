@@ -5853,6 +5853,7 @@ async function refreshMonthlyView() {
   details.forEach((detail) => {
     const schedule = detail.schedule || {};
     const scheduleDepartment = (schedule.department || '').trim();
+    const scheduleDepartmentId = cleanStoredValue(schedule.departmentId || schedule.department_id) || null;
 
     (detail.employees || []).forEach((employee) => {
       if (!allowedIds.has(employee.id)) {
@@ -5860,10 +5861,12 @@ async function refreshMonthlyView() {
       }
 
       const employeeDepartment = String(employee.department || '').trim();
+      const employeeDepartmentId = cleanStoredValue(employee.departmentId || employee.department_id) || null;
       const nextEmployee = {
         ...employee,
         scheduleId: schedule.id,
-        scheduleDepartment
+        scheduleDepartment,
+        scheduleDepartmentId,
       };
 
       const current = employeeById.get(employee.id);
@@ -5872,8 +5875,13 @@ async function refreshMonthlyView() {
         return;
       }
 
-      const currentScore = current.scheduleDepartment && current.scheduleDepartment === employeeDepartment ? 2 : (current.scheduleDepartment ? 1 : 0);
-      const nextScore = scheduleDepartment && scheduleDepartment === employeeDepartment ? 2 : (scheduleDepartment ? 1 : 0);
+      const currentScheduleDepartmentId = cleanStoredValue(current.scheduleDepartmentId) || null;
+      const currentScore = currentScheduleDepartmentId && employeeDepartmentId && currentScheduleDepartmentId === employeeDepartmentId
+        ? 3
+        : (current.scheduleDepartment && current.scheduleDepartment === employeeDepartment ? 2 : (current.scheduleDepartment ? 1 : 0));
+      const nextScore = scheduleDepartmentId && employeeDepartmentId && scheduleDepartmentId === employeeDepartmentId
+        ? 3
+        : (scheduleDepartment && scheduleDepartment === employeeDepartment ? 2 : (scheduleDepartment ? 1 : 0));
       if (nextScore > currentScore) {
         employeeById.set(employee.id, nextEmployee);
       }

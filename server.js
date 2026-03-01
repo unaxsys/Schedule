@@ -2303,11 +2303,14 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
        FROM employees e
        LEFT JOIN departments d ON d.id = e.department_id
        WHERE e.tenant_id = $1
-         AND ($2::text IS NULL OR COALESCE(d.name, e.department) = $2)
-         AND e.start_date <= $4::date
-         AND (e.end_date IS NULL OR e.end_date >= $3::date)
+         AND (
+           ($2::uuid IS NOT NULL AND e.department_id = $2::uuid)
+           OR ($2::uuid IS NULL AND ($3::text IS NULL OR COALESCE(d.name, e.department) = $3::text))
+         )
+         AND e.start_date <= $5::date
+         AND (e.end_date IS NULL OR e.end_date >= $4::date)
        ORDER BY e.name`,
-      [req.tenantId, schedule.department, bounds.monthStart, bounds.monthEnd]
+      [req.tenantId, schedule.department_id || null, schedule.department || null, bounds.monthStart, bounds.monthEnd]
     );
 
     const hasWorkMinutes = await tableHasColumn('schedule_entries', 'work_minutes');
@@ -2539,9 +2542,16 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       ? { rows: [] }
       : await pool.query(`${shiftTemplatesSelect} ${shiftScope.whereSql}`, shiftScope.values);
 
+    const shiftTemplatesForCalc = snapshot
+      ? []
+      : shiftTemplatesForCalcResult.rows.map((row) => ({
+        ...row,
+        code: normalizeShiftCode(row.code),
+      }));
+
     const selectedShiftForSnapshot = snapshot
       ? null
-      : (appendSystemShiftTemplates(shiftTemplatesForCalcResult.rows).find((row) => {
+      : (shiftTemplatesForCalc.find((row) => {
         if (resolvedShiftId) {
           return String(row.id) === String(resolvedShiftId);
         }
@@ -2598,7 +2608,9 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       let prevShiftEndAt = null;
       if (prevEntryResult.rowCount) {
         const prevCode = normalizeShiftCode(prevEntryResult.rows[0].shift_code);
-        const prevShift = appendSystemShiftTemplates(shiftTemplatesForCalcResult.rows).find((row) => normalizeShiftCode(row.code) === prevCode);
+        const prevShiftId = cleanStr(prevEntryResult.rows[0].shift_id);
+        const prevShift = shiftTemplatesForCalc.find((row) => prevShiftId && String(row.id) === String(prevShiftId))
+          || shiftTemplatesForCalc.find((row) => normalizeShiftCode(row.code) === prevCode);
         if (prevShift) {
           const prevEnd = String(prevShift.end_time || prevShift.end || '00:00');
           const [h, m] = prevEnd.split(':').map(Number);
@@ -2606,6 +2618,12 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         }
       }
       validation = validateScheduleEntry({ prevShiftEndAt, shift: selectedShiftForSnapshot });
+      if (validation.errors.includes('insufficient_interdaily_rest')) {
+        return res.status(400).json({
+          message: 'Невалидна смяна: трябва да има минимум 12 часа междудневна почивка след предходната смяна.',
+          validation,
+        });
+      }
     }
 
     const isManual = Boolean(req.body?.is_manual ?? req.body?.isManual ?? false);
