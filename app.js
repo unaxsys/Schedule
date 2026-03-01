@@ -3446,6 +3446,86 @@ function getPaidLeaveType() {
   return (state.leaveTypes || []).find((type) => isPaidLeaveType(type)) || null;
 }
 
+function addDaysToDateKey(dateKey, days) {
+  const date = new Date(`${dateKey}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return dateKey;
+  }
+  date.setDate(date.getDate() + days);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+async function createLeaveEntry({ employeeId, leaveTypeId, dateFrom, dateTo, minutesPerDay = null }) {
+  const response = await apiFetch('/api/leaves', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      employee_id: employeeId,
+      leave_type_id: Number(leaveTypeId),
+      date_from: dateFrom,
+      date_to: dateTo,
+      minutes_per_day: minutesPerDay,
+    }),
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.message || 'Неуспешно добавяне на отсъствие.');
+  }
+}
+
+async function removePaidLeaveForScheduleCell(employee, monthKey, day) {
+  const paidLeaveType = getPaidLeaveType();
+  if (!paidLeaveType) {
+    return { removed: false };
+  }
+
+  const dateKey = `${monthKey}-${String(day).padStart(2, '0')}`;
+  const matches = (state.leaves || []).filter((leave) => {
+    const employeeId = String(leave.employee_id || '');
+    const leaveCode = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
+    if (employeeId !== String(employee.id || '') || leaveCode !== 'PAID_LEAVE') {
+      return false;
+    }
+    const from = normalizeDateOnly(leave.date_from);
+    const to = normalizeDateOnly(leave.date_to);
+    return from && to && from <= dateKey && dateKey <= to;
+  });
+
+  if (!matches.length) {
+    return { removed: false };
+  }
+
+  for (const leave of matches) {
+    const from = normalizeDateOnly(leave.date_from);
+    const to = normalizeDateOnly(leave.date_to);
+    const response = await apiFetch(`/api/leaves/${leave.id}`, { method: 'DELETE' });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.message || 'Неуспешно изтриване на платен отпуск.');
+    }
+
+    if (from && from < dateKey) {
+      await createLeaveEntry({
+        employeeId: employee.id,
+        leaveTypeId: paidLeaveType.id,
+        dateFrom: from,
+        dateTo: addDaysToDateKey(dateKey, -1),
+      });
+    }
+    if (to && to > dateKey) {
+      await createLeaveEntry({
+        employeeId: employee.id,
+        leaveTypeId: paidLeaveType.id,
+        dateFrom: addDaysToDateKey(dateKey, 1),
+        dateTo: to,
+      });
+    }
+  }
+
+  return { removed: true };
+}
+
 async function ensurePaidLeaveForScheduleCell(employee, monthKey, day) {
   const paidLeaveType = getPaidLeaveType();
   if (!paidLeaveType) {
@@ -4187,14 +4267,21 @@ async function setShiftForCell({ employee, day, month, shiftCode }) {
     await saveScheduleEntryBackend({ ...employee, scheduleId }, day, shiftCode, { monthKey, scheduleId });
   }
 
-  if (String(shiftCode || '').toUpperCase() !== 'O' || previousShiftCode === 'O') {
-    return;
+  const nextShiftCode = String(shiftCode || '').toUpperCase();
+  let needsRefresh = false;
+
+  if (nextShiftCode === 'O' && previousShiftCode !== 'O') {
+    const leaveSync = await ensurePaidLeaveForScheduleCell(employee, monthKey, day);
+    needsRefresh = needsRefresh || leaveSync.created;
   }
 
-  const leaveSync = await ensurePaidLeaveForScheduleCell(employee, monthKey, day);
-  if (leaveSync.created) {
+  if (previousShiftCode === 'O' && nextShiftCode !== 'O') {
+    const leaveSync = await removePaidLeaveForScheduleCell(employee, monthKey, day);
+    needsRefresh = needsRefresh || leaveSync.removed;
+  }
+
+  if (needsRefresh) {
     await refreshMonthlyView();
-    setStatus('Смяната "О" е синхронизирана с таб Отпуски.', true);
   }
 }
 
@@ -4385,13 +4472,7 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
     }
 
     const leave = getLeaveForCell(employee.id, month, day);
-    const effectiveShift = holiday ? 'P' : currentShift;
-    const leaveShiftCodeForDisplay = getLeaveShiftCodeForDisplay(leave);
-    const selectedShiftCodeForUI = leaveShiftCodeForDisplay || effectiveShift;
-
-    if (holiday && currentShift !== 'P') {
-      state.schedule[scheduleKey(employee.id, month, day)] = 'P';
-    }
+    const effectiveShift = currentShift;
 
     const select = document.createElement('select');
     select.className = 'shift-select';
@@ -4399,18 +4480,12 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       cell.classList.add('day-outside-employment');
       select.classList.add('shift-select--inactive');
     }
+    select.disabled = monthLocked || !inEmployment;
     if (holiday) {
-      select.classList.add('shift-select--inactive');
-    }
-    select.disabled = monthLocked || !inEmployment || holiday;
-    if (leave) {
-      select.title = 'Има отсъствие за деня. Смяната може да се редактира, но отсъствието остава активно.';
-    } else if (holiday) {
       select.title = holidayMeta?.name || 'Официален празник';
     }
 
-    const holidayOptions = scopedShiftTemplates.filter((shift) => shift.code === 'P');
-    const optionsToRender = holiday ? (holidayOptions.length ? holidayOptions : [{ code: 'P', label: 'П' }]) : scopedShiftTemplates;
+    const optionsToRender = scopedShiftTemplates;
 
     optionsToRender.forEach((shift) => {
       const option = document.createElement('option');
@@ -4471,15 +4546,6 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       cell.appendChild(overtimeBadge);
     }
 
-    if (!isAdditionalShiftCode(effectiveShift) && (leave?.leave_type_code || leave?.leave_type?.code)) {
-      const leaveCode = String(leave.leave_type_code || leave.leave_type?.code || '').toUpperCase();
-      const leaveName = leave.leave_type_name || leave.leave_type?.name || 'Отсъствие';
-      const leaveBadge = document.createElement('span');
-      leaveBadge.className = `cell-leave-badge ${leaveCode === 'SICK' ? 'cell-leave-badge--sick' : ''}`.trim();
-      leaveBadge.textContent = getLeaveBadgeLabel({ code: leaveCode, name: leaveName });
-      leaveBadge.title = leaveName;
-      cell.appendChild(leaveBadge);
-    }
 
     row.appendChild(cell);
     collectSummary(summary, effectiveShift, holiday, weekend, inEmployment, entrySnapshot);
