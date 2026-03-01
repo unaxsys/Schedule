@@ -4397,7 +4397,7 @@ function getEmployeeScheduleId(employee) {
     return employee.scheduleId;
   }
 
-  const employeeDepartmentId = employee?.departmentId || null;
+  const employeeDepartmentId = cleanStoredValue(employee?.departmentId || employee?.department_id) || null;
   const employeeDepartment = String(employee?.department || '').trim();
 
   if (state.activeScheduleId) {
@@ -4416,11 +4416,19 @@ function getEmployeeScheduleId(employee) {
     return selectedSchedules[0].id;
   }
 
+  const byScheduleDepartmentId = selectedSchedules.find((schedule) => (
+    employeeDepartmentId
+    && cleanStoredValue(schedule.departmentId || schedule.department_id) === employeeDepartmentId
+  ));
+  if (byScheduleDepartmentId) {
+    return byScheduleDepartmentId.id;
+  }
+
   const byDepartmentId = selectedSchedules.find((schedule) => {
     if (!employeeDepartmentId) {
       return false;
     }
-    const department = state.departments.find((item) => item.id === employeeDepartmentId);
+    const department = state.departments.find((item) => cleanStoredValue(item.id) === employeeDepartmentId);
     return department && String(schedule.department || '').trim() === String(department.name || '').trim();
   });
   if (byDepartmentId) {
@@ -4429,6 +4437,17 @@ function getEmployeeScheduleId(employee) {
 
   const byDepartmentName = selectedSchedules.find((schedule) => String(schedule.department || '').trim() === employeeDepartment);
   return byDepartmentName?.id || selectedSchedules[0].id || null;
+}
+
+function filterShiftTemplatesByDepartment(shiftTemplates = [], departmentId = null) {
+  const normalizedDepartmentId = cleanStoredValue(departmentId) || null;
+  return (Array.isArray(shiftTemplates) ? shiftTemplates : []).filter((shift) => {
+    const shiftDepartmentId = cleanStoredValue(shift?.departmentId || shift?.department_id) || null;
+    if (!normalizedDepartmentId) {
+      return !shiftDepartmentId;
+    }
+    return !shiftDepartmentId || shiftDepartmentId === normalizedDepartmentId;
+  });
 }
 
 function getShiftCodeForCell(employee, month, day) {
@@ -4470,11 +4489,12 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
   const scheduleId = getEmployeeScheduleId(employee);
   const employeeDepartmentId = cleanStoredValue(employee.departmentId || employee.department_id) || null;
   const hasDepartmentShiftCache = employeeDepartmentId && Array.isArray(state.departmentShiftsCache[employeeDepartmentId]);
-  const scopedShiftTemplates = hasDepartmentShiftCache
+  const rawShiftTemplates = hasDepartmentShiftCache
     ? state.departmentShiftsCache[employeeDepartmentId]
     : (scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
       ? state.scheduleShiftTemplatesById[scheduleId]
       : state.shiftTemplates);
+  const scopedShiftTemplates = filterShiftTemplatesByDepartment(rawShiftTemplates, employeeDepartmentId);
 
   if (employeeDepartmentId && !hasDepartmentShiftCache) {
     void loadDepartmentShifts(employeeDepartmentId, { silent: true }).then(() => renderSchedule());
