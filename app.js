@@ -103,6 +103,9 @@ const API_FALLBACK_COOLDOWN_MS = 60 * 1000;
 const apiFallbackBlockedUntilByBase = new Map();
 const departmentShiftLoadPromises = new Map();
 
+// UI state: избрана смяна (код) за интерфейса / масово прилагане
+let selectedShiftCodeForUI = '';
+
 const monthPicker = document.getElementById('monthPicker');
 const generateBtn = document.getElementById('generateBtn');
 const employeeForm = document.getElementById('employeeForm');
@@ -374,6 +377,7 @@ async function init() {
   attachVacationDateValidationControls();
   attachLeavesControls();
   attachShiftForm();
+  attachShiftUiSelectionState();
   attachShiftImportControls();
   attachLockAndExport();
   attachSettingsControls();
@@ -2082,6 +2086,26 @@ async function ensureXlsxLibrary() {
   }
 
   throw new Error('XLSX parser не е наличен. Използвайте CSV или осигурете достъп до CDN.');
+}
+
+function attachShiftUiSelectionState() {
+  const candidates = [
+    document.getElementById('shiftCodePicker'),
+    document.getElementById('shiftCodeInput'),
+    document.getElementById('shiftTemplateCodeSelect'),
+  ].filter(Boolean);
+
+  candidates.forEach((element) => {
+    const syncFromElement = () => {
+      selectedShiftCodeForUI = String(element.value || '').trim();
+    };
+
+    syncFromElement();
+    element.addEventListener('change', () => {
+      syncFromElement();
+      renderAll();
+    });
+  });
 }
 
 function attachShiftImportControls() {
@@ -4486,6 +4510,10 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
     }
 
     const optionsToRender = scopedShiftTemplates;
+    const uiShiftCode =
+      (typeof selectedShiftCodeForUI !== 'undefined' && selectedShiftCodeForUI)
+        ? selectedShiftCodeForUI
+        : '';
 
     optionsToRender.forEach((shift) => {
       const option = document.createElement('option');
@@ -4493,7 +4521,7 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       option.textContent = shift.label || shift.code;
       option.dataset.shiftCode = shift.code;
       option.dataset.shiftId = shift.id || '';
-      option.selected = String(shift.code || '').toUpperCase() === String(selectedShiftCodeForUI || '').toUpperCase();
+      option.selected = shift.code === effectiveShift || (uiShiftCode && shift.code === uiShiftCode && !effectiveShift);
       select.appendChild(option);
     });
 
