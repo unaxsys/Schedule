@@ -15,7 +15,10 @@ const DEFAULT_BASE_VACATION_ALLOWANCE = 20;
 const SYSTEM_SHIFTS = [
   { code: 'P', label: 'П', name: 'Почивка', type: 'rest', start: '', end: '', hours: 0, locked: true },
   { code: 'O', label: 'О', name: 'Отпуск', type: 'vacation', start: '', end: '', hours: 0, locked: true },
-  { code: 'B', label: 'Б', name: 'Болничен', type: 'sick', start: '', end: '', hours: 0, locked: true }
+  { code: 'B', label: 'Б', name: 'Болничен', type: 'sick', start: '', end: '', hours: 0, locked: true },
+  { code: 'N', label: 'Н', name: 'Неплатен отпуск', type: 'leave', start: '', end: '', hours: 0, locked: true },
+  { code: 'S', label: 'С', name: 'Самоотлъчка', type: 'leave', start: '', end: '', hours: 0, locked: true },
+  { code: 'M', label: 'М', name: 'Майчинство', type: 'leave', start: '', end: '', hours: 0, locked: true }
 ];
 
 const DEFAULT_WORK_SHIFT = { code: 'R', label: 'Р', name: 'Редовна', type: 'work', start: '08:00', end: '17:00', hours: 8, locked: true };
@@ -3400,9 +3403,15 @@ function renderLeavesPanel() {
   });
 
   const month = state.month || todayMonth();
-  const rows = (state.leaves || []).filter((leave) => String(leave.date_from || '').startsWith(month) || String(leave.date_to || '').startsWith(month));
+  const rows = (state.leaves || []).filter((leave) => {
+    const leaveCode = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
+    if (leaveCode === 'PAID_LEAVE') {
+      return false;
+    }
+    return String(leave.date_from || '').startsWith(month) || String(leave.date_to || '').startsWith(month);
+  });
   if (!rows.length) {
-    leaveList.innerHTML = '<small>Няма отсъствия за избрания месец.</small>';
+    leaveList.innerHTML = '<small>Няма отсъствия за избрания месец (платеният отпуск е в досието).</small>';
     return;
   }
 
@@ -3427,6 +3436,49 @@ function renderLeavesPanel() {
       }
     });
   });
+}
+
+function isPaidLeaveType(leaveType) {
+  return String(leaveType?.code || '').toUpperCase() === 'PAID_LEAVE';
+}
+
+function getPaidLeaveType() {
+  return (state.leaveTypes || []).find((type) => isPaidLeaveType(type)) || null;
+}
+
+async function ensurePaidLeaveForScheduleCell(employee, monthKey, day) {
+  const paidLeaveType = getPaidLeaveType();
+  if (!paidLeaveType) {
+    return { created: false, skipped: true };
+  }
+
+  const dateKey = `${monthKey}-${String(day).padStart(2, '0')}`;
+  if (getLeaveForCell(employee.id, monthKey, day)) {
+    return { created: false, skipped: true };
+  }
+
+  const response = await apiFetch('/api/leaves', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      employee_id: employee.id,
+      leave_type_id: Number(paidLeaveType.id),
+      date_from: dateKey,
+      date_to: dateKey,
+      minutes_per_day: null,
+    }),
+  });
+
+  if (response.ok) {
+    return { created: true, skipped: false };
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  if (response.status === 409) {
+    return { created: false, skipped: true };
+  }
+
+  throw new Error(payload.message || 'Неуспешно добавяне на платен отпуск от графика.');
 }
 
 function attachLeavesControls() {
@@ -3457,6 +3509,15 @@ function attachLeavesControls() {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.message || 'Неуспешно добавяне на отсъствие');
       }
+
+      const selectedLeaveType = (state.leaveTypes || []).find((type) => String(type.id) === String(leaveTypeSelect.value));
+      if (isPaidLeaveType(selectedLeaveType)) {
+        const employee = state.employees.find((entry) => entry.id === String(leaveEmployeeSelect.value));
+        if (employee) {
+          await setVacationShiftForDateRange(employee, body.date_from, body.date_to, 'O', { ensureSchedule: true });
+        }
+      }
+
       await refreshMonthlyView();
       renderAll();
       setStatus('Отсъствието е добавено.', true);
@@ -3688,6 +3749,7 @@ function renderVacationLedger() {
       const detailRow = document.createElement('tr');
       detailRow.className = 'vacation-dossier-row';
       const ranges = getVacationRangesForYear(employee.id, year);
+      const supplementaryDossiers = getSupplementaryLeaveDossiersForYear(employee.id, year);
       const rows = ranges.length
         ? ranges.map(([start, end], index) => {
           const formattedStart = formatDateForDisplay(start);
@@ -3697,6 +3759,28 @@ function renderVacationLedger() {
         }).join('')
         : '<tr><td colspan="3">Няма записани отпуски за годината.</td></tr>';
 
+      const supplementarySections = supplementaryDossiers.length
+        ? supplementaryDossiers.map((dossier) => {
+          const dossierRows = dossier.ranges.length
+            ? dossier.ranges.map(([start, end], index) => {
+              const formattedStart = formatDateForDisplay(start);
+              const formattedEnd = formatDateForDisplay(end);
+              const period = start === end ? formattedStart : `${formattedStart} - ${formattedEnd}`;
+              const actions = `${canManageLeaves() ? `<button type="button" class="btn-edit leave-period-correct-btn" data-employee-id="${employee.id}" data-range-start="${start}" data-range-end="${end}" data-leave-codes="${dossier.codes.join(',')}">Корекция</button>` : ''}${canManageLeaves() ? ` <button type="button" class="btn-delete leave-period-delete-btn" data-employee-id="${employee.id}" data-range-start="${start}" data-range-end="${end}" data-leave-codes="${dossier.codes.join(',')}">Изтрий</button>` : ''}${!canManageLeaves() ? '<span>-</span>' : ''}`;
+              return `<tr><td>${index + 1}</td><td>${period}</td><td>${actions}</td></tr>`;
+            }).join('')
+            : '<tr><td colspan="3">Няма периоди за тази година.</td></tr>';
+
+          return `
+            <div class="vacation-dossier-title" style="margin-top:10px;">${dossier.title}</div>
+            <table class="vacation-dossier-table">
+              <tr><th>#</th><th>Период</th><th>Действие</th></tr>
+              ${dossierRows}
+            </table>
+          `;
+        }).join('')
+        : '';
+
       detailRow.innerHTML = `
         <td colspan="${hasCarryoverColumn ? 5 : 4}">
           <div class="vacation-dossier-wrap">
@@ -3705,6 +3789,7 @@ function renderVacationLedger() {
               <tr><th>#</th><th>Период</th><th>Действие</th></tr>
               ${rows}
             </table>
+            ${supplementarySections}
           </div>
         </td>
       `;
@@ -3770,6 +3855,179 @@ function renderVacationLedger() {
       setStatus('Периодът отпуск е изтрит успешно.', true);
     });
   });
+
+  vacationLedger.querySelectorAll('.leave-period-delete-btn').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const employeeId = button.dataset.employeeId || '';
+      const rangeStart = button.dataset.rangeStart || '';
+      const rangeEnd = button.dataset.rangeEnd || '';
+      const leaveCodes = String(button.dataset.leaveCodes || '').split(',').map((item) => String(item || '').trim().toUpperCase()).filter(Boolean);
+      const employee = state.employees.find((entry) => entry.id === employeeId);
+      if (!employee || !rangeStart || !rangeEnd || !leaveCodes.length) {
+        setStatus('Липсват данни за изтриване на периода отсъствие.', false);
+        return;
+      }
+
+      const confirmed = window.confirm(`Да изтрия ли период ${formatDateForDisplay(rangeStart)} - ${formatDateForDisplay(rangeEnd)} за ${employee.name}?`);
+      if (!confirmed) {
+        return;
+      }
+
+      await deleteLeaveRangeByCodes(employeeId, rangeStart, rangeEnd, leaveCodes);
+      await refreshMonthlyView();
+      renderAll();
+      setStatus('Периодът е изтрит успешно.', true);
+    });
+  });
+
+  vacationLedger.querySelectorAll('.leave-period-correct-btn').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const employeeId = button.dataset.employeeId || '';
+      const rangeStart = button.dataset.rangeStart || '';
+      const rangeEnd = button.dataset.rangeEnd || '';
+      const leaveCodes = String(button.dataset.leaveCodes || '').split(',').map((item) => String(item || '').trim().toUpperCase()).filter(Boolean);
+      const employee = state.employees.find((entry) => entry.id === employeeId);
+      if (!employee || !rangeStart || !rangeEnd || !leaveCodes.length) {
+        setStatus('Липсват данни за корекция на периода отсъствие.', false);
+        return;
+      }
+
+      const nextStart = normalizeDateOnly(window.prompt('Нова начална дата (YYYY-MM-DD):', rangeStart));
+      if (!nextStart) {
+        return;
+      }
+      const nextEnd = normalizeDateOnly(window.prompt('Нова крайна дата (YYYY-MM-DD):', rangeEnd));
+      if (!nextEnd || nextEnd < nextStart) {
+        setStatus('Невалиден нов период.', false);
+        return;
+      }
+
+      await deleteLeaveRangeByCodes(employeeId, rangeStart, rangeEnd, leaveCodes);
+      await createLeaveByCode(employeeId, leaveCodes[0], nextStart, nextEnd);
+      await refreshMonthlyView();
+      renderAll();
+      setStatus('Периодът е коригиран успешно.', true);
+    });
+  });
+}
+
+
+function normalizeLeaveDossierTitle(title) {
+  const raw = String(title || '').replace(/^\s*Досие:\s*/i, '').trim();
+  if (!raw) {
+    return 'Отсъствие';
+  }
+  if (raw === 'Болнични') {
+    return 'Болничен';
+  }
+  return raw;
+}
+function getSupplementaryLeaveDossiersForYear(employeeId, year) {
+  const tracked = [
+    { codes: ['SICK'], title: 'Болничен' },
+    { codes: ['UNPAID'], title: 'Неплатен отпуск' },
+    { codes: ['MATERNITY'], title: 'Майчинство' },
+    { codes: ['SELF_ABSENCE', 'ABSENCE'], title: 'Самоотлъчка' },
+  ];
+
+  return tracked
+    .map((entry) => ({
+      title: normalizeLeaveDossierTitle(entry.title),
+      codes: entry.codes,
+      ranges: getLeaveRangesForYearByCodes(employeeId, year, entry.codes),
+    }))
+    .filter((entry) => entry.ranges.length);
+}
+
+function getLeaveRangesForYearByCodes(employeeId, year, leaveCodes) {
+  const codeSet = new Set((leaveCodes || []).map((code) => String(code || '').toUpperCase()));
+  if (!codeSet.size) {
+    return [];
+  }
+
+  const entries = new Set();
+  (state.leaves || []).forEach((leave) => {
+    if (String(leave.employee_id || '') !== String(employeeId || '')) {
+      return;
+    }
+    const leaveCode = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
+    if (!codeSet.has(leaveCode)) {
+      return;
+    }
+    enumerateLeaveDays(leave.date_from, leave.date_to).forEach((dateKey) => {
+      if (dateKey.startsWith(`${year}-`)) {
+        entries.add(dateKey);
+      }
+    });
+  });
+
+  const sorted = Array.from(entries).sort();
+  if (!sorted.length) {
+    return [];
+  }
+
+  const ranges = [];
+  let rangeStart = sorted[0];
+  let previous = sorted[0];
+
+  for (let index = 1; index < sorted.length; index += 1) {
+    const current = sorted[index];
+    if (isContinuousVacationPeriod(previous, current)) {
+      previous = current;
+      continue;
+    }
+    ranges.push([rangeStart, previous]);
+    rangeStart = current;
+    previous = current;
+  }
+  ranges.push([rangeStart, previous]);
+  return ranges;
+}
+
+async function deleteLeaveRangeByCodes(employeeId, rangeStart, rangeEnd, leaveCodes) {
+  const codeSet = new Set((leaveCodes || []).map((code) => String(code || '').toUpperCase()));
+  const matches = (state.leaves || []).filter((leave) => {
+    const code = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
+    if (String(leave.employee_id || '') !== String(employeeId || '') || !codeSet.has(code)) {
+      return false;
+    }
+    const leaveStart = normalizeDateOnly(leave.date_from);
+    const leaveEnd = normalizeDateOnly(leave.date_to);
+    return leaveStart && leaveEnd && !(leaveEnd < rangeStart || leaveStart > rangeEnd);
+  });
+
+  await Promise.all(matches.map(async (leave) => {
+    if (!leave?.id) return;
+    const response = await apiFetch(`/api/leaves/${leave.id}`, { method: 'DELETE' });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.message || 'Неуспешно изтриване на отсъствие.');
+    }
+  }));
+}
+
+async function createLeaveByCode(employeeId, leaveCode, dateFrom, dateTo) {
+  const targetCode = String(leaveCode || '').toUpperCase();
+  const leaveType = (state.leaveTypes || []).find((type) => String(type.code || '').toUpperCase() === targetCode);
+  if (!leaveType?.id) {
+    throw new Error('Липсва дефиниран тип отсъствие.');
+  }
+
+  const response = await apiFetch('/api/leaves', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      employee_id: employeeId,
+      leave_type_id: Number(leaveType.id),
+      date_from: dateFrom,
+      date_to: dateTo,
+      minutes_per_day: null,
+    }),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.message || 'Неуспешно добавяне на отсъствие.');
+  }
 }
 
 function openVacationCorrectionModal(employee, rangeStart, rangeEnd) {
@@ -3919,16 +4177,25 @@ async function setVacationShiftForDateRange(employee, startDateKey, endDateKey, 
 async function setShiftForCell({ employee, day, month, shiftCode }) {
   const monthKey = month || state.month || todayMonth();
   const localKey = scheduleKey(employee.id, monthKey, day);
+  const previousShiftCode = String(state.schedule[localKey] || 'P').toUpperCase();
   state.schedule[localKey] = shiftCode;
   saveScheduleLocal();
 
   const scheduleId = getEmployeeScheduleId(employee);
-  if (!scheduleId) {
+  if (scheduleId) {
+    state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = shiftCode;
+    await saveScheduleEntryBackend({ ...employee, scheduleId }, day, shiftCode, { monthKey, scheduleId });
+  }
+
+  if (String(shiftCode || '').toUpperCase() !== 'O' || previousShiftCode === 'O') {
     return;
   }
 
-  state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = shiftCode;
-  await saveScheduleEntryBackend({ ...employee, scheduleId }, day, shiftCode, { monthKey, scheduleId });
+  const leaveSync = await ensurePaidLeaveForScheduleCell(employee, monthKey, day);
+  if (leaveSync.created) {
+    await refreshMonthlyView();
+    setStatus('Смяната "О" е синхронизирана с таб Отпуски.', true);
+  }
 }
 
 async function correctVacationPeriod(employee, oldStartDateKey, oldEndDateKey, newStartDateKey, newWorkingDays) {
@@ -4119,6 +4386,8 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
 
     const leave = getLeaveForCell(employee.id, month, day);
     const effectiveShift = holiday ? 'P' : currentShift;
+    const leaveShiftCodeForDisplay = getLeaveShiftCodeForDisplay(leave);
+    const selectedShiftCodeForUI = leaveShiftCodeForDisplay || effectiveShift;
 
     if (holiday && currentShift !== 'P') {
       state.schedule[scheduleKey(employee.id, month, day)] = 'P';
@@ -4149,9 +4418,17 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       option.textContent = shift.label || shift.code;
       option.dataset.shiftCode = shift.code;
       option.dataset.shiftId = shift.id || '';
-      option.selected = shift.code === effectiveShift;
+      option.selected = String(shift.code || '').toUpperCase() === String(selectedShiftCodeForUI || '').toUpperCase();
       select.appendChild(option);
     });
+
+    if (!optionsToRender.some((shift) => String(shift.code || '').toUpperCase() === String(selectedShiftCodeForUI || '').toUpperCase())) {
+      const extraOption = document.createElement('option');
+      extraOption.value = selectedShiftCodeForUI;
+      extraOption.textContent = getLeaveBadgeLabel({ code: leave?.leave_type_code || leave?.leave_type?.code || selectedShiftCodeForUI });
+      extraOption.selected = true;
+      select.appendChild(extraOption);
+    }
 
     select.addEventListener('change', async () => {
       await setShiftForCell({ employee, day, month, shiftCode: select.value });
@@ -4327,9 +4604,13 @@ function renderSchedule() {
     return selectedSet.has(cleanStoredValue(employee.departmentId));
   });
 
-  const grouped = window.ScheduleGrouping?.groupEmployeesByDepartment
-    ? window.ScheduleGrouping.groupEmployeesByDepartment({ employees: visibleEmployees, departments: state.departments })
-    : { order: ['all'], map: { all: { deptId: 'all', deptName: 'Всички отдели', employees: visibleEmployees } } };
+  const shouldGroupByDepartments = state.selectedDepartmentId === DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS
+    || ![DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId);
+  const grouped = shouldGroupByDepartments
+    ? (window.ScheduleGrouping?.groupEmployeesByDepartment
+      ? window.ScheduleGrouping.groupEmployeesByDepartment({ employees: visibleEmployees, departments: state.departments })
+      : { order: ['all'], map: { all: { deptId: 'all', deptName: 'Всички отдели', employees: visibleEmployees } } })
+    : { order: ['all'], map: { all: { deptId: 'all', deptName: 'Всички служители', employees: visibleEmployees } } };
 
   const header = document.createElement('tr');
   header.innerHTML = '<th class="sticky">Служител / Отдел / Длъжност</th>';
@@ -4379,13 +4660,15 @@ function renderSchedule() {
     const group = grouped.map[deptId] || { deptName: 'Без отдел', employees: [] };
     const groupEmployees = Array.isArray(group.employees) ? group.employees : [];
 
-    const sectionRow = document.createElement('tr');
-    sectionRow.className = 'schedule-department-header-row';
-    const sectionCell = document.createElement('td');
-    sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length + 5;
-    sectionCell.innerHTML = `<b>${group.deptName}</b> <small>(${groupEmployees.length} служители)</small>`;
-    sectionRow.appendChild(sectionCell);
-    scheduleTable.appendChild(sectionRow);
+    if (shouldGroupByDepartments) {
+      const sectionRow = document.createElement('tr');
+      sectionRow.className = 'schedule-department-header-row';
+      const sectionCell = document.createElement('td');
+      sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length + 5;
+      sectionCell.innerHTML = `<b>${group.deptName}</b> <small>(${groupEmployees.length} служители)</small>`;
+      sectionRow.appendChild(sectionCell);
+      scheduleTable.appendChild(sectionRow);
+    }
 
     if (!groupEmployees.length) {
       const emptyRow = document.createElement('tr');
@@ -4412,25 +4695,27 @@ function renderSchedule() {
       ? window.ScheduleTotals.sumGridTotals(employeeSnapshotTotalsList)
       : sumGridTotals(employeeSnapshotTotalsList);
 
-    const deptRow = document.createElement('tr');
-    const deptLabel = document.createElement('td');
-    deptLabel.className = 'sticky';
-    deptLabel.innerHTML = `<b>Общо ${group.deptName}</b>`;
-    deptRow.appendChild(deptLabel);
-    for (let day = 1; day <= totalDays; day += 1) {
-      const filler = document.createElement('td');
-      filler.className = 'summary-col';
-      filler.textContent = mode === 'sections' ? '·' : '—';
-      deptRow.appendChild(filler);
+    if (shouldGroupByDepartments) {
+      const deptRow = document.createElement('tr');
+      const deptLabel = document.createElement('td');
+      deptLabel.className = 'sticky';
+      deptLabel.innerHTML = `<b>Общо ${group.deptName}</b>`;
+      deptRow.appendChild(deptLabel);
+      for (let day = 1; day <= totalDays; day += 1) {
+        const filler = document.createElement('td');
+        filler.className = 'summary-col';
+        filler.textContent = mode === 'sections' ? '·' : '—';
+        deptRow.appendChild(filler);
+      }
+      for (let idx = 0; idx < visibleSummaryColumns.length; idx += 1) {
+        const filler = document.createElement('td');
+        filler.className = 'summary-col';
+        filler.textContent = '—';
+        deptRow.appendChild(filler);
+      }
+      appendSnapshotTotalsColumns(deptRow, deptTotals, true);
+      scheduleTable.appendChild(deptRow);
     }
-    for (let idx = 0; idx < visibleSummaryColumns.length; idx += 1) {
-      const filler = document.createElement('td');
-      filler.className = 'summary-col';
-      filler.textContent = '—';
-      deptRow.appendChild(filler);
-    }
-    appendSnapshotTotalsColumns(deptRow, deptTotals, true);
-    scheduleTable.appendChild(deptRow);
   });
 
   if (visibleEmployees.length) {
@@ -4633,7 +4918,7 @@ function normalizeShiftCodeForApi(input) {
     return '';
   }
   const latinUpper = raw.toUpperCase();
-  if (['R', 'P', 'O', 'B'].includes(latinUpper)) {
+  if (['R', 'P', 'O', 'B', 'N', 'S', 'M'].includes(latinUpper)) {
     return latinUpper;
   }
   const cyrillicMap = {
@@ -4643,6 +4928,12 @@ function normalizeShiftCodeForApi(input) {
     'п': 'P',
     'О': 'O',
     'о': 'O',
+    'Н': 'N',
+    'н': 'N',
+    'С': 'S',
+    'с': 'S',
+    'М': 'M',
+    'м': 'M',
     'Б': 'B',
     'б': 'B',
   };
@@ -5964,10 +6255,29 @@ function enumerateLeaveDays(dateFrom, dateTo) {
 
 function getLeaveBadgeLabel(leaveType) {
   const code = String(leaveType?.code || '').toUpperCase();
-  if (code === 'SICK') {
-    return 'Б';
+  const map = {
+    SICK: 'Б',
+    UNPAID: 'Н',
+    MATERNITY: 'М',
+    SELF_ABSENCE: 'С',
+    ABSENCE: 'С',
+  };
+  if (map[code]) {
+    return map[code];
   }
   return String(leaveType?.name || code || 'L').slice(0, 2).toUpperCase();
+}
+
+function getLeaveShiftCodeForDisplay(leave) {
+  const code = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
+  const map = {
+    SICK: 'B',
+    UNPAID: 'N',
+    MATERNITY: 'M',
+    SELF_ABSENCE: 'S',
+    ABSENCE: 'S',
+  };
+  return map[code] || null;
 }
 
 function rebuildLeavesIndex() {
@@ -6250,7 +6560,7 @@ async function loadDepartmentShifts(departmentId, options = {}) {
         hours: Number(shift.hours || calcShiftHours(shift.start || shift.start_time || '', shift.end || shift.end_time || '')) || 0,
         break_minutes: Number(shift.break_minutes || 0),
         break_included: Boolean(shift.break_included),
-        locked: ['P', 'O', 'B', 'R'].includes(String(shift.code || '').toUpperCase())
+        locked: ['P', 'O', 'B', 'N', 'S', 'M', 'R'].includes(String(shift.code || '').toUpperCase())
       })) : [];
       state.departmentShiftsCache[departmentId] = mergeShiftTemplates(mapped);
       return state.departmentShiftsCache[departmentId];

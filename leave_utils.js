@@ -51,8 +51,9 @@ function getLeaveShortLabel(leaveType) {
   const code = String(leaveType?.code || '').toUpperCase();
   if (code === 'SICK') return 'Б';
   if (code === 'PAID_LEAVE') return 'О';
-  if (code === 'UNPAID') return 'НП';
+  if (code === 'UNPAID') return 'Н';
   if (code === 'MATERNITY') return 'М';
+  if (code === 'SELF_ABSENCE' || code === 'ABSENCE') return 'С';
   return String(leaveType?.name || code || 'L').slice(0, 2).toUpperCase();
 }
 
