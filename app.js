@@ -2998,9 +2998,9 @@ function renderLegend() {
   legendShifts.forEach((shift) => {
     const span = document.createElement('span');
     if (shift.type === 'work') {
-      span.innerHTML = `<b>${shift.code}</b> - ${shift.name} (${shift.start}-${shift.end}, ${shift.hours}ч)`;
+      span.innerHTML = `<b>${getShiftDisplayLabel(shift)}</b> - ${shift.name} (${shift.start}-${shift.end}, ${shift.hours}ч)`;
     } else {
-      span.innerHTML = `<b>${shift.code}</b> - ${shift.name}`;
+      span.innerHTML = `<b>${getShiftDisplayLabel(shift)}</b> - ${shift.name}`;
     }
     shiftLegend.appendChild(span);
   });
@@ -5045,7 +5045,7 @@ function normalizeShiftCodeForApi(input) {
 
 function toCyrillicShiftLabel(input) {
   const latinToCyrillicMap = {
-    A: 'А', B: 'Б', C: 'Ц', D: 'Д', E: 'Е', F: 'Ф', G: 'Г', H: 'Х', I: 'И', J: 'Й',
+    A: 'А', B: 'Б', C: 'С', D: 'Д', E: 'Е', F: 'Ф', G: 'Г', H: 'Х', I: 'И', J: 'Й',
     K: 'К', L: 'Л', M: 'М', N: 'Н', O: 'О', P: 'П', Q: 'К', R: 'Р', S: 'С', T: 'Т',
     U: 'У', V: 'В', W: 'У', X: 'Х', Y: 'Й', Z: 'З'
   };
@@ -5057,7 +5057,11 @@ function toCyrillicShiftLabel(input) {
 }
 
 function getShiftDisplayLabel(shift) {
-  return toCyrillicShiftLabel(shift?.label || shift?.code || '');
+  const displayCode = toCyrillicShiftLabel(shift?.label || shift?.code || '');
+  if (/^[12]С$/u.test(displayCode)) {
+    return `${displayCode}М`;
+  }
+  return displayCode;
 }
 
 function getShiftByCode(code) {
