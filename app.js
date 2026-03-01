@@ -4063,6 +4063,12 @@ function getShiftCodeForCell(employee, month, day) {
   return localValue;
 }
 
+
+function isAdditionalShiftCode(shiftCode) {
+  const normalized = String(shiftCode || '').trim().toUpperCase();
+  return /^\d+CM$/.test(normalized);
+}
+
 function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDays, monthLocked, visibleSummaryColumns, totals, employeeSnapshotTotalsList }) {
   const row = document.createElement('tr');
   const nameCell = document.createElement('td');
@@ -4179,7 +4185,7 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       cell.appendChild(marker);
     }
 
-    if (safeNum(entrySnapshot?.overtimeMinutes) > 0) {
+    if (!isAdditionalShiftCode(effectiveShift) && safeNum(entrySnapshot?.overtimeMinutes) > 0) {
       const overtimeBadge = document.createElement('span');
       overtimeBadge.className = 'cell-ot-badge';
       overtimeBadge.textContent = 'OT';
@@ -4188,7 +4194,7 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       cell.appendChild(overtimeBadge);
     }
 
-    if (leave?.leave_type_code || leave?.leave_type?.code) {
+    if (!isAdditionalShiftCode(effectiveShift) && (leave?.leave_type_code || leave?.leave_type?.code)) {
       const leaveCode = String(leave.leave_type_code || leave.leave_type?.code || '').toUpperCase();
       const leaveName = leave.leave_type_name || leave.leave_type?.name || 'Отсъствие';
       const leaveBadge = document.createElement('span');
