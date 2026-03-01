@@ -4525,6 +4525,14 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       select.appendChild(option);
     });
 
+    if (!optionsToRender.some((shift) => String(shift.code || '').toUpperCase() === String(selectedShiftCodeForUI || '').toUpperCase())) {
+      const extraOption = document.createElement('option');
+      extraOption.value = selectedShiftCodeForUI;
+      extraOption.textContent = getLeaveBadgeLabel({ code: leave?.leave_type_code || leave?.leave_type?.code || selectedShiftCodeForUI });
+      extraOption.selected = true;
+      select.appendChild(extraOption);
+    }
+
     select.addEventListener('change', async () => {
       await setShiftForCell({ employee, day, month, shiftCode: select.value });
       renderSchedule();
@@ -6352,6 +6360,18 @@ function getLeaveBadgeLabel(leaveType) {
     return map[code];
   }
   return String(leaveType?.name || code || 'L').slice(0, 2).toUpperCase();
+}
+
+function getLeaveShiftCodeForDisplay(leave) {
+  const code = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
+  const map = {
+    SICK: 'B',
+    UNPAID: 'N',
+    MATERNITY: 'M',
+    SELF_ABSENCE: 'S',
+    ABSENCE: 'S',
+  };
+  return map[code] || null;
 }
 
 function rebuildLeavesIndex() {
