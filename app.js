@@ -4525,11 +4525,20 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
       select.appendChild(option);
     });
 
-    if (!optionsToRender.some((shift) => String(shift.code || '').toUpperCase() === String(selectedShiftCodeForUI || '').toUpperCase())) {
+    const optionCodes = optionsToRender.map((shift) => String(shift.code || '').toUpperCase());
+    const missingEffectiveShift = effectiveShift && !optionCodes.includes(String(effectiveShift).toUpperCase())
+      ? String(effectiveShift).toUpperCase()
+      : '';
+    const missingUiShift = uiShiftCode && !optionCodes.includes(String(uiShiftCode).toUpperCase())
+      ? String(uiShiftCode).toUpperCase()
+      : '';
+    const missingCode = missingEffectiveShift || missingUiShift;
+
+    if (missingCode) {
       const extraOption = document.createElement('option');
-      extraOption.value = selectedShiftCodeForUI;
-      extraOption.textContent = getLeaveBadgeLabel({ code: leave?.leave_type_code || leave?.leave_type?.code || selectedShiftCodeForUI });
-      extraOption.selected = true;
+      extraOption.value = missingCode;
+      extraOption.textContent = getLeaveBadgeLabel({ code: leave?.leave_type_code || leave?.leave_type?.code || missingCode });
+      extraOption.selected = missingCode === String(effectiveShift || '').toUpperCase() || (!effectiveShift && missingCode === String(uiShiftCode || '').toUpperCase());
       select.appendChild(extraOption);
     }
 
@@ -6376,7 +6385,7 @@ function getLeaveBadgeLabel(leaveType) {
   if (map[code]) {
     return map[code];
   }
-  return String(leaveType?.name || code || 'L').slice(0, 2).toUpperCase();
+  return toCyrillicShiftLabel(String(leaveType?.name || code || 'Л').slice(0, 2).toUpperCase());
 }
 
 function getLeaveShiftCodeForDisplay(leave) {
