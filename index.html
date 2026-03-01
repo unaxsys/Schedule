@@ -147,20 +147,7 @@
             <button id="exportPdfBtn" type="button">Експорт PDF</button>
             <span id="lockStatus" class="lock-status">Статус: Отключен</span>
           </div>
-          <div class="panel" style="margin: 12px 0;">
-            <h3>Управление на отсъствия</h3>
-            <div class="row">
-              <select id="leaveEmployeeSelect"></select>
-              <select id="leaveTypeSelect"></select>
-              <input id="leaveFromInput" type="date" />
-              <input id="leaveToInput" type="date" />
-              <input id="leaveMinutesInput" type="number" min="1" placeholder="минути/ден (по избор)" />
-              <button id="addLeaveBtn" type="button">Добави отсъствие</button>
-            </div>
-            <div id="leaveList" class="schedule-list"></div>
-          </div>
           <div id="monthInfo" class="month-info"></div>
-          <div id="scheduleOverviewPanel" class="schedule-overview-panel"></div>
           <div class="legend" id="shiftLegend"></div>
           <div class="table-wrap">
             <table id="scheduleTable"></table>
@@ -275,6 +262,18 @@
 
         <section id="vacationTab" class="panel tab-panel">
           <h2>Отпуски</h2>
+          <div class="panel vacation-leave-panel">
+            <h3>Управление на отсъствия</h3>
+            <div class="row">
+              <select id="leaveEmployeeSelect"></select>
+              <select id="leaveTypeSelect"></select>
+              <input id="leaveFromInput" type="date" />
+              <input id="leaveToInput" type="date" />
+              <input id="leaveMinutesInput" type="number" min="1" placeholder="минути/ден (по избор)" />
+              <button id="addLeaveBtn" type="button">Добави отсъствие</button>
+            </div>
+            <div id="leaveList" class="schedule-list"></div>
+          </div>
           <form id="vacationForm" class="row">
             <select id="vacationEmployeeSelect" required></select>
             <input id="vacationStartInput" type="date" required />
@@ -603,7 +602,7 @@
 
     <script src="./scheduleTotals.js"></script>
     <script src="./scheduleGrouping.js"></script>
-    <script src="./app.js"></script>
+    <script src="./app.js?v=20260301-2"></script>
     <script src="./welcome.js"></script>
   </body>
 </html>
