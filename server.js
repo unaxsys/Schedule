@@ -642,7 +642,12 @@ function requireSuperAdmin(req, res, next) {
 async function resolveTenantId(req) {
   const isSuperAdmin = req.user?.is_super_admin === true;
   if (isSuperAdmin) {
-    const requestedTenantId = cleanStr(req.body?.tenantId || req.body?.registrationId || req.query?.tenantId);
+    const requestedTenantId = cleanStr(
+      req.body?.tenantId
+      || req.body?.registrationId
+      || req.query?.tenantId
+      || req.get('x-tenant-id')
+    );
     if (isPlatformRoute(req)) {
       if (!requestedTenantId) {
         throw createHttpError(400, 'Липсва tenantId (избери организация).');
@@ -654,6 +659,13 @@ async function resolveTenantId(req) {
     }
 
     const explicitActiveTenantId = cleanStr(req.user?.active_tenant_id || req.user?.tenant_id);
+    if (requestedTenantId) {
+      if (!isValidUuid(requestedTenantId)) {
+        throw createHttpError(400, 'Невалиден tenantId.');
+      }
+      return requestedTenantId;
+    }
+
     if (!explicitActiveTenantId || !isValidUuid(explicitActiveTenantId)) {
       console.warn('TENANT RESOLUTION BLOCKED: super admin without explicit active tenant on non-platform route', {
         path: req.path,

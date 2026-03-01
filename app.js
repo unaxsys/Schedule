@@ -815,6 +815,8 @@ async function completeTenantSelection(tenantId) {
     state.requiresTenantSelection = false;
     state.authToken = payload.token;
     state.currentUser = payload.user;
+    state.selectedTenantId = payload.tenant?.id || tenantId;
+    persistSelectedTenantId();
     syncRoleFromAuthenticatedUser();
     persistAuthSession();
     resetTenantScopedState({ clearLocalStorage: false });
@@ -1098,6 +1100,8 @@ function attachTenantSwitcherControls() {
         ...(state.currentUser || {}),
         tenantId: payload.tenant?.id || tenantId,
       };
+      state.selectedTenantId = payload.tenant?.id || tenantId;
+      persistSelectedTenantId();
       persistAuthSession();
       resetTenantScopedState({ clearLocalStorage: false });
       await loadMyTenants();
@@ -5146,6 +5150,10 @@ async function apiFetch(path, options = {}) {
 
   const headers = new Headers(fetchOptions.headers || {});
   headers.set('X-User-Role', state.userRole);
+  const resolvedTenantId = cleanStoredValue(state.selectedTenantId || state.currentUser?.tenantId);
+  if (isValidUuid(resolvedTenantId)) {
+    headers.set('X-Tenant-Id', resolvedTenantId);
+  }
   if (state.authToken) {
     headers.set('Authorization', `Bearer ${state.authToken}`);
   }
