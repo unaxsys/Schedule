@@ -3911,6 +3911,17 @@ function renderVacationLedger() {
   });
 }
 
+
+function normalizeLeaveDossierTitle(title) {
+  const raw = String(title || '').replace(/^\s*Досие:\s*/i, '').trim();
+  if (!raw) {
+    return 'Отсъствие';
+  }
+  if (raw === 'Болнични') {
+    return 'Болничен';
+  }
+  return raw;
+}
 function getSupplementaryLeaveDossiersForYear(employeeId, year) {
   const tracked = [
     { codes: ['SICK'], title: 'Болничен' },
@@ -3921,7 +3932,7 @@ function getSupplementaryLeaveDossiersForYear(employeeId, year) {
 
   return tracked
     .map((entry) => ({
-      title: entry.title,
+      title: normalizeLeaveDossierTitle(entry.title),
       codes: entry.codes,
       ranges: getLeaveRangesForYearByCodes(employeeId, year, entry.codes),
     }))
@@ -4017,67 +4028,6 @@ async function createLeaveByCode(employeeId, leaveCode, dateFrom, dateTo) {
     const payload = await response.json().catch(() => ({}));
     throw new Error(payload.message || 'Неуспешно добавяне на отсъствие.');
   }
-}
-
-function getSupplementaryLeaveDossiersForYear(employeeId, year) {
-  const tracked = [
-    { codes: ['SICK'], title: 'Досие: Болнични' },
-    { codes: ['UNPAID'], title: 'Досие: Неплатен отпуск' },
-    { codes: ['MATERNITY'], title: 'Досие: Майчинство' },
-    { codes: ['SELF_ABSENCE', 'ABSENCE'], title: 'Досие: Самоотлъчка' },
-  ];
-
-  return tracked
-    .map((entry) => ({
-      title: entry.title,
-      ranges: getLeaveRangesForYearByCodes(employeeId, year, entry.codes),
-    }))
-    .filter((entry) => entry.ranges.length);
-}
-
-function getLeaveRangesForYearByCodes(employeeId, year, leaveCodes) {
-  const codeSet = new Set((leaveCodes || []).map((code) => String(code || '').toUpperCase()));
-  if (!codeSet.size) {
-    return [];
-  }
-
-  const entries = new Set();
-  (state.leaves || []).forEach((leave) => {
-    if (String(leave.employee_id || '') !== String(employeeId || '')) {
-      return;
-    }
-    const leaveCode = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
-    if (!codeSet.has(leaveCode)) {
-      return;
-    }
-    enumerateLeaveDays(leave.date_from, leave.date_to).forEach((dateKey) => {
-      if (dateKey.startsWith(`${year}-`)) {
-        entries.add(dateKey);
-      }
-    });
-  });
-
-  const sorted = Array.from(entries).sort();
-  if (!sorted.length) {
-    return [];
-  }
-
-  const ranges = [];
-  let rangeStart = sorted[0];
-  let previous = sorted[0];
-
-  for (let index = 1; index < sorted.length; index += 1) {
-    const current = sorted[index];
-    if (isContinuousVacationPeriod(previous, current)) {
-      previous = current;
-      continue;
-    }
-    ranges.push([rangeStart, previous]);
-    rangeStart = current;
-    previous = current;
-  }
-  ranges.push([rangeStart, previous]);
-  return ranges;
 }
 
 function openVacationCorrectionModal(employee, rangeStart, rangeEnd) {
