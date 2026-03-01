@@ -139,10 +139,6 @@ const generateRotateEmployees = document.getElementById('generateRotateEmployees
 const generateIncludeWeekends = document.getElementById('generateIncludeWeekends');
 const generateEnforce24h = document.getElementById('generateEnforce24h');
 const generateRestHoursInput = document.getElementById('generateRestHoursInput');
-const scheduleDepartmentMultiSelect = document.getElementById('scheduleDepartmentMultiSelect');
-const scheduleDepartmentChips = document.getElementById('scheduleDepartmentChips');
-const scheduleSelectAllDepartmentsBtn = document.getElementById('scheduleSelectAllDepartmentsBtn');
-const scheduleClearDepartmentsBtn = document.getElementById('scheduleClearDepartmentsBtn');
 const scheduleViewModeSelect = document.getElementById('scheduleViewModeSelect');
 const scheduleNameInput = document.getElementById('scheduleNameInput');
 const createScheduleBtn = document.getElementById('createScheduleBtn');
@@ -1264,73 +1260,8 @@ function setSelectedDepartments(nextIds) {
   renderSchedule();
 }
 
-function removeSelectedDepartment(departmentId) {
-  setSelectedDepartments((state.selectedDepartmentIds || []).filter((item) => item !== departmentId));
-}
 
 function renderDepartmentMultiSelect() {
-  if (!scheduleDepartmentMultiSelect || !scheduleDepartmentChips) {
-    return;
-  }
-
-  const selectedSet = getSelectedDepartmentIdsSet();
-  scheduleDepartmentMultiSelect.innerHTML = '';
-  state.departments.forEach((department) => {
-    const row = document.createElement('div');
-    row.className = 'schedule-multi-option';
-
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = selectedSet.has(department.id);
-    checkbox.addEventListener('change', () => {
-      const current = getSelectedDepartmentIdsSet();
-      if (checkbox.checked) {
-        current.add(department.id);
-      } else {
-        current.delete(department.id);
-      }
-      setSelectedDepartments(Array.from(current));
-    });
-
-    const label = document.createElement('span');
-    label.textContent = department.name;
-
-    const singleBtn = document.createElement('button');
-    singleBtn.type = 'button';
-    singleBtn.className = 'schedule-single-dept-btn';
-    singleBtn.textContent = 'Само този отдел';
-    singleBtn.addEventListener('click', () => {
-      setSelectedDepartments([department.id]);
-    });
-
-    row.appendChild(checkbox);
-    row.appendChild(label);
-    row.appendChild(singleBtn);
-    scheduleDepartmentMultiSelect.appendChild(row);
-  });
-
-  scheduleDepartmentChips.innerHTML = '';
-  const selectedDepartments = state.departments.filter((department) => selectedSet.has(department.id));
-  if (!selectedDepartments.length) {
-    const chip = document.createElement('span');
-    chip.className = 'schedule-chip schedule-chip--all';
-    chip.textContent = 'ОБЩ (всички отдели)';
-    scheduleDepartmentChips.appendChild(chip);
-  } else {
-    selectedDepartments.forEach((department) => {
-      const chip = document.createElement('span');
-      chip.className = 'schedule-chip';
-      chip.textContent = department.name;
-
-      const removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.textContent = '×';
-      removeBtn.addEventListener('click', () => removeSelectedDepartment(department.id));
-      chip.appendChild(removeBtn);
-      scheduleDepartmentChips.appendChild(chip);
-    });
-  }
-
   if (scheduleViewModeSelect) {
     scheduleViewModeSelect.value = state.scheduleViewMode || 'combined';
   }
@@ -1342,23 +1273,14 @@ function attachDepartmentControls() {
       state.selectedDepartmentId = scheduleFilterDepartmentSelect.value || DEPARTMENT_VIEW_ALL;
       if (![DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)) {
         setSelectedDepartments([state.selectedDepartmentId]);
+      } else {
+        setSelectedDepartments([]);
       }
       await refreshMonthlyView();
       renderAll();
     });
   }
 
-  if (scheduleSelectAllDepartmentsBtn) {
-    scheduleSelectAllDepartmentsBtn.addEventListener('click', () => {
-      setSelectedDepartments(state.departments.map((department) => department.id));
-    });
-  }
-
-  if (scheduleClearDepartmentsBtn) {
-    scheduleClearDepartmentsBtn.addEventListener('click', () => {
-      setSelectedDepartments([]);
-    });
-  }
 
   if (scheduleViewModeSelect) {
     scheduleViewModeSelect.addEventListener('change', () => {
@@ -1747,6 +1669,12 @@ async function createScheduleForCurrentMonth() {
   if (created?.id) {
     state.activeScheduleId = created.id;
     state.selectedScheduleIds = [created.id, ...state.selectedScheduleIds.filter((id) => id !== created.id)];
+    state.hasManualScheduleSelection = true;
+    state.selectedDepartmentId = DEPARTMENT_VIEW_ALL;
+    setSelectedDepartments([]);
+    if (scheduleFilterDepartmentSelect) {
+      scheduleFilterDepartmentSelect.value = DEPARTMENT_VIEW_ALL;
+    }
   }
 
   if (scheduleNameInput) {
