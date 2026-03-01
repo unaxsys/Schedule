@@ -4066,7 +4066,7 @@ function getShiftCodeForCell(employee, month, day) {
 
 function isAdditionalShiftCode(shiftCode) {
   const normalized = String(shiftCode || '').trim().toUpperCase();
-  return /^\d+CM$/.test(normalized);
+  return /^\d+\s*[CС][MМ]$/.test(normalized);
 }
 
 function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDays, monthLocked, visibleSummaryColumns, totals, employeeSnapshotTotalsList }) {
