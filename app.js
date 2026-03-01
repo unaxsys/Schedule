@@ -6117,8 +6117,8 @@ function mergeShiftTemplates(backendShiftTemplates) {
       end: String(shift.end || ''),
       hours: getStoredShiftHours(shift),
       locked: false,
-      break_minutes: Math.max(0, Number(shift.break_minutes || shift.breakMinutes || 0)),
-      break_included: Boolean(shift.break_included ?? shift.breakIncluded)
+      break_minutes: breakMinutes,
+      break_included: breakIncluded
     });
   });
 
