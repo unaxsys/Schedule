@@ -4947,7 +4947,12 @@ function getStoredShiftHours(shift) {
   if (Number.isFinite(configuredHours) && configuredHours > 0) {
     return configuredHours;
   }
-  return calcShiftHours(String(shift.start || ''), String(shift.end || ''));
+  return calcShiftHours(
+    String(shift.start || ''),
+    String(shift.end || ''),
+    Number(shift.break_minutes ?? shift.breakMinutes ?? 0),
+    Boolean(shift.break_included ?? shift.breakIncluded)
+  );
 }
 
 function getWorkShiftHours(shift) {
@@ -6499,7 +6504,8 @@ function mergeShiftTemplates(backendShiftTemplates) {
 
   backendShiftTemplates.forEach((shift) => {
     const code = String(shift.code || '').trim().toUpperCase();
-    if (!code || merged.some((existing) => existing.code === code)) {
+    const departmentId = cleanStoredValue(shift.departmentId || shift.department_id) || null;
+    if (!code || merged.some((existing) => existing.code === code && cleanStoredValue(existing.departmentId) === (departmentId || ''))) {
       return;
     }
 
@@ -6508,7 +6514,7 @@ function mergeShiftTemplates(backendShiftTemplates) {
       code,
       label: toCyrillicShiftLabel(code),
       name: String(shift.name || code),
-      departmentId: cleanStoredValue(shift.departmentId || shift.department_id) || null,
+      departmentId,
       type: 'work',
       start: String(shift.start || ''),
       end: String(shift.end || ''),
@@ -6586,7 +6592,7 @@ function calcNightHours(start, end) {
   return Number((nightMinutes / 60).toFixed(2));
 }
 
-function calcShiftHours(start, end) {
+function calcShiftHours(start, end, breakMinutes = 0, breakIncluded = false) {
   if (!start || !end) {
     return 0;
   }
@@ -6605,12 +6611,13 @@ function calcShiftHours(start, end) {
     endMinutes += 24 * 60;
   }
 
-  const totalHours = (endMinutes - startMinutes) / 60;
-  const paidHours = totalHours >= BREAK_DEDUCTION_THRESHOLD_HOURS
-    ? Math.max(totalHours - STANDARD_BREAK_HOURS, 0)
-    : totalHours;
+  const totalMinutes = endMinutes - startMinutes;
+  const normalizedBreakMinutes = Math.max(0, Number(breakMinutes) || 0);
+  const workedMinutes = breakIncluded
+    ? totalMinutes
+    : Math.max(totalMinutes - normalizedBreakMinutes, 0);
 
-  return Number(paidHours.toFixed(2));
+  return Number((workedMinutes / 60).toFixed(2));
 }
 
 function todayMonth() {
