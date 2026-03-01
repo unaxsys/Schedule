@@ -1844,7 +1844,7 @@ function attachShiftForm() {
 
     state.shiftTemplates.push({
       code,
-      label: code,
+      label: toCyrillicShiftLabel(code),
       name,
       departmentId,
       type: 'work',
@@ -4518,18 +4518,27 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
     optionsToRender.forEach((shift) => {
       const option = document.createElement('option');
       option.value = shift.code;
-      option.textContent = shift.label || shift.code;
+      option.textContent = getShiftDisplayLabel(shift);
       option.dataset.shiftCode = shift.code;
       option.dataset.shiftId = shift.id || '';
       option.selected = shift.code === effectiveShift || (uiShiftCode && shift.code === uiShiftCode && !effectiveShift);
       select.appendChild(option);
     });
 
-    if (!optionsToRender.some((shift) => String(shift.code || '').toUpperCase() === String(selectedShiftCodeForUI || '').toUpperCase())) {
+    const optionCodes = optionsToRender.map((shift) => String(shift.code || '').toUpperCase());
+    const missingEffectiveShift = effectiveShift && !optionCodes.includes(String(effectiveShift).toUpperCase())
+      ? String(effectiveShift).toUpperCase()
+      : '';
+    const missingUiShift = uiShiftCode && !optionCodes.includes(String(uiShiftCode).toUpperCase())
+      ? String(uiShiftCode).toUpperCase()
+      : '';
+    const missingCode = missingEffectiveShift || missingUiShift;
+
+    if (missingCode) {
       const extraOption = document.createElement('option');
-      extraOption.value = selectedShiftCodeForUI;
-      extraOption.textContent = getLeaveBadgeLabel({ code: leave?.leave_type_code || leave?.leave_type?.code || selectedShiftCodeForUI });
-      extraOption.selected = true;
+      extraOption.value = missingCode;
+      extraOption.textContent = getLeaveBadgeLabel({ code: leave?.leave_type_code || leave?.leave_type?.code || missingCode });
+      extraOption.selected = missingCode === String(effectiveShift || '').toUpperCase() || (!effectiveShift && missingCode === String(uiShiftCode || '').toUpperCase());
       select.appendChild(extraOption);
     }
 
@@ -5032,6 +5041,23 @@ function normalizeShiftCodeForApi(input) {
     'б': 'B',
   };
   return cyrillicMap[raw] || latinUpper;
+}
+
+function toCyrillicShiftLabel(input) {
+  const latinToCyrillicMap = {
+    A: 'А', B: 'Б', C: 'Ц', D: 'Д', E: 'Е', F: 'Ф', G: 'Г', H: 'Х', I: 'И', J: 'Й',
+    K: 'К', L: 'Л', M: 'М', N: 'Н', O: 'О', P: 'П', Q: 'К', R: 'Р', S: 'С', T: 'Т',
+    U: 'У', V: 'В', W: 'У', X: 'Х', Y: 'Й', Z: 'З'
+  };
+
+  return String(input || '')
+    .split('')
+    .map((char) => latinToCyrillicMap[char.toUpperCase()] || char)
+    .join('');
+}
+
+function getShiftDisplayLabel(shift) {
+  return toCyrillicShiftLabel(shift?.label || shift?.code || '');
 }
 
 function getShiftByCode(code) {
@@ -6359,7 +6385,7 @@ function getLeaveBadgeLabel(leaveType) {
   if (map[code]) {
     return map[code];
   }
-  return String(leaveType?.name || code || 'L').slice(0, 2).toUpperCase();
+  return toCyrillicShiftLabel(String(leaveType?.name || code || 'Л').slice(0, 2).toUpperCase());
 }
 
 function getLeaveShiftCodeForDisplay(leave) {
@@ -6476,7 +6502,7 @@ function mergeShiftTemplates(backendShiftTemplates) {
     merged.push({
       id: shift.id || null,
       code,
-      label: code,
+      label: toCyrillicShiftLabel(code),
       name: String(shift.name || code),
       departmentId: cleanStoredValue(shift.departmentId || shift.department_id) || null,
       type: 'work',
@@ -6645,7 +6671,7 @@ async function loadDepartmentShifts(departmentId, options = {}) {
       const mapped = Array.isArray(payload.shifts) ? payload.shifts.map((shift) => ({
         id: shift.id || null,
         code: String(shift.code || '').toUpperCase(),
-        label: String(shift.code || '').toUpperCase(),
+        label: toCyrillicShiftLabel(String(shift.code || '').toUpperCase()),
         name: String(shift.name || shift.code || ''),
         departmentId: cleanStoredValue(shift.departmentId || shift.department_id) || null,
         type: 'work',
