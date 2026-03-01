@@ -1237,13 +1237,17 @@ function persistScheduleReviewPreferences() {
 }
 
 function getEffectiveSingleDepartmentFilter() {
+  if ([DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)) {
+    return null;
+  }
+
+  if (state.selectedDepartmentId) {
+    return state.selectedDepartmentId;
+  }
+
   const selectedIds = (state.selectedDepartmentIds || []).filter(Boolean);
   if (selectedIds.length === 1) {
     return selectedIds[0];
-  }
-
-  if (state.selectedDepartmentId && ![DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)) {
-    return state.selectedDepartmentId;
   }
 
   return null;
