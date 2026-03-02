@@ -109,6 +109,15 @@ header p {
   background: #ef4444;
 }
 
+.backend-connection-indicator--online .backend-connection-dot {
+  background: #22c55e;
+}
+
+.backend-connection-indicator--offline .backend-connection-dot {
+  background: #ef4444;
+}
+
+
 .backend-connection-text {
   font-size: 0.78rem;
   font-weight: 700;
