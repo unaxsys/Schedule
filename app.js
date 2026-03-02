@@ -3560,6 +3560,13 @@ async function removeLeaveForScheduleCellByCode(employee, monthKey, day, leaveCo
   });
 
   if (!matches.length) {
+    const leaveForCell = getLeaveForCell(employee.id, monthKey, day);
+    if (leaveForCell?.id && String(leaveForCell.employee_id || '') === String(employee.id || '')) {
+      matches.push(leaveForCell);
+    }
+  }
+
+  if (!matches.length) {
     return { removed: false };
   }
 
@@ -3572,10 +3579,15 @@ async function removeLeaveForScheduleCellByCode(employee, monthKey, day, leaveCo
       throw new Error(payload.message || 'Неуспешно изтриване на отсъствие.');
     }
 
+    const leaveTypeIdForSplit = Number(leave.leave_type_id || getLeaveTypeByCode(String(leave?.leave_type_code || leave?.leave_type?.code || ''))?.id);
+    if (!Number.isFinite(leaveTypeIdForSplit) || leaveTypeIdForSplit <= 0) {
+      continue;
+    }
+
     if (from && from < dateKey) {
       await createLeaveEntry({
         employeeId: employee.id,
-        leaveTypeId: Number(leave.leave_type_id),
+        leaveTypeId: leaveTypeIdForSplit,
         dateFrom: from,
         dateTo: addDaysToDateKey(dateKey, -1),
       });
@@ -3583,7 +3595,7 @@ async function removeLeaveForScheduleCellByCode(employee, monthKey, day, leaveCo
     if (to && to > dateKey) {
       await createLeaveEntry({
         employeeId: employee.id,
-        leaveTypeId: Number(leave.leave_type_id),
+        leaveTypeId: leaveTypeIdForSplit,
         dateFrom: addDaysToDateKey(dateKey, 1),
         dateTo: to,
       });
