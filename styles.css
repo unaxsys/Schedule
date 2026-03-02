@@ -109,6 +109,19 @@ header p {
   background: #ef4444;
 }
 
+.backend-connection-text {
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.backend-connection-text--online {
+  color: #86efac;
+}
+
+.backend-connection-text--offline {
+  color: #fca5a5;
+}
+
 @media (max-width: 768px) {
   .status-toast {
     left: 0.75rem;
