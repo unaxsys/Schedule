@@ -75,10 +75,6 @@
       <h1>Планиране на смени</h1>
       <p>Управление на отдели, длъжности, графици, отпуски и болнични.</p>
       <small id="storageStatus" class="status-toast status-warn status-toast-visible">Проверка за PostgreSQL бекенд...</small>
-      <div class="backend-connection-indicator" aria-live="polite">
-        <span id="backendConnectionDot" class="backend-connection-dot backend-connection-dot--offline" title="Няма връзка"></span>
-        <span>Връзка към сървъра</span>
-      </div>
       <div class="api-config">
         <label for="apiUrlInput">API URL:</label>
         <input id="apiUrlInput" type="text" placeholder="http://46.183.117.128:4000" />
@@ -149,8 +145,17 @@
           </div>
           <div id="monthInfo" class="month-info"></div>
           <div class="legend" id="shiftLegend"></div>
-          <div class="table-wrap">
-            <table id="scheduleTable"></table>
+          <div class="schedule-zoom-controls" aria-label="Контроли за мащаба на графика">
+            <span>Мащаб на графика:</span>
+            <button id="scheduleZoomOutBtn" type="button" aria-label="Намали графика">−</button>
+            <input id="scheduleZoomRange" type="range" min="60" max="140" step="10" value="100" aria-label="Мащаб на графика в проценти" />
+            <button id="scheduleZoomInBtn" type="button" aria-label="Увеличи графика">+</button>
+            <strong id="scheduleZoomValue">100%</strong>
+          </div>
+          <div class="table-wrap" id="scheduleTableWrap">
+            <div id="scheduleZoomContent" class="schedule-zoom-content">
+              <table id="scheduleTable"></table>
+            </div>
           </div>
         </section>
 
@@ -562,6 +567,10 @@
         </section>
       </div>
     </main>
+
+    <div class="backend-connection-indicator" aria-live="polite">
+      <span id="backendConnectionDot" class="backend-connection-dot backend-connection-dot--offline" title="Няма връзка"></span>
+    </div>
 
 
     <div id="vacationCorrectionModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="vacationCorrectionTitle">
