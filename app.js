@@ -5568,6 +5568,12 @@ function updateBackendConnectionIndicator(isOnline, tooltipText) {
     backendConnectionText.classList.toggle('backend-connection-text--offline', !isOnline);
   }
 
+  if (typeof backendConnectionText !== 'undefined' && backendConnectionText) {
+    backendConnectionText.textContent = isOnline ? 'Онлайн' : 'Офлайн';
+    backendConnectionText.classList.toggle('backend-connection-text--online', isOnline);
+    backendConnectionText.classList.toggle('backend-connection-text--offline', !isOnline);
+  }
+
   if (hasStateChanged && isOnline) {
     flushPendingConnectionLogs().catch(() => {
       // will retry automatically later
