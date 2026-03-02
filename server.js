@@ -171,22 +171,6 @@ function normalizeShiftCode(input) {
 
 function computeSystemShiftSnapshot(shiftCode, date, isHoliday = () => ({ isHoliday: false })) {
   const normalized = normalizeShiftCode(shiftCode);
-  if (normalized === 'R') {
-    const workMinutes = 480;
-    const dayType = calcDayType(date);
-    const holidayResult = isHoliday(date);
-    const isHolidayDay = Boolean(holidayResult?.isHoliday ?? holidayResult);
-    const isWeekend = dayType.isWeekend;
-    return {
-      work_minutes: workMinutes,
-      work_minutes_total: workMinutes,
-      night_minutes: 0,
-      holiday_minutes: isHolidayDay ? workMinutes : 0,
-      weekend_minutes: isWeekend ? workMinutes : 0,
-      overtime_minutes: 0,
-      break_minutes_applied: 0,
-    };
-  }
 
   if (['P', 'O', 'B'].includes(normalized)) {
     return {
@@ -2530,7 +2514,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       }
       resolvedShiftCode = normalizeShiftCode(shiftByIdResult.rows[0].code);
       resolvedShiftId = shiftByIdResult.rows[0].id;
-    } else if (requestedShiftCode && !['P', 'O', 'B', 'R'].includes(requestedShiftCode)) {
+    } else if (requestedShiftCode && !['P', 'O', 'B'].includes(requestedShiftCode)) {
       const codeScope = buildShiftTemplateScopeCondition({
         hasDepartmentId: hasShiftTemplatesDepartment,
         departmentId: schedule.department_id || null,
