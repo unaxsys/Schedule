@@ -342,6 +342,22 @@ const SYSTEM_SHIFT_TEMPLATES = [
   { code: 'PT-1216', name: 'Part-time 12:00-16:00', start_time: '12:00', end_time: '16:00', break_minutes: 0, break_included: true, hours: 4 },
 ];
 
+
+const LEGACY_INTERNAL_SHIFT_CODES = new Set([
+  'S8E-0817','S8E-0918','S8E-0716','S8E-1019','S8E-0615','S8E-1120','S8E-1221','S8E-1322','S8E-1423','S8E-1500','S8E-1601','S8E-1702','S8E-1803','S8E-1904','S8E-2005','S8E-2106','S8E-2207','S8E-2308',
+  'S8I-0816','S8I-0715','S8I-0614','S8I-1422','S8I-1523','S8I-1600','S8I-2206','S8I-2307','S8I-0008',
+  'S12I-0719','S12I-0820','S12I-0921','S12I-1022','S12I-1907','S12I-2008','S12I-2109','S12I-2210',
+  'S24I-0808','S24I-0909','PT-0812','PT-0915','PT-1216'
+]);
+
+function isLegacyInternalShiftCode(code) {
+  return LEGACY_INTERNAL_SHIFT_CODES.has(normalizeShiftCode(code));
+}
+
+function filterVisibleShiftTemplates(shiftTemplates = []) {
+  return (Array.isArray(shiftTemplates) ? shiftTemplates : []).filter((row) => !isLegacyInternalShiftCode(row.code));
+}
+
 async function buildHolidayResolver(tenantId, fromDate = null, toDate = null) {
   if (!(await tableExists('tenant_holidays'))) {
     const hasHolidaysTable = await tableExists('holidays');
@@ -1729,7 +1745,7 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
       employees: employees.rows,
       schedules: schedules.rows,
       schedule,
-      shiftTemplates: appendSystemShiftTemplates(shiftTemplates.rows),
+      shiftTemplates: filterVisibleShiftTemplates(appendSystemShiftTemplates(shiftTemplates.rows)),
       departments: departments.rows,
     });
   } catch (error) {
@@ -2400,7 +2416,7 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
         validation: { errors: [], warnings: [] },
       })),
       leaves: leavesResult.rows,
-      shiftTemplates: appendSystemShiftTemplates(shiftTemplatesResult.rows),
+      shiftTemplates: filterVisibleShiftTemplates(appendSystemShiftTemplates(shiftTemplatesResult.rows)),
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -2979,7 +2995,7 @@ app.post('/api/schedules/:id/generate', requireAuth, requireTenantContext, async
        ORDER BY created_at, code`,
       shiftScope.values
     );
-    const shiftTemplates = appendSystemShiftTemplates(shiftTemplatesResult.rows);
+    const shiftTemplates = filterVisibleShiftTemplates(appendSystemShiftTemplates(shiftTemplatesResult.rows));
     const byCode = new Map(shiftTemplates.map((row) => [normalizeShiftCode(row.code), row]));
 
     const shiftIds = {
@@ -3285,7 +3301,7 @@ app.get('/api/departments/:departmentId/shifts', requireAuth, requireTenantConte
     `;
     const values = hasTenantId ? [departmentId, req.tenantId] : [departmentId];
     const result = await pool.query(queryText, values);
-    return res.json({ shifts: result.rows });
+    return res.json({ shifts: filterVisibleShiftTemplates(result.rows) });
   } catch (error) {
     if (error.status) {
       return res.status(error.status).json({ message: error.message });
@@ -3670,7 +3686,7 @@ app.post('/api/calc/summary', requireAuth, requireTenantContext, async (req, res
       employees,
       schedules: schedulesQuery.rows,
       scheduleEntries: entriesQuery.rows,
-      shiftTemplates: appendSystemShiftTemplates(shiftTemplatesQuery.rows),
+      shiftTemplates: filterVisibleShiftTemplates(appendSystemShiftTemplates(shiftTemplatesQuery.rows)),
       selectedScheduleIds,
       weekendRate,
       holidayRate,
