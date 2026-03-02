@@ -142,6 +142,8 @@ const employeeSirvPeriodField = document.getElementById('employeeSirvPeriodField
 const employeeSirvPeriodInput = document.getElementById('employeeSirvPeriodInput');
 const employeeList = document.getElementById('employeeList');
 const scheduleTable = document.getElementById('scheduleTable');
+const scheduleTableWrap = document.getElementById('scheduleTableWrap');
+const scheduleZoomContent = document.getElementById('scheduleZoomContent');
 const scheduleZoomOutBtn = document.getElementById('scheduleZoomOutBtn');
 const scheduleZoomInBtn = document.getElementById('scheduleZoomInBtn');
 const scheduleZoomRange = document.getElementById('scheduleZoomRange');
@@ -2221,17 +2223,26 @@ function attachShiftImportControls() {
 }
 
 
+function refreshScheduleZoomLayout() {
+  if (!scheduleTableWrap || !scheduleZoomContent || !scheduleZoomRange) {
+    return;
+  }
+  const scale = (Number(scheduleZoomRange.value) || 100) / 100;
+  const naturalHeight = scheduleZoomContent.scrollHeight;
+  scheduleTableWrap.style.minHeight = `${Math.ceil(naturalHeight * scale)}px`;
+}
+
 function applyScheduleZoom(nextZoomPercent) {
-  if (!scheduleTable || !scheduleZoomRange || !scheduleZoomValue) {
+  if (!scheduleZoomContent || !scheduleZoomRange || !scheduleZoomValue || !scheduleTable) {
     return;
   }
   const normalizedPercent = Math.max(60, Math.min(140, Number(nextZoomPercent) || 100));
   const scale = normalizedPercent / 100;
-  scheduleTable.style.transform = `scale(${scale})`;
-  scheduleTable.style.transformOrigin = 'top left';
+  scheduleZoomContent.style.transform = `scale(${scale})`;
   scheduleTable.style.width = `${100 / scale}%`;
   scheduleZoomRange.value = String(normalizedPercent);
   scheduleZoomValue.textContent = `${normalizedPercent}%`;
+  requestAnimationFrame(refreshScheduleZoomLayout);
 }
 
 function attachScheduleZoomControls() {
@@ -2252,6 +2263,7 @@ function attachScheduleZoomControls() {
     applyScheduleZoom(Number(scheduleZoomRange.value) + step);
   });
 
+  window.addEventListener('resize', refreshScheduleZoomLayout);
   applyScheduleZoom(scheduleZoomRange.value || 100);
 }
 
@@ -5015,6 +5027,8 @@ function renderSchedule() {
   } else {
     renderScheduleOverviewTotals({ workMinutesTotal: 0, nightMinutes: 0, weekendMinutes: 0, holidayMinutes: 0, overtimeMinutes: 0 });
   }
+
+  requestAnimationFrame(refreshScheduleZoomLayout);
 }
 
 function appendSummaryCell(row, value, className) {
