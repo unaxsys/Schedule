@@ -35,13 +35,13 @@ const {
   summarizeViolationStatus,
 } = require('./labor_rules');
 const {
-  computeEntryMetrics,
   holidayResolverFactory,
   validateScheduleEntry,
   countBusinessDays,
   dateAdd,
   finalizeSirvOvertimeAllocations,
 } = require('./schedule_calculations');
+const { computeShiftSnapshot } = require('./lib/shift-engine');
 const {
   enumerateDates: enumerateLeaveDates,
   computeAdjustedNormMinutes,
@@ -171,22 +171,6 @@ function normalizeShiftCode(input) {
 
 function computeSystemShiftSnapshot(shiftCode, date, isHoliday = () => ({ isHoliday: false })) {
   const normalized = normalizeShiftCode(shiftCode);
-  if (normalized === 'R') {
-    const workMinutes = 480;
-    const dayType = calcDayType(date);
-    const holidayResult = isHoliday(date);
-    const isHolidayDay = Boolean(holidayResult?.isHoliday ?? holidayResult);
-    const isWeekend = dayType.isWeekend;
-    return {
-      work_minutes: workMinutes,
-      work_minutes_total: workMinutes,
-      night_minutes: 0,
-      holiday_minutes: isHolidayDay ? workMinutes : 0,
-      weekend_minutes: isWeekend ? workMinutes : 0,
-      overtime_minutes: 0,
-      break_minutes_applied: 0,
-    };
-  }
 
   if (['P', 'O', 'B'].includes(normalized)) {
     return {
@@ -312,7 +296,7 @@ function addSummaries(target, source) {
 
 
 const SYSTEM_SHIFT_TEMPLATES = [
-  { code: 'R', name: 'Редовна', start_time: '08:00', end_time: '17:00', break_minutes: 60, hours: 8 },
+  { code: 'R', name: 'Редовна', start_time: '08:00', end_time: '17:00', break_minutes: 60, break_included: false, hours: 8 },
   { code: 'P', name: 'Почивка', start_time: '00:00', end_time: '00:00', hours: 0 },
   { code: 'O', name: 'Отпуск', start_time: '00:00', end_time: '00:00', hours: 0 },
   { code: 'B', name: 'Болничен', start_time: '00:00', end_time: '00:00', hours: 0 },
@@ -349,23 +333,27 @@ function getSirvPeriodBounds(monthKey, periodMonths = 1) {
 }
 
 async function computeEntrySnapshot({ date, shift, isHoliday, sirvEnabled = false, dailyNormMinutes = 480, isYoungWorker = false }) {
-  const metrics = computeEntryMetrics({
+  const snapshot = computeShiftSnapshot({
     dateISO: date,
-    shift,
-    isHoliday,
-    sirvEnabled,
-    dailyNormMinutes,
-    isYoungWorker,
+    startTime: shift.start_time || shift.start,
+    endTime: shift.end_time || shift.end,
+    breakMinutes: shift.break_minutes,
+    breakIncluded: shift.break_included,
+    plannedMinutes: sirvEnabled ? 0 : dailyNormMinutes,
+    holidayResolver: isHoliday,
   });
 
   return {
-    work_minutes: metrics.work_minutes_total,
-    work_minutes_total: metrics.work_minutes_total,
-    night_minutes: metrics.night_minutes,
-    holiday_minutes: metrics.holiday_minutes,
-    weekend_minutes: metrics.weekend_minutes,
-    overtime_minutes: metrics.overtime_minutes,
-    break_minutes_applied: metrics.break_minutes_applied,
+    work_minutes: snapshot.work_minutes,
+    work_minutes_total: snapshot.work_minutes_total,
+    night_minutes: snapshot.night_minutes,
+    holiday_minutes: snapshot.holiday_minutes,
+    weekend_minutes: snapshot.weekend_minutes,
+    overtime_minutes: sirvEnabled ? 0 : snapshot.overtime_minutes,
+    break_minutes_applied: snapshot.break_minutes_applied,
+    break_minutes: snapshot.break_minutes,
+    break_included: snapshot.break_included,
+    cross_midnight: snapshot.cross_midnight,
   };
 }
 
@@ -2486,7 +2474,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       }
       resolvedShiftCode = normalizeShiftCode(shiftByIdResult.rows[0].code);
       resolvedShiftId = shiftByIdResult.rows[0].id;
-    } else if (requestedShiftCode && !['P', 'O', 'B', 'R'].includes(requestedShiftCode)) {
+    } else if (requestedShiftCode && !['P', 'O', 'B'].includes(requestedShiftCode)) {
       const codeScope = buildShiftTemplateScopeCondition({
         hasDepartmentId: hasShiftTemplatesDepartment,
         departmentId: schedule.department_id || null,
@@ -2515,6 +2503,9 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     const hasOvertimeMinutes = await tableHasColumn('schedule_entries', 'overtime_minutes');
     const hasWorkMinutesTotal = await tableHasColumn('schedule_entries', 'work_minutes_total');
     const hasBreakMinutesApplied = await tableHasColumn('schedule_entries', 'break_minutes_applied');
+    const hasBreakMinutesSnapshot = await tableHasColumn('schedule_entries', 'break_minutes');
+    const hasBreakIncludedSnapshot = await tableHasColumn('schedule_entries', 'break_included');
+    const hasCrossMidnightSnapshot = await tableHasColumn('schedule_entries', 'cross_midnight');
     const hasShiftIdColumn = await tableHasColumn('schedule_entries', 'shift_id');
     const hasIsManualColumn = await tableHasColumn('schedule_entries', 'is_manual');
     const hasNotesColumn = await tableHasColumn('schedule_entries', 'notes');
@@ -2667,6 +2658,18 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         columns.push('break_minutes_applied');
         values.push(snapshot.break_minutes_applied ?? 0);
       }
+      if (hasBreakMinutesSnapshot) {
+        columns.push('break_minutes');
+        values.push(snapshot.break_minutes ?? 0);
+      }
+      if (hasBreakIncludedSnapshot) {
+        columns.push('break_included');
+        values.push(Boolean(snapshot.break_included));
+      }
+      if (hasCrossMidnightSnapshot) {
+        columns.push('cross_midnight');
+        values.push(Boolean(snapshot.cross_midnight));
+      }
       if (hasIsManualColumn) {
         columns.push('is_manual');
         values.push(isManual);
@@ -2705,6 +2708,15 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       }
       if (hasBreakMinutesApplied) {
         updateAssignments.push('break_minutes_applied = EXCLUDED.break_minutes_applied');
+      }
+      if (hasBreakMinutesSnapshot) {
+        updateAssignments.push('break_minutes = EXCLUDED.break_minutes');
+      }
+      if (hasBreakIncludedSnapshot) {
+        updateAssignments.push('break_included = EXCLUDED.break_included');
+      }
+      if (hasCrossMidnightSnapshot) {
+        updateAssignments.push('cross_midnight = EXCLUDED.cross_midnight');
       }
       if (hasIsManualColumn) {
         updateAssignments.push('is_manual = EXCLUDED.is_manual');
@@ -2793,6 +2805,9 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       overtimeMinutes: snapshot.overtime_minutes,
       workMinutesTotal: snapshot.work_minutes_total ?? snapshot.work_minutes,
       breakMinutesApplied: snapshot.break_minutes_applied ?? 0,
+      breakMinutes: snapshot.break_minutes ?? 0,
+      breakIncluded: Boolean(snapshot.break_included),
+      crossMidnight: Boolean(snapshot.cross_midnight),
       isManual,
       notes,
       validation,
