@@ -149,6 +149,13 @@
           </div>
           <div id="monthInfo" class="month-info"></div>
           <div class="legend" id="shiftLegend"></div>
+          <div class="schedule-zoom-controls" aria-label="Контроли за мащаба на графика">
+            <span>Мащаб на графика:</span>
+            <button id="scheduleZoomOutBtn" type="button" aria-label="Намали графика">−</button>
+            <input id="scheduleZoomRange" type="range" min="60" max="140" step="10" value="100" aria-label="Мащаб на графика в проценти" />
+            <button id="scheduleZoomInBtn" type="button" aria-label="Увеличи графика">+</button>
+            <strong id="scheduleZoomValue">100%</strong>
+          </div>
           <div class="table-wrap">
             <table id="scheduleTable"></table>
           </div>
