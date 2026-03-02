@@ -150,6 +150,7 @@ const scheduleZoomRange = document.getElementById('scheduleZoomRange');
 const scheduleZoomValue = document.getElementById('scheduleZoomValue');
 const storageStatus = document.getElementById('storageStatus');
 const backendConnectionDot = document.getElementById('backendConnectionDot');
+const backendConnectionLabel = document.getElementById('backendConnectionLabel');
 const apiUrlInput = document.getElementById('apiUrlInput');
 const saveApiUrlBtn = document.getElementById('saveApiUrlBtn');
 const userRoleSelect = document.getElementById('userRoleSelect');
@@ -5557,6 +5558,9 @@ function updateBackendConnectionIndicator(isOnline, tooltipText) {
   backendConnectionDot.classList.toggle('backend-connection-dot--online', isOnline);
   backendConnectionDot.classList.toggle('backend-connection-dot--offline', !isOnline);
   backendConnectionDot.title = tooltipText || (isOnline ? 'Свързан към сървъра' : 'Няма връзка със сървъра');
+  if (backendConnectionLabel) {
+    backendConnectionLabel.textContent = `Връзка към сървъра: ${isOnline ? 'онлайн' : 'офлайн'}`;
+  }
 
   if (hasStateChanged && isOnline) {
     flushPendingConnectionLogs().catch(() => {
