@@ -151,6 +151,7 @@ const scheduleZoomValue = document.getElementById('scheduleZoomValue');
 const storageStatus = document.getElementById('storageStatus');
 const backendConnectionDot = document.getElementById('backendConnectionDot');
 const backendConnectionText = document.getElementById('backendConnectionText');
+const backendConnectionLabel = backendConnectionText || document.getElementById('backendConnectionLabel');
 const apiUrlInput = document.getElementById('apiUrlInput');
 const saveApiUrlBtn = document.getElementById('saveApiUrlBtn');
 const userRoleSelect = document.getElementById('userRoleSelect');
@@ -5572,6 +5573,17 @@ function updateBackendConnectionIndicator(isOnline, tooltipText) {
     backendConnectionText.textContent = isOnline ? 'Онлайн' : 'Офлайн';
     backendConnectionText.classList.toggle('backend-connection-text--online', isOnline);
     backendConnectionText.classList.toggle('backend-connection-text--offline', !isOnline);
+  }
+
+  const connectionStatusEl = backendConnectionText
+    || backendConnectionLabel
+    || document.getElementById('backendConnectionText')
+    || document.getElementById('backendConnectionLabel');
+
+  if (connectionStatusEl) {
+    connectionStatusEl.textContent = isOnline ? 'Онлайн' : 'Офлайн';
+    connectionStatusEl.classList.toggle('backend-connection-text--online', isOnline);
+    connectionStatusEl.classList.toggle('backend-connection-text--offline', !isOnline);
   }
 
   if (hasStateChanged && isOnline) {
