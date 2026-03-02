@@ -1,6 +1,7 @@
 const { calcDayType, DEFAULT_WORKDAY_MINUTES } = require('./labor_rules');
 
 const MINUTES_PER_DAY = 24 * 60;
+const MIN_NIGHT_MINUTES_FOR_ELIGIBILITY = 3 * 60;
 
 function parseTimeToMinutes(value) {
   const text = String(value || '').trim();
@@ -67,7 +68,15 @@ function resolveHolidayFlag(result) {
   return false;
 }
 
-function computeEntryMetrics({ dateISO, shift = {}, isHoliday = () => false, dailyNormMinutes = DEFAULT_WORKDAY_MINUTES, sirvEnabled = false }) {
+function computeEntryMetrics({
+  dateISO,
+  shift = {},
+  isHoliday = () => false,
+  dailyNormMinutes = DEFAULT_WORKDAY_MINUTES,
+  sirvEnabled = false,
+  isYoungWorker = false,
+  minNightMinutes = MIN_NIGHT_MINUTES_FOR_ELIGIBILITY,
+}) {
   const segments = shiftSegmentsByDay({ dateISO, startTime: shift.start_time || shift.start, endTime: shift.end_time || shift.end });
   const durationMinutes = segments.reduce((acc, segment) => acc + segment.duration, 0);
   const breakMinutes = Math.max(0, Number(shift.break_minutes || 0));
@@ -80,7 +89,8 @@ function computeEntryMetrics({ dateISO, shift = {}, isHoliday = () => false, dai
   let holidayMinutes = 0;
 
   for (const segment of segments) {
-    nightMinutes += overlapMinutes(segment.startMinute, segment.endMinute, 22 * 60, 24 * 60);
+    const nightWindowStart = isYoungWorker ? 20 * 60 : 22 * 60;
+    nightMinutes += overlapMinutes(segment.startMinute, segment.endMinute, nightWindowStart, 24 * 60);
     nightMinutes += overlapMinutes(segment.startMinute, segment.endMinute, 0, 6 * 60);
 
     const dayType = calcDayType(segment.dateISO);
@@ -110,6 +120,10 @@ function computeEntryMetrics({ dateISO, shift = {}, isHoliday = () => false, dai
     if (isHolidayDay) {
       holidayMinutes += remainder;
     }
+  }
+
+  if (nightMinutes < minNightMinutes) {
+    nightMinutes = 0;
   }
 
   return {

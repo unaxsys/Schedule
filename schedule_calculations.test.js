@@ -32,6 +32,23 @@ test('19:00-07:00 has 480 night minutes', () => {
   assert.equal(metrics.night_minutes, 480);
 });
 
+
+test('night work under 3 hours is not counted', () => {
+  const metrics = computeEntryMetrics({
+    dateISO: '2026-02-11',
+    shift: { start_time: '21:00', end_time: '23:30', break_minutes: 0, break_included: true },
+  });
+  assert.equal(metrics.night_minutes, 0);
+});
+
+test('young worker night window starts at 20:00', () => {
+  const metrics = computeEntryMetrics({
+    dateISO: '2026-02-11',
+    shift: { start_time: '20:00', end_time: '23:00', break_minutes: 0, break_included: true },
+    isYoungWorker: true,
+  });
+  assert.equal(metrics.night_minutes, 180);
+});
 test('cross-midnight weekend split Fri->Sat', () => {
   const metrics = computeEntryMetrics({
     dateISO: '2026-02-13', // Friday
