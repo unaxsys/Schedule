@@ -90,6 +90,7 @@ header p {
   color: #e2e8f0;
   font-size: 0.78rem;
   font-weight: 600;
+  margin-left: auto;
 }
 
 .backend-connection-dot {
