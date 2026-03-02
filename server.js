@@ -35,13 +35,13 @@ const {
   summarizeViolationStatus,
 } = require('./labor_rules');
 const {
-  computeEntryMetrics,
   holidayResolverFactory,
   validateScheduleEntry,
   countBusinessDays,
   dateAdd,
   finalizeSirvOvertimeAllocations,
 } = require('./schedule_calculations');
+const { computeShiftSnapshot } = require('./lib/shift-engine');
 const {
   enumerateDates: enumerateLeaveDates,
   computeAdjustedNormMinutes,
@@ -312,10 +312,50 @@ function addSummaries(target, source) {
 
 
 const SYSTEM_SHIFT_TEMPLATES = [
-  { code: 'R', name: 'Редовна', start_time: '08:00', end_time: '17:00', break_minutes: 60, hours: 8 },
+  { code: 'R', name: 'Редовна', start_time: '08:00', end_time: '17:00', break_minutes: 60, break_included: false, hours: 8 },
   { code: 'P', name: 'Почивка', start_time: '00:00', end_time: '00:00', hours: 0 },
   { code: 'O', name: 'Отпуск', start_time: '00:00', end_time: '00:00', hours: 0 },
   { code: 'B', name: 'Болничен', start_time: '00:00', end_time: '00:00', hours: 0 },
+  { code: 'S8E-0817', name: '8ч excl 08:00-17:00', start_time: '08:00', end_time: '17:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-0918', name: '8ч excl 09:00-18:00', start_time: '09:00', end_time: '18:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-0716', name: '8ч excl 07:00-16:00', start_time: '07:00', end_time: '16:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-1019', name: '8ч excl 10:00-19:00', start_time: '10:00', end_time: '19:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-0615', name: '8ч excl 06:00-15:00', start_time: '06:00', end_time: '15:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-1120', name: '8ч excl 11:00-20:00', start_time: '11:00', end_time: '20:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-1221', name: '8ч excl 12:00-21:00', start_time: '12:00', end_time: '21:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-1322', name: '8ч excl 13:00-22:00', start_time: '13:00', end_time: '22:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-1423', name: '8ч excl 14:00-23:00', start_time: '14:00', end_time: '23:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-1500', name: '8ч excl 15:00-00:00', start_time: '15:00', end_time: '00:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-1601', name: '8ч excl 16:00-01:00', start_time: '16:00', end_time: '01:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-1702', name: '8ч excl 17:00-02:00', start_time: '17:00', end_time: '02:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-1803', name: '8ч excl 18:00-03:00', start_time: '18:00', end_time: '03:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-1904', name: '8ч excl 19:00-04:00', start_time: '19:00', end_time: '04:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-2005', name: '8ч excl 20:00-05:00', start_time: '20:00', end_time: '05:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-2106', name: '8ч excl 21:00-06:00', start_time: '21:00', end_time: '06:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-2207', name: '8ч excl 22:00-07:00', start_time: '22:00', end_time: '07:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8E-2308', name: '8ч excl 23:00-08:00', start_time: '23:00', end_time: '08:00', break_minutes: 60, break_included: false, hours: 8 },
+  { code: 'S8I-0816', name: '8ч incl 08:00-16:00', start_time: '08:00', end_time: '16:00', break_minutes: 30, break_included: true, hours: 8 },
+  { code: 'S8I-0715', name: '8ч incl 07:00-15:00', start_time: '07:00', end_time: '15:00', break_minutes: 30, break_included: true, hours: 8 },
+  { code: 'S8I-0614', name: '8ч incl 06:00-14:00', start_time: '06:00', end_time: '14:00', break_minutes: 30, break_included: true, hours: 8 },
+  { code: 'S8I-1422', name: '8ч incl 14:00-22:00', start_time: '14:00', end_time: '22:00', break_minutes: 30, break_included: true, hours: 8 },
+  { code: 'S8I-1523', name: '8ч incl 15:00-23:00', start_time: '15:00', end_time: '23:00', break_minutes: 30, break_included: true, hours: 8 },
+  { code: 'S8I-1600', name: '8ч incl 16:00-00:00', start_time: '16:00', end_time: '00:00', break_minutes: 30, break_included: true, hours: 8 },
+  { code: 'S8I-2206', name: '8ч incl 22:00-06:00', start_time: '22:00', end_time: '06:00', break_minutes: 30, break_included: true, hours: 8 },
+  { code: 'S8I-2307', name: '8ч incl 23:00-07:00', start_time: '23:00', end_time: '07:00', break_minutes: 30, break_included: true, hours: 8 },
+  { code: 'S8I-0008', name: '8ч incl 00:00-08:00', start_time: '00:00', end_time: '08:00', break_minutes: 30, break_included: true, hours: 8 },
+  { code: 'S12I-0719', name: '12ч incl 07:00-19:00', start_time: '07:00', end_time: '19:00', break_minutes: 60, break_included: true, hours: 12 },
+  { code: 'S12I-0820', name: '12ч incl 08:00-20:00', start_time: '08:00', end_time: '20:00', break_minutes: 60, break_included: true, hours: 12 },
+  { code: 'S12I-0921', name: '12ч incl 09:00-21:00', start_time: '09:00', end_time: '21:00', break_minutes: 60, break_included: true, hours: 12 },
+  { code: 'S12I-1022', name: '12ч incl 10:00-22:00', start_time: '10:00', end_time: '22:00', break_minutes: 60, break_included: true, hours: 12 },
+  { code: 'S12I-1907', name: '12ч incl 19:00-07:00', start_time: '19:00', end_time: '07:00', break_minutes: 60, break_included: true, hours: 12 },
+  { code: 'S12I-2008', name: '12ч incl 20:00-08:00', start_time: '20:00', end_time: '08:00', break_minutes: 60, break_included: true, hours: 12 },
+  { code: 'S12I-2109', name: '12ч incl 21:00-09:00', start_time: '21:00', end_time: '09:00', break_minutes: 60, break_included: true, hours: 12 },
+  { code: 'S12I-2210', name: '12ч incl 22:00-10:00', start_time: '22:00', end_time: '10:00', break_minutes: 60, break_included: true, hours: 12 },
+  { code: 'S24I-0808', name: '24ч incl 08:00-08:00', start_time: '08:00', end_time: '08:00', break_minutes: 0, break_included: true, hours: 24 },
+  { code: 'S24I-0909', name: '24ч incl 09:00-09:00', start_time: '09:00', end_time: '09:00', break_minutes: 0, break_included: true, hours: 24 },
+  { code: 'PT-0812', name: 'Part-time 08:00-12:00', start_time: '08:00', end_time: '12:00', break_minutes: 0, break_included: true, hours: 4 },
+  { code: 'PT-0915', name: 'Part-time 09:00-15:00', start_time: '09:00', end_time: '15:00', break_minutes: 0, break_included: true, hours: 6 },
+  { code: 'PT-1216', name: 'Part-time 12:00-16:00', start_time: '12:00', end_time: '16:00', break_minutes: 0, break_included: true, hours: 4 },
 ];
 
 async function buildHolidayResolver(tenantId, fromDate = null, toDate = null) {
@@ -349,23 +389,27 @@ function getSirvPeriodBounds(monthKey, periodMonths = 1) {
 }
 
 async function computeEntrySnapshot({ date, shift, isHoliday, sirvEnabled = false, dailyNormMinutes = 480, isYoungWorker = false }) {
-  const metrics = computeEntryMetrics({
+  const snapshot = computeShiftSnapshot({
     dateISO: date,
-    shift,
-    isHoliday,
-    sirvEnabled,
-    dailyNormMinutes,
-    isYoungWorker,
+    startTime: shift.start_time || shift.start,
+    endTime: shift.end_time || shift.end,
+    breakMinutes: shift.break_minutes,
+    breakIncluded: shift.break_included,
+    plannedMinutes: sirvEnabled ? 0 : dailyNormMinutes,
+    holidayResolver: isHoliday,
   });
 
   return {
-    work_minutes: metrics.work_minutes_total,
-    work_minutes_total: metrics.work_minutes_total,
-    night_minutes: metrics.night_minutes,
-    holiday_minutes: metrics.holiday_minutes,
-    weekend_minutes: metrics.weekend_minutes,
-    overtime_minutes: metrics.overtime_minutes,
-    break_minutes_applied: metrics.break_minutes_applied,
+    work_minutes: snapshot.work_minutes,
+    work_minutes_total: snapshot.work_minutes_total,
+    night_minutes: snapshot.night_minutes,
+    holiday_minutes: snapshot.holiday_minutes,
+    weekend_minutes: snapshot.weekend_minutes,
+    overtime_minutes: sirvEnabled ? 0 : snapshot.overtime_minutes,
+    break_minutes_applied: snapshot.break_minutes_applied,
+    break_minutes: snapshot.break_minutes,
+    break_included: snapshot.break_included,
+    cross_midnight: snapshot.cross_midnight,
   };
 }
 
@@ -2515,6 +2559,9 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     const hasOvertimeMinutes = await tableHasColumn('schedule_entries', 'overtime_minutes');
     const hasWorkMinutesTotal = await tableHasColumn('schedule_entries', 'work_minutes_total');
     const hasBreakMinutesApplied = await tableHasColumn('schedule_entries', 'break_minutes_applied');
+    const hasBreakMinutesSnapshot = await tableHasColumn('schedule_entries', 'break_minutes');
+    const hasBreakIncludedSnapshot = await tableHasColumn('schedule_entries', 'break_included');
+    const hasCrossMidnightSnapshot = await tableHasColumn('schedule_entries', 'cross_midnight');
     const hasShiftIdColumn = await tableHasColumn('schedule_entries', 'shift_id');
     const hasIsManualColumn = await tableHasColumn('schedule_entries', 'is_manual');
     const hasNotesColumn = await tableHasColumn('schedule_entries', 'notes');
@@ -2667,6 +2714,18 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         columns.push('break_minutes_applied');
         values.push(snapshot.break_minutes_applied ?? 0);
       }
+      if (hasBreakMinutesSnapshot) {
+        columns.push('break_minutes');
+        values.push(snapshot.break_minutes ?? 0);
+      }
+      if (hasBreakIncludedSnapshot) {
+        columns.push('break_included');
+        values.push(Boolean(snapshot.break_included));
+      }
+      if (hasCrossMidnightSnapshot) {
+        columns.push('cross_midnight');
+        values.push(Boolean(snapshot.cross_midnight));
+      }
       if (hasIsManualColumn) {
         columns.push('is_manual');
         values.push(isManual);
@@ -2705,6 +2764,15 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       }
       if (hasBreakMinutesApplied) {
         updateAssignments.push('break_minutes_applied = EXCLUDED.break_minutes_applied');
+      }
+      if (hasBreakMinutesSnapshot) {
+        updateAssignments.push('break_minutes = EXCLUDED.break_minutes');
+      }
+      if (hasBreakIncludedSnapshot) {
+        updateAssignments.push('break_included = EXCLUDED.break_included');
+      }
+      if (hasCrossMidnightSnapshot) {
+        updateAssignments.push('cross_midnight = EXCLUDED.cross_midnight');
       }
       if (hasIsManualColumn) {
         updateAssignments.push('is_manual = EXCLUDED.is_manual');
@@ -2793,6 +2861,9 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       overtimeMinutes: snapshot.overtime_minutes,
       workMinutesTotal: snapshot.work_minutes_total ?? snapshot.work_minutes,
       breakMinutesApplied: snapshot.break_minutes_applied ?? 0,
+      breakMinutes: snapshot.break_minutes ?? 0,
+      breakIncluded: Boolean(snapshot.break_included),
+      crossMidnight: Boolean(snapshot.cross_midnight),
       isManual,
       notes,
       validation,
