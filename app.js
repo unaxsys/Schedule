@@ -4730,40 +4730,10 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
 
     cell.appendChild(select);
 
-    const entryValidation = scheduleId
-      ? state.scheduleEntryValidationsById[`${scheduleId}|${employee.id}|${day}`]
-      : null;
     const entrySnapshot = scheduleId
       ? state.scheduleEntrySnapshotsById[`${scheduleId}|${employee.id}|${day}`]
       : null;
     snapshotEntriesByDay.push(entrySnapshot || {});
-
-    const warningMessages = Array.isArray(entryValidation?.warnings) ? entryValidation.warnings.filter(Boolean) : [];
-    const errorMessages = Array.isArray(entryValidation?.errors) ? entryValidation.errors.filter(Boolean) : [];
-    if (errorMessages.length || warningMessages.length) {
-      const marker = document.createElement('span');
-      marker.className = `cell-validation-marker ${errorMessages.length ? 'cell-validation-marker--error' : 'cell-validation-marker--warning'}`;
-      marker.textContent = errorMessages.length ? '❌' : '⚠';
-      const details = [];
-      if (errorMessages.length) {
-        details.push(`Грешки: ${truncateMessages(errorMessages).join(' | ')}`);
-      }
-      if (warningMessages.length) {
-        details.push(`Предупреждения: ${truncateMessages(warningMessages).join(' | ')}`);
-      }
-      marker.title = details.join('\n');
-      cell.appendChild(marker);
-    }
-
-    if (!isAdditionalShiftCode(effectiveShift) && safeNum(entrySnapshot?.overtimeMinutes) > 0) {
-      const overtimeBadge = document.createElement('span');
-      overtimeBadge.className = 'cell-ot-badge';
-      overtimeBadge.textContent = 'OT';
-      overtimeBadge.title = `Извънредни: ${minutesToHoursDecimal(entrySnapshot?.overtimeMinutes)} ч`;
-      cell.classList.add('day-overtime');
-      cell.appendChild(overtimeBadge);
-    }
-
 
     row.appendChild(cell);
     collectSummary(summary, employee, effectiveShift, holiday, weekend, inEmployment, entrySnapshot);
