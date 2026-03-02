@@ -5605,6 +5605,24 @@ function updateBackendConnectionIndicator(isOnline, tooltipText) {
     connectionStatusEl.classList.add(isOnline ? 'backend-connection-text--online' : 'backend-connection-text--offline');
   }
 
+  if (backendConnectionIndicator) {
+    backendConnectionIndicator.classList.toggle('backend-connection-indicator--online', isOnline);
+    backendConnectionIndicator.classList.toggle('backend-connection-indicator--offline', !isOnline);
+  }
+
+  const liveTextEl = backendConnectionText || document.getElementById('backendConnectionText');
+  const legacyTextEl = document.getElementById('backendConnectionLabel');
+  if (legacyTextEl) {
+    legacyTextEl.remove();
+  }
+
+  const backendStatusTextEl = liveTextEl || backendConnectionLabel || document.getElementById('backendConnectionText');
+  if (backendStatusTextEl) {
+    backendStatusTextEl.textContent = isOnline ? 'Онлайн' : 'Офлайн';
+    backendStatusTextEl.classList.remove('backend-connection-text--online', 'backend-connection-text--offline');
+    backendStatusTextEl.classList.add(isOnline ? 'backend-connection-text--online' : 'backend-connection-text--offline');
+  }
+
   if (hasStateChanged && isOnline) {
     flushPendingConnectionLogs().catch(() => {
       // will retry automatically later
