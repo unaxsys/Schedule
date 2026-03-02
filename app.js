@@ -5560,6 +5560,32 @@ function updateBackendConnectionIndicator(isOnline, tooltipText) {
   backendConnectionDot.classList.remove('backend-connection-dot--online', 'backend-connection-dot--offline');
   backendConnectionDot.classList.add(isOnline ? 'backend-connection-dot--online' : 'backend-connection-dot--offline');
   backendConnectionDot.title = tooltipText || (isOnline ? 'Свързан към сървъра' : 'Няма връзка със сървъра');
+  if (backendConnectionLabel) {
+    backendConnectionLabel.textContent = `Връзка към сървъра: ${isOnline ? 'онлайн' : 'офлайн'}`;
+  }
+
+  if (backendConnectionText) {
+    backendConnectionText.textContent = isOnline ? 'Онлайн' : 'Офлайн';
+    backendConnectionText.classList.toggle('backend-connection-text--online', isOnline);
+    backendConnectionText.classList.toggle('backend-connection-text--offline', !isOnline);
+  }
+
+  if (typeof backendConnectionText !== 'undefined' && backendConnectionText) {
+    backendConnectionText.textContent = isOnline ? 'Онлайн' : 'Офлайн';
+    backendConnectionText.classList.toggle('backend-connection-text--online', isOnline);
+    backendConnectionText.classList.toggle('backend-connection-text--offline', !isOnline);
+  }
+
+  const connectionStatusEl = backendConnectionText
+    || backendConnectionLabel
+    || document.getElementById('backendConnectionText')
+    || document.getElementById('backendConnectionLabel');
+
+  if (connectionStatusEl) {
+    connectionStatusEl.textContent = isOnline ? 'Онлайн' : 'Офлайн';
+    connectionStatusEl.classList.toggle('backend-connection-text--online', isOnline);
+    connectionStatusEl.classList.toggle('backend-connection-text--offline', !isOnline);
+  }
 
   if (backendConnectionIndicator) {
     backendConnectionIndicator.classList.toggle('backend-connection-indicator--online', isOnline);
