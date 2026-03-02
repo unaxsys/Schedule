@@ -264,6 +264,12 @@
           <h2>Отпуски</h2>
           <div class="panel vacation-leave-panel">
             <h3>Управление на отсъствия</h3>
+            <div class="row vacation-filters-row">
+              <select id="vacationDepartmentFilterSelect">
+                <option value="all">Всички отдели</option>
+              </select>
+              <input id="vacationSearchInput" type="search" placeholder="Търси по име" aria-label="Търси по име" />
+            </div>
             <div class="row">
               <select id="leaveEmployeeSelect"></select>
               <select id="leaveTypeSelect"></select>
@@ -273,18 +279,6 @@
               <button id="addLeaveBtn" type="button">Добави отсъствие</button>
             </div>
             <div id="leaveList" class="schedule-list"></div>
-          </div>
-          <form id="vacationForm" class="row">
-            <select id="vacationEmployeeSelect" required></select>
-            <input id="vacationStartInput" type="date" required />
-            <input id="vacationDaysInput" type="number" min="1" step="1" required placeholder="Брой работни дни" />
-            <button type="submit">Маркирай отпуск</button>
-          </form>
-          <div class="row vacation-filters-row">
-            <select id="vacationDepartmentFilterSelect">
-              <option value="all">Всички отдели</option>
-            </select>
-            <input id="vacationSearchInput" type="search" placeholder="Търси по име" aria-label="Търси по име" />
           </div>
           <div id="vacationLedger"></div>
         </section>

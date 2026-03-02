@@ -3428,6 +3428,10 @@ function attachVacationFilters() {
 }
 
 function renderVacationEmployeeOptions() {
+  if (!vacationEmployeeSelect) {
+    return;
+  }
+
   vacationEmployeeSelect.innerHTML = '';
   const employees = getVacationLedgerFilteredEmployees();
   if (!employees.length) {
@@ -3688,6 +3692,10 @@ function attachVacationDateValidationControls() {
 }
 
 function attachVacationForm() {
+  if (!vacationForm || !vacationEmployeeSelect || !vacationStartInput || !vacationDaysInput) {
+    return;
+  }
+
   vacationForm.addEventListener('submit', async (event) => {
     event.preventDefault();
 
