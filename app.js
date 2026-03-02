@@ -142,8 +142,17 @@ const employeeSirvPeriodField = document.getElementById('employeeSirvPeriodField
 const employeeSirvPeriodInput = document.getElementById('employeeSirvPeriodInput');
 const employeeList = document.getElementById('employeeList');
 const scheduleTable = document.getElementById('scheduleTable');
+const scheduleTableWrap = document.getElementById('scheduleTableWrap');
+const scheduleZoomContent = document.getElementById('scheduleZoomContent');
+const scheduleZoomOutBtn = document.getElementById('scheduleZoomOutBtn');
+const scheduleZoomInBtn = document.getElementById('scheduleZoomInBtn');
+const scheduleZoomRange = document.getElementById('scheduleZoomRange');
+const scheduleZoomValue = document.getElementById('scheduleZoomValue');
 const storageStatus = document.getElementById('storageStatus');
+const backendConnectionIndicator = document.querySelector('.backend-connection-indicator');
 const backendConnectionDot = document.getElementById('backendConnectionDot');
+const backendConnectionText = document.getElementById('backendConnectionText');
+const backendConnectionLabel = backendConnectionText || document.getElementById('backendConnectionLabel');
 const apiUrlInput = document.getElementById('apiUrlInput');
 const saveApiUrlBtn = document.getElementById('saveApiUrlBtn');
 const userRoleSelect = document.getElementById('userRoleSelect');
@@ -381,6 +390,7 @@ async function init() {
   attachShiftUiSelectionState();
   attachShiftImportControls();
   attachLockAndExport();
+  attachScheduleZoomControls();
   attachSettingsControls();
   attachSettingsSubtabs();
   attachHolidaySettings();
@@ -2213,6 +2223,51 @@ function attachShiftImportControls() {
     await loadFromBackend();
     renderAll();
   });
+}
+
+
+function refreshScheduleZoomLayout() {
+  if (!scheduleTableWrap || !scheduleZoomContent || !scheduleZoomRange) {
+    return;
+  }
+  const scale = (Number(scheduleZoomRange.value) || 100) / 100;
+  const naturalHeight = scheduleZoomContent.scrollHeight;
+  scheduleTableWrap.style.minHeight = `${Math.ceil(naturalHeight * scale)}px`;
+}
+
+function applyScheduleZoom(nextZoomPercent) {
+  if (!scheduleZoomContent || !scheduleZoomRange || !scheduleZoomValue || !scheduleTable) {
+    return;
+  }
+  const normalizedPercent = Math.max(60, Math.min(140, Number(nextZoomPercent) || 100));
+  const scale = normalizedPercent / 100;
+  scheduleZoomContent.style.transform = `scale(${scale})`;
+  scheduleTable.style.width = `${100 / scale}%`;
+  scheduleZoomRange.value = String(normalizedPercent);
+  scheduleZoomValue.textContent = `${normalizedPercent}%`;
+  requestAnimationFrame(refreshScheduleZoomLayout);
+}
+
+function attachScheduleZoomControls() {
+  if (!scheduleZoomRange || !scheduleZoomOutBtn || !scheduleZoomInBtn) {
+    return;
+  }
+
+  const step = Number(scheduleZoomRange.step) || 10;
+  scheduleZoomRange.addEventListener('input', () => {
+    applyScheduleZoom(scheduleZoomRange.value);
+  });
+
+  scheduleZoomOutBtn.addEventListener('click', () => {
+    applyScheduleZoom(Number(scheduleZoomRange.value) - step);
+  });
+
+  scheduleZoomInBtn.addEventListener('click', () => {
+    applyScheduleZoom(Number(scheduleZoomRange.value) + step);
+  });
+
+  window.addEventListener('resize', refreshScheduleZoomLayout);
+  applyScheduleZoom(scheduleZoomRange.value || 100);
 }
 
 function attachLockAndExport() {
@@ -4975,6 +5030,8 @@ function renderSchedule() {
   } else {
     renderScheduleOverviewTotals({ workMinutesTotal: 0, nightMinutes: 0, weekendMinutes: 0, holidayMinutes: 0, overtimeMinutes: 0 });
   }
+
+  requestAnimationFrame(refreshScheduleZoomLayout);
 }
 
 function appendSummaryCell(row, value, className) {
@@ -5500,9 +5557,27 @@ function updateBackendConnectionIndicator(isOnline, tooltipText) {
 
   const hasStateChanged = state.backendConnectionOnline !== isOnline;
   state.backendConnectionOnline = isOnline;
-  backendConnectionDot.classList.toggle('backend-connection-dot--online', isOnline);
-  backendConnectionDot.classList.toggle('backend-connection-dot--offline', !isOnline);
+  backendConnectionDot.classList.remove('backend-connection-dot--online', 'backend-connection-dot--offline');
+  backendConnectionDot.classList.add(isOnline ? 'backend-connection-dot--online' : 'backend-connection-dot--offline');
   backendConnectionDot.title = tooltipText || (isOnline ? 'Свързан към сървъра' : 'Няма връзка със сървъра');
+
+  if (backendConnectionIndicator) {
+    backendConnectionIndicator.classList.toggle('backend-connection-indicator--online', isOnline);
+    backendConnectionIndicator.classList.toggle('backend-connection-indicator--offline', !isOnline);
+  }
+
+  const liveTextEl = backendConnectionText || document.getElementById('backendConnectionText');
+  const legacyTextEl = document.getElementById('backendConnectionLabel');
+  if (legacyTextEl && liveTextEl && legacyTextEl !== liveTextEl) {
+    legacyTextEl.remove();
+  }
+
+  const connectionStatusEl = liveTextEl || backendConnectionLabel || legacyTextEl;
+  if (connectionStatusEl) {
+    connectionStatusEl.textContent = isOnline ? 'Онлайн' : 'Офлайн';
+    connectionStatusEl.classList.remove('backend-connection-text--online', 'backend-connection-text--offline');
+    connectionStatusEl.classList.add(isOnline ? 'backend-connection-text--online' : 'backend-connection-text--offline');
+  }
 
   if (hasStateChanged && isOnline) {
     flushPendingConnectionLogs().catch(() => {
