@@ -1817,6 +1817,7 @@ function attachShiftForm() {
     const code = shiftCodeInput.value.trim().toUpperCase();
     const name = shiftNameInput.value.trim();
     const departmentId = cleanStoredValue(shiftDepartmentInput?.value) || null;
+    const effectiveDepartmentId = code === 'R' ? null : departmentId;
     const start = shiftStartInput.value;
     const end = shiftEndInput.value;
     const breakMinutes = Math.max(0, Number(shiftBreakMinutesInput?.value || 0));
@@ -1826,16 +1827,52 @@ function attachShiftForm() {
       return;
     }
 
-    if (state.shiftTemplates.some((shift) => shift.code === code && cleanStoredValue(shift.departmentId) === (departmentId || ''))) {
-      setStatus(`Смяна с код ${code} вече съществува.`, false);
-      return;
-    }
-
+    const existingShiftIndex = state.shiftTemplates.findIndex((shift) => (
+      shift.code === code && cleanStoredValue(shift.departmentId) === (effectiveDepartmentId || '')
+    ));
     const hours = calcShiftHours(start, end);
     if (hours <= 0) {
       setStatus('Невалиден интервал за смяна.', false);
       return;
     }
+
+    if (existingShiftIndex >= 0) {
+      if (code !== 'R') {
+        setStatus(`Смяна с код ${code} вече съществува.`, false);
+        return;
+      }
+
+      const existingShift = state.shiftTemplates[existingShiftIndex];
+      state.shiftTemplates[existingShiftIndex] = {
+        ...existingShift,
+        code: 'R',
+        label: toCyrillicShiftLabel('R'),
+        name: 'Редовна',
+        departmentId: null,
+        type: 'work',
+        start,
+        end,
+        hours,
+        locked: true,
+      };
+
+      saveShiftTemplates();
+      void saveShiftTemplateBackend({ code: 'R', name: 'Редовна', start, end, hours, department_id: null });
+      setStatus('Редовна смяна (Р) е обновена успешно.', true);
+      renderAll();
+      shiftForm.reset();
+      if (shiftDepartmentInput) {
+        shiftDepartmentInput.value = '';
+      }
+      if (shiftBreakMinutesInput) {
+        shiftBreakMinutesInput.value = '0';
+      }
+      if (shiftBreakIncludedInput) {
+        shiftBreakIncludedInput.checked = false;
+      }
+      return;
+    }
+
 
     const nightHours = calcNightHours(start, end);
     if (nightHours > 0 && hours > MAX_NIGHT_SHIFT_HOURS) {
@@ -1847,7 +1884,7 @@ function attachShiftForm() {
       code,
       label: toCyrillicShiftLabel(code),
       name,
-      departmentId,
+      departmentId: effectiveDepartmentId,
       type: 'work',
       start,
       end,
@@ -1858,11 +1895,11 @@ function attachShiftForm() {
     });
 
     saveShiftTemplates();
-    if (departmentId) {
-      void saveDepartmentShiftBackend(departmentId, { code, name, start_time: start, end_time: end, break_minutes: breakMinutes, break_included: breakIncluded });
-      void loadDepartmentShifts(departmentId, { force: true });
+    if (effectiveDepartmentId) {
+      void saveDepartmentShiftBackend(effectiveDepartmentId, { code, name, start_time: start, end_time: end, break_minutes: breakMinutes, break_included: breakIncluded });
+      void loadDepartmentShifts(effectiveDepartmentId, { force: true });
     } else {
-      void saveShiftTemplateBackend({ code, name, start, end, hours, department_id: departmentId, break_minutes: breakMinutes, break_included: breakIncluded });
+      void saveShiftTemplateBackend({ code, name, start, end, hours, department_id: effectiveDepartmentId, break_minutes: breakMinutes, break_included: breakIncluded });
     }
     shiftForm.reset();
     if (shiftDepartmentInput) {
