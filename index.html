@@ -579,6 +579,23 @@
       </div>
     </div>
 
+
+
+    <div id="leaveCorrectionModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="leaveCorrectionTitle">
+      <div class="modal-card">
+        <h3 id="leaveCorrectionTitle">Корекция на период отсъствие</h3>
+        <form id="leaveCorrectionModalForm" class="employee-edit-form">
+          <label class="field-inline">Нова начална дата <input id="leaveCorrectionModalStartInput" type="date" required /></label>
+          <label class="field-inline">Нова крайна дата <input id="leaveCorrectionModalEndInput" type="date" required /></label>
+          <div id="leaveCorrectionModalInfo" class="role-permission-note"></div>
+          <div class="modal-actions">
+            <button type="submit" class="btn-edit">Запази корекция</button>
+            <button id="cancelLeaveCorrectionModalBtn" type="button">Отказ</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <div id="employeeEditModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="employeeEditTitle">
       <div class="modal-card">
         <h3 id="employeeEditTitle">Редакция на служител</h3>
