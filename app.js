@@ -5576,16 +5576,6 @@ function updateBackendConnectionIndicator(isOnline, tooltipText) {
     backendConnectionText.classList.toggle('backend-connection-text--offline', !isOnline);
   }
 
-  const connectionStatusEl = backendConnectionText
-    || backendConnectionLabel
-    || document.getElementById('backendConnectionText')
-    || document.getElementById('backendConnectionLabel');
-
-  if (connectionStatusEl) {
-    connectionStatusEl.textContent = isOnline ? 'Онлайн' : 'Офлайн';
-    connectionStatusEl.classList.toggle('backend-connection-text--online', isOnline);
-    connectionStatusEl.classList.toggle('backend-connection-text--offline', !isOnline);
-  }
 
   if (backendConnectionIndicator) {
     backendConnectionIndicator.classList.toggle('backend-connection-indicator--online', isOnline);
@@ -5603,42 +5593,6 @@ function updateBackendConnectionIndicator(isOnline, tooltipText) {
     connectionStatusEl.textContent = isOnline ? 'Онлайн' : 'Офлайн';
     connectionStatusEl.classList.remove('backend-connection-text--online', 'backend-connection-text--offline');
     connectionStatusEl.classList.add(isOnline ? 'backend-connection-text--online' : 'backend-connection-text--offline');
-  }
-
-  if (backendConnectionIndicator) {
-    backendConnectionIndicator.classList.toggle('backend-connection-indicator--online', isOnline);
-    backendConnectionIndicator.classList.toggle('backend-connection-indicator--offline', !isOnline);
-  }
-
-  const liveTextEl = backendConnectionText || document.getElementById('backendConnectionText');
-  const legacyTextEl = document.getElementById('backendConnectionLabel');
-  if (legacyTextEl) {
-    legacyTextEl.remove();
-  }
-
-  const backendStatusTextEl = liveTextEl || backendConnectionLabel || document.getElementById('backendConnectionText');
-  if (backendStatusTextEl) {
-    backendStatusTextEl.textContent = isOnline ? 'Онлайн' : 'Офлайн';
-    backendStatusTextEl.classList.remove('backend-connection-text--online', 'backend-connection-text--offline');
-    backendStatusTextEl.classList.add(isOnline ? 'backend-connection-text--online' : 'backend-connection-text--offline');
-  }
-
-  if (backendConnectionIndicator) {
-    backendConnectionIndicator.classList.toggle('backend-connection-indicator--online', isOnline);
-    backendConnectionIndicator.classList.toggle('backend-connection-indicator--offline', !isOnline);
-  }
-
-  const liveTextEl = backendConnectionText || document.getElementById('backendConnectionText');
-  const legacyTextEl = document.getElementById('backendConnectionLabel');
-  if (legacyTextEl) {
-    legacyTextEl.remove();
-  }
-
-  const backendStatusTextEl = liveTextEl || backendConnectionLabel || document.getElementById('backendConnectionText');
-  if (backendStatusTextEl) {
-    backendStatusTextEl.textContent = isOnline ? 'Онлайн' : 'Офлайн';
-    backendStatusTextEl.classList.remove('backend-connection-text--online', 'backend-connection-text--offline');
-    backendStatusTextEl.classList.add(isOnline ? 'backend-connection-text--online' : 'backend-connection-text--offline');
   }
 
   if (backendConnectionIndicator) {
