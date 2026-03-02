@@ -5558,6 +5558,9 @@ function updateBackendConnectionIndicator(isOnline, tooltipText) {
   backendConnectionDot.classList.toggle('backend-connection-dot--online', isOnline);
   backendConnectionDot.classList.toggle('backend-connection-dot--offline', !isOnline);
   backendConnectionDot.title = tooltipText || (isOnline ? 'Свързан към сървъра' : 'Няма връзка със сървъра');
+  if (backendConnectionLabel) {
+    backendConnectionLabel.textContent = `Връзка към сървъра: ${isOnline ? 'онлайн' : 'офлайн'}`;
+  }
 
   if (backendConnectionText) {
     backendConnectionText.textContent = isOnline ? 'Онлайн' : 'Офлайн';
