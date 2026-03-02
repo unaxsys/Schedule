@@ -35,13 +35,13 @@ const {
   summarizeViolationStatus,
 } = require('./labor_rules');
 const {
-  computeEntryMetrics,
   holidayResolverFactory,
   validateScheduleEntry,
   countBusinessDays,
   dateAdd,
   finalizeSirvOvertimeAllocations,
 } = require('./schedule_calculations');
+const { computeShiftSnapshot, parseTimeToMinutes, normalizeShiftInterval, calcWorkMinutes } = require('./lib/shift-engine');
 const {
   enumerateDates: enumerateLeaveDates,
   computeAdjustedNormMinutes,
@@ -171,22 +171,6 @@ function normalizeShiftCode(input) {
 
 function computeSystemShiftSnapshot(shiftCode, date, isHoliday = () => ({ isHoliday: false })) {
   const normalized = normalizeShiftCode(shiftCode);
-  if (normalized === 'R') {
-    const workMinutes = 480;
-    const dayType = calcDayType(date);
-    const holidayResult = isHoliday(date);
-    const isHolidayDay = Boolean(holidayResult?.isHoliday ?? holidayResult);
-    const isWeekend = dayType.isWeekend;
-    return {
-      work_minutes: workMinutes,
-      work_minutes_total: workMinutes,
-      night_minutes: 0,
-      holiday_minutes: isHolidayDay ? workMinutes : 0,
-      weekend_minutes: isWeekend ? workMinutes : 0,
-      overtime_minutes: 0,
-      break_minutes_applied: 0,
-    };
-  }
 
   if (['P', 'O', 'B'].includes(normalized)) {
     return {
@@ -312,11 +296,44 @@ function addSummaries(target, source) {
 
 
 const SYSTEM_SHIFT_TEMPLATES = [
-  { code: 'R', name: 'Редовна', start_time: '08:00', end_time: '17:00', break_minutes: 60, hours: 8 },
+  { code: 'R', name: 'Редовна', start_time: '08:00', end_time: '17:00', break_minutes: 60, break_included: false, hours: 8 },
   { code: 'P', name: 'Почивка', start_time: '00:00', end_time: '00:00', hours: 0 },
   { code: 'O', name: 'Отпуск', start_time: '00:00', end_time: '00:00', hours: 0 },
   { code: 'B', name: 'Болничен', start_time: '00:00', end_time: '00:00', hours: 0 },
 ];
+
+
+const LEGACY_INTERNAL_SHIFT_CODES = new Set([
+  'S8E-0817','S8E-0918','S8E-0716','S8E-1019','S8E-0615','S8E-1120','S8E-1221','S8E-1322','S8E-1423','S8E-1500','S8E-1601','S8E-1702','S8E-1803','S8E-1904','S8E-2005','S8E-2106','S8E-2207','S8E-2308',
+  'S8I-0816','S8I-0715','S8I-0614','S8I-1422','S8I-1523','S8I-1600','S8I-2206','S8I-2307','S8I-0008',
+  'S12I-0719','S12I-0820','S12I-0921','S12I-1022','S12I-1907','S12I-2008','S12I-2109','S12I-2210',
+  'S24I-0808','S24I-0909','PT-0812','PT-0915','PT-1216'
+]);
+
+function isLegacyInternalShiftCode(code) {
+  return LEGACY_INTERNAL_SHIFT_CODES.has(normalizeShiftCode(code));
+}
+
+function filterVisibleShiftTemplates(shiftTemplates = []) {
+  return (Array.isArray(shiftTemplates) ? shiftTemplates : []).filter((row) => !isLegacyInternalShiftCode(row.code));
+}
+
+
+function isSystemShiftCode(code) {
+  return ['R', 'P', 'O', 'B'].includes(normalizeShiftCode(code));
+}
+
+function deriveWorkHours({ startTime, endTime, breakMinutes, breakIncluded }) {
+  const startMinutes = parseTimeToMinutes(startTime);
+  const endMinutes = parseTimeToMinutes(endTime);
+  const normalizedInterval = normalizeShiftInterval(startMinutes, endMinutes);
+  if (!normalizedInterval) {
+    return 0;
+  }
+  const [start, end] = normalizedInterval;
+  const workMinutes = calcWorkMinutes(end - start, breakMinutes, breakIncluded);
+  return Number((workMinutes / 60).toFixed(2));
+}
 
 async function buildHolidayResolver(tenantId, fromDate = null, toDate = null) {
   if (!(await tableExists('tenant_holidays'))) {
@@ -349,23 +366,27 @@ function getSirvPeriodBounds(monthKey, periodMonths = 1) {
 }
 
 async function computeEntrySnapshot({ date, shift, isHoliday, sirvEnabled = false, dailyNormMinutes = 480, isYoungWorker = false }) {
-  const metrics = computeEntryMetrics({
+  const snapshot = computeShiftSnapshot({
     dateISO: date,
-    shift,
-    isHoliday,
-    sirvEnabled,
-    dailyNormMinutes,
-    isYoungWorker,
+    startTime: shift.start_time || shift.start,
+    endTime: shift.end_time || shift.end,
+    breakMinutes: shift.break_minutes,
+    breakIncluded: shift.break_included,
+    plannedMinutes: sirvEnabled ? 0 : dailyNormMinutes,
+    holidayResolver: isHoliday,
   });
 
   return {
-    work_minutes: metrics.work_minutes_total,
-    work_minutes_total: metrics.work_minutes_total,
-    night_minutes: metrics.night_minutes,
-    holiday_minutes: metrics.holiday_minutes,
-    weekend_minutes: metrics.weekend_minutes,
-    overtime_minutes: metrics.overtime_minutes,
-    break_minutes_applied: metrics.break_minutes_applied,
+    work_minutes: snapshot.work_minutes,
+    work_minutes_total: snapshot.work_minutes_total,
+    night_minutes: snapshot.night_minutes,
+    holiday_minutes: snapshot.holiday_minutes,
+    weekend_minutes: snapshot.weekend_minutes,
+    overtime_minutes: sirvEnabled ? 0 : snapshot.overtime_minutes,
+    break_minutes_applied: snapshot.break_minutes_applied,
+    break_minutes: snapshot.break_minutes,
+    break_included: snapshot.break_included,
+    cross_midnight: snapshot.cross_midnight,
   };
 }
 
@@ -1701,7 +1722,7 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
       employees: employees.rows,
       schedules: schedules.rows,
       schedule,
-      shiftTemplates: appendSystemShiftTemplates(shiftTemplates.rows),
+      shiftTemplates: filterVisibleShiftTemplates(appendSystemShiftTemplates(shiftTemplates.rows)),
       departments: departments.rows,
     });
   } catch (error) {
@@ -2372,7 +2393,7 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
         validation: { errors: [], warnings: [] },
       })),
       leaves: leavesResult.rows,
-      shiftTemplates: appendSystemShiftTemplates(shiftTemplatesResult.rows),
+      shiftTemplates: filterVisibleShiftTemplates(appendSystemShiftTemplates(shiftTemplatesResult.rows)),
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -2486,7 +2507,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       }
       resolvedShiftCode = normalizeShiftCode(shiftByIdResult.rows[0].code);
       resolvedShiftId = shiftByIdResult.rows[0].id;
-    } else if (requestedShiftCode && !['P', 'O', 'B', 'R'].includes(requestedShiftCode)) {
+    } else if (requestedShiftCode && !['P', 'O', 'B'].includes(requestedShiftCode)) {
       const codeScope = buildShiftTemplateScopeCondition({
         hasDepartmentId: hasShiftTemplatesDepartment,
         departmentId: schedule.department_id || null,
@@ -2515,6 +2536,9 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     const hasOvertimeMinutes = await tableHasColumn('schedule_entries', 'overtime_minutes');
     const hasWorkMinutesTotal = await tableHasColumn('schedule_entries', 'work_minutes_total');
     const hasBreakMinutesApplied = await tableHasColumn('schedule_entries', 'break_minutes_applied');
+    const hasBreakMinutesSnapshot = await tableHasColumn('schedule_entries', 'break_minutes');
+    const hasBreakIncludedSnapshot = await tableHasColumn('schedule_entries', 'break_included');
+    const hasCrossMidnightSnapshot = await tableHasColumn('schedule_entries', 'cross_midnight');
     const hasShiftIdColumn = await tableHasColumn('schedule_entries', 'shift_id');
     const hasIsManualColumn = await tableHasColumn('schedule_entries', 'is_manual');
     const hasNotesColumn = await tableHasColumn('schedule_entries', 'notes');
@@ -2667,6 +2691,18 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         columns.push('break_minutes_applied');
         values.push(snapshot.break_minutes_applied ?? 0);
       }
+      if (hasBreakMinutesSnapshot) {
+        columns.push('break_minutes');
+        values.push(snapshot.break_minutes ?? 0);
+      }
+      if (hasBreakIncludedSnapshot) {
+        columns.push('break_included');
+        values.push(Boolean(snapshot.break_included));
+      }
+      if (hasCrossMidnightSnapshot) {
+        columns.push('cross_midnight');
+        values.push(Boolean(snapshot.cross_midnight));
+      }
       if (hasIsManualColumn) {
         columns.push('is_manual');
         values.push(isManual);
@@ -2705,6 +2741,15 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       }
       if (hasBreakMinutesApplied) {
         updateAssignments.push('break_minutes_applied = EXCLUDED.break_minutes_applied');
+      }
+      if (hasBreakMinutesSnapshot) {
+        updateAssignments.push('break_minutes = EXCLUDED.break_minutes');
+      }
+      if (hasBreakIncludedSnapshot) {
+        updateAssignments.push('break_included = EXCLUDED.break_included');
+      }
+      if (hasCrossMidnightSnapshot) {
+        updateAssignments.push('cross_midnight = EXCLUDED.cross_midnight');
       }
       if (hasIsManualColumn) {
         updateAssignments.push('is_manual = EXCLUDED.is_manual');
@@ -2793,6 +2838,9 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       overtimeMinutes: snapshot.overtime_minutes,
       workMinutesTotal: snapshot.work_minutes_total ?? snapshot.work_minutes,
       breakMinutesApplied: snapshot.break_minutes_applied ?? 0,
+      breakMinutes: snapshot.break_minutes ?? 0,
+      breakIncluded: Boolean(snapshot.break_included),
+      crossMidnight: Boolean(snapshot.cross_midnight),
       isManual,
       notes,
       validation,
@@ -2924,7 +2972,7 @@ app.post('/api/schedules/:id/generate', requireAuth, requireTenantContext, async
        ORDER BY created_at, code`,
       shiftScope.values
     );
-    const shiftTemplates = appendSystemShiftTemplates(shiftTemplatesResult.rows);
+    const shiftTemplates = filterVisibleShiftTemplates(appendSystemShiftTemplates(shiftTemplatesResult.rows));
     const byCode = new Map(shiftTemplates.map((row) => [normalizeShiftCode(row.code), row]));
 
     const shiftIds = {
@@ -3230,7 +3278,7 @@ app.get('/api/departments/:departmentId/shifts', requireAuth, requireTenantConte
     `;
     const values = hasTenantId ? [departmentId, req.tenantId] : [departmentId];
     const result = await pool.query(queryText, values);
-    return res.json({ shifts: result.rows });
+    return res.json({ shifts: filterVisibleShiftTemplates(result.rows) });
   } catch (error) {
     if (error.status) {
       return res.status(error.status).json({ message: error.message });
@@ -3246,17 +3294,18 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
   }
 
   const code = cleanStr(req.body?.code);
-  const { name } = validation.value;
-  const start = validation.value.startTime;
-  const end = validation.value.endTime;
-  const hours = validation.value.hours;
-  const breakMinutes = validation.value.breakMinutes;
-  const breakIncluded = validation.value.breakIncluded;
-  const isSirvShift = req.body?.is_sirv_shift === undefined && req.body?.isSirvShift === undefined
+  const normalizedCode = normalizeShiftCode(code);
+  let { name } = validation.value;
+  let start = validation.value.startTime;
+  let end = validation.value.endTime;
+  let hours = validation.value.hours;
+  let breakMinutes = validation.value.breakMinutes;
+  let breakIncluded = validation.value.breakIncluded;
+  let isSirvShift = req.body?.is_sirv_shift === undefined && req.body?.isSirvShift === undefined
     ? null
     : Boolean(req.body?.is_sirv_shift ?? req.body?.isSirvShift);
   const departmentIdRaw = req.body?.department_id ?? req.body?.departmentId;
-  const departmentId = departmentIdRaw === null || departmentIdRaw === '' ? null : cleanStr(departmentIdRaw);
+  let departmentId = departmentIdRaw === null || departmentIdRaw === '' ? null : cleanStr(departmentIdRaw);
 
   if (!code) {
     return res.status(400).json({ message: 'Невалиден код за смяна.' });
@@ -3278,6 +3327,46 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
       if (!departmentExists.rowCount) {
         return res.status(400).json({ message: 'Избраният отдел за смяната не е намерен.' });
       }
+    }
+
+
+    if (isSystemShiftCode(normalizedCode) && normalizedCode !== 'R') {
+      return res.status(403).json({ message: 'Системните смени П/О/Б не подлежат на редакция.' });
+    }
+
+    if (normalizedCode === 'R') {
+      if (hasDepartmentId && departmentId) {
+        return res.status(400).json({ message: 'Редовна смяна (Р) може да е само глобална (без отдел).' });
+      }
+      departmentId = null;
+
+      const existingR = await pool.query(
+        `SELECT COALESCE(break_minutes, 60) AS break_minutes,
+                COALESCE(break_included, FALSE) AS break_included,
+                is_sirv_shift
+         FROM shift_templates
+         WHERE UPPER(code) = 'R'
+           ${hasTenantId ? 'AND tenant_id = $1' : ''}
+           ${hasDepartmentId ? 'AND department_id IS NULL' : ''}
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        hasTenantId ? [req.tenantId] : []
+      );
+
+      const lockedBreakMinutes = existingR.rowCount ? Number(existingR.rows[0].break_minutes || 60) : 60;
+      const lockedBreakIncluded = existingR.rowCount ? Boolean(existingR.rows[0].break_included) : false;
+      const lockedSirv = existingR.rowCount ? (existingR.rows[0].is_sirv_shift === null ? null : Boolean(existingR.rows[0].is_sirv_shift)) : null;
+
+      name = 'Редовна';
+      breakMinutes = lockedBreakMinutes;
+      breakIncluded = lockedBreakIncluded;
+      isSirvShift = lockedSirv;
+      hours = deriveWorkHours({
+        startTime: start,
+        endTime: end,
+        breakMinutes,
+        breakIncluded,
+      });
     }
 
     if (hasTenantId) {
@@ -3463,6 +3552,11 @@ app.post('/api/departments/:id/shifts/import/commit', requireAuth, requireTenant
 
 app.delete('/api/shift-template/:code', requireAuth, requireTenantContext, async (req, res) => {
   try {
+    const normalizedCode = normalizeShiftCode(req.params.code);
+    if (isSystemShiftCode(normalizedCode)) {
+      return res.status(403).json({ message: 'Системните смени не могат да бъдат изтрити.' });
+    }
+
     const hasTenantId = await hasShiftTemplatesTenantId();
     const hasDepartmentId = await hasShiftTemplatesDepartmentId();
     const departmentIdRaw = req.query?.department_id ?? req.query?.departmentId;
@@ -3615,7 +3709,7 @@ app.post('/api/calc/summary', requireAuth, requireTenantContext, async (req, res
       employees,
       schedules: schedulesQuery.rows,
       scheduleEntries: entriesQuery.rows,
-      shiftTemplates: appendSystemShiftTemplates(shiftTemplatesQuery.rows),
+      shiftTemplates: filterVisibleShiftTemplates(appendSystemShiftTemplates(shiftTemplatesQuery.rows)),
       selectedScheduleIds,
       weekendRate,
       holidayRate,
