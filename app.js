@@ -4225,6 +4225,12 @@ function attachLeaveCorrectionModalControls() {
       return;
     }
 
+    const employee = state.employees.find((entry) => String(entry.id) === String(employeeId));
+    if (!employee) {
+      setStatus('Служителят за корекция не е намерен.', false);
+      return;
+    }
+
     const nextStart = normalizeDateOnly((leaveCorrectionModalStartInput.value || '').trim());
     const nextEnd = normalizeDateOnly((leaveCorrectionModalEndInput.value || '').trim());
     if (!nextStart || !nextEnd || nextEnd < nextStart) {
@@ -4235,6 +4241,24 @@ function attachLeaveCorrectionModalControls() {
     await deleteLeaveRangeByCodes(employeeId, context.rangeStart, context.rangeEnd, leaveCodes);
     await createLeaveByCode(employeeId, leaveCodes[0], nextStart, nextEnd);
     await refreshMonthlyView();
+
+    const currentMonth = state.month || monthPicker.value || todayMonth();
+    const nextRangeDays = new Set(enumerateLeaveDays(nextStart, nextEnd));
+    const leaveShiftCode = getLeaveShiftCodeForDisplay({ leave_type_code: leaveCodes[0] });
+    const obsoleteDaysInCurrentMonth = enumerateLeaveDays(context.rangeStart, context.rangeEnd)
+      .filter((dateKey) => dateKey.startsWith(`${currentMonth}-`) && !nextRangeDays.has(dateKey));
+
+    for (const dateKey of obsoleteDaysInCurrentMonth) {
+      const day = Number(String(dateKey).slice(-2));
+      if (!Number.isInteger(day) || day < 1 || day > 31) {
+        continue;
+      }
+      const currentShiftCode = String(getShiftCodeForCell(employee, currentMonth, day) || '').toUpperCase();
+      if (leaveShiftCode && currentShiftCode === leaveShiftCode) {
+        await setShiftForCell({ employee, day, month: currentMonth, shiftCode: 'P' });
+      }
+    }
+
     renderAll();
     closeLeaveCorrectionModal();
     setStatus('Периодът е коригиран успешно.', true);
