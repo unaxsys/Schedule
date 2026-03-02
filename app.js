@@ -86,6 +86,7 @@ const state = {
   vacationLedgerDepartmentFilter: 'all',
   vacationLedgerSearchQuery: '',
   vacationCorrectionContext: null,
+  leaveCorrectionContext: null,
   isHandlingUnauthorized: false,
   backendConnectionOnline: null,
   backendReconnectInFlight: false,
@@ -165,6 +166,12 @@ const vacationCorrectionModalStartInput = document.getElementById('vacationCorre
 const vacationCorrectionModalDaysInput = document.getElementById('vacationCorrectionModalDaysInput');
 const vacationCorrectionModalInfo = document.getElementById('vacationCorrectionModalInfo');
 const cancelVacationCorrectionModalBtn = document.getElementById('cancelVacationCorrectionModalBtn');
+const leaveCorrectionModal = document.getElementById('leaveCorrectionModal');
+const leaveCorrectionModalForm = document.getElementById('leaveCorrectionModalForm');
+const leaveCorrectionModalStartInput = document.getElementById('leaveCorrectionModalStartInput');
+const leaveCorrectionModalEndInput = document.getElementById('leaveCorrectionModalEndInput');
+const leaveCorrectionModalInfo = document.getElementById('leaveCorrectionModalInfo');
+const cancelLeaveCorrectionModalBtn = document.getElementById('cancelLeaveCorrectionModalBtn');
 const ratesForm = document.getElementById('ratesForm');
 const weekendRateInput = document.getElementById('weekendRateInput');
 const holidayRateInput = document.getElementById('holidayRateInput');
@@ -375,6 +382,7 @@ async function init() {
   attachVacationForm();
   attachVacationFilters();
   attachVacationCorrectionModalControls();
+  attachLeaveCorrectionModalControls();
   attachVacationDateValidationControls();
   attachLeavesControls();
   attachShiftForm();
@@ -3552,6 +3560,13 @@ async function removeLeaveForScheduleCellByCode(employee, monthKey, day, leaveCo
   });
 
   if (!matches.length) {
+    const leaveForCell = getLeaveForCell(employee.id, monthKey, day);
+    if (leaveForCell?.id && String(leaveForCell.employee_id || '') === String(employee.id || '')) {
+      matches.push(leaveForCell);
+    }
+  }
+
+  if (!matches.length) {
     return { removed: false };
   }
 
@@ -3564,10 +3579,15 @@ async function removeLeaveForScheduleCellByCode(employee, monthKey, day, leaveCo
       throw new Error(payload.message || 'Неуспешно изтриване на отсъствие.');
     }
 
+    const leaveTypeIdForSplit = Number(leave.leave_type_id || getLeaveTypeByCode(String(leave?.leave_type_code || leave?.leave_type?.code || ''))?.id);
+    if (!Number.isFinite(leaveTypeIdForSplit) || leaveTypeIdForSplit <= 0) {
+      continue;
+    }
+
     if (from && from < dateKey) {
       await createLeaveEntry({
         employeeId: employee.id,
-        leaveTypeId: Number(leave.leave_type_id),
+        leaveTypeId: leaveTypeIdForSplit,
         dateFrom: from,
         dateTo: addDaysToDateKey(dateKey, -1),
       });
@@ -3575,7 +3595,7 @@ async function removeLeaveForScheduleCellByCode(employee, monthKey, day, leaveCo
     if (to && to > dateKey) {
       await createLeaveEntry({
         employeeId: employee.id,
-        leaveTypeId: Number(leave.leave_type_id),
+        leaveTypeId: leaveTypeIdForSplit,
         dateFrom: addDaysToDateKey(dateKey, 1),
         dateTo: to,
       });
@@ -4031,7 +4051,7 @@ function renderVacationLedger() {
   });
 
   vacationLedger.querySelectorAll('.leave-period-correct-btn').forEach((button) => {
-    button.addEventListener('click', async () => {
+    button.addEventListener('click', () => {
       const employeeId = button.dataset.employeeId || '';
       const rangeStart = button.dataset.rangeStart || '';
       const rangeEnd = button.dataset.rangeEnd || '';
@@ -4042,21 +4062,7 @@ function renderVacationLedger() {
         return;
       }
 
-      const nextStart = normalizeDateOnly(window.prompt('Нова начална дата (YYYY-MM-DD):', rangeStart));
-      if (!nextStart) {
-        return;
-      }
-      const nextEnd = normalizeDateOnly(window.prompt('Нова крайна дата (YYYY-MM-DD):', rangeEnd));
-      if (!nextEnd || nextEnd < nextStart) {
-        setStatus('Невалиден нов период.', false);
-        return;
-      }
-
-      await deleteLeaveRangeByCodes(employeeId, rangeStart, rangeEnd, leaveCodes);
-      await createLeaveByCode(employeeId, leaveCodes[0], nextStart, nextEnd);
-      await refreshMonthlyView();
-      renderAll();
-      setStatus('Периодът е коригиран успешно.', true);
+      openLeaveCorrectionModal(employee, rangeStart, rangeEnd, leaveCodes);
     });
   });
 }
@@ -4178,6 +4184,107 @@ async function createLeaveByCode(employeeId, leaveCode, dateFrom, dateTo) {
     const payload = await response.json().catch(() => ({}));
     throw new Error(payload.message || 'Неуспешно добавяне на отсъствие.');
   }
+}
+
+function openLeaveCorrectionModal(employee, rangeStart, rangeEnd, leaveCodes) {
+  if (!leaveCorrectionModal || !leaveCorrectionModalForm || !leaveCorrectionModalStartInput || !leaveCorrectionModalEndInput) {
+    return;
+  }
+
+  state.leaveCorrectionContext = {
+    employeeId: employee.id,
+    rangeStart,
+    rangeEnd,
+    leaveCodes: Array.isArray(leaveCodes) ? leaveCodes : []
+  };
+
+  leaveCorrectionModalStartInput.value = rangeStart;
+  leaveCorrectionModalEndInput.value = rangeEnd;
+  if (leaveCorrectionModalInfo) {
+    leaveCorrectionModalInfo.textContent = `Служител: ${employee.name} | Стар период: ${formatDateForDisplay(rangeStart)} - ${formatDateForDisplay(rangeEnd)}`;
+  }
+  leaveCorrectionModal.classList.remove('hidden');
+}
+
+function closeLeaveCorrectionModal() {
+  if (!leaveCorrectionModal || !leaveCorrectionModalForm) {
+    return;
+  }
+
+  leaveCorrectionModalForm.reset();
+  state.leaveCorrectionContext = null;
+  leaveCorrectionModal.classList.add('hidden');
+}
+
+function attachLeaveCorrectionModalControls() {
+  if (!leaveCorrectionModal || !leaveCorrectionModalForm || !leaveCorrectionModalStartInput || !leaveCorrectionModalEndInput) {
+    return;
+  }
+
+  leaveCorrectionModalForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+
+    const context = state.leaveCorrectionContext;
+    if (!context) {
+      closeLeaveCorrectionModal();
+      return;
+    }
+
+    const employeeId = context.employeeId;
+    const leaveCodes = Array.isArray(context.leaveCodes) ? context.leaveCodes : [];
+    if (!employeeId || !leaveCodes.length) {
+      setStatus('Липсват данни за корекция на периода отсъствие.', false);
+      return;
+    }
+
+    const employee = state.employees.find((entry) => String(entry.id) === String(employeeId));
+    if (!employee) {
+      setStatus('Служителят за корекция не е намерен.', false);
+      return;
+    }
+
+    const nextStart = normalizeDateOnly((leaveCorrectionModalStartInput.value || '').trim());
+    const nextEnd = normalizeDateOnly((leaveCorrectionModalEndInput.value || '').trim());
+    if (!nextStart || !nextEnd || nextEnd < nextStart) {
+      setStatus('Невалиден нов период.', false);
+      return;
+    }
+
+    await deleteLeaveRangeByCodes(employeeId, context.rangeStart, context.rangeEnd, leaveCodes);
+    await createLeaveByCode(employeeId, leaveCodes[0], nextStart, nextEnd);
+    await refreshMonthlyView();
+
+    const currentMonth = state.month || monthPicker.value || todayMonth();
+    const nextRangeDays = new Set(enumerateLeaveDays(nextStart, nextEnd));
+    const leaveShiftCode = getLeaveShiftCodeForDisplay({ leave_type_code: leaveCodes[0] });
+    const obsoleteDaysInCurrentMonth = enumerateLeaveDays(context.rangeStart, context.rangeEnd)
+      .filter((dateKey) => dateKey.startsWith(`${currentMonth}-`) && !nextRangeDays.has(dateKey));
+
+    for (const dateKey of obsoleteDaysInCurrentMonth) {
+      const day = Number(String(dateKey).slice(-2));
+      if (!Number.isInteger(day) || day < 1 || day > 31) {
+        continue;
+      }
+      const currentShiftCode = String(getShiftCodeForCell(employee, currentMonth, day) || '').toUpperCase();
+      if (leaveShiftCode && currentShiftCode === leaveShiftCode) {
+        await setShiftForCell({ employee, day, month: currentMonth, shiftCode: 'P' });
+      }
+    }
+
+    renderAll();
+    closeLeaveCorrectionModal();
+    setStatus('Периодът е коригиран успешно.', true);
+  });
+
+  cancelLeaveCorrectionModalBtn?.addEventListener('click', () => {
+    closeLeaveCorrectionModal();
+  });
+
+  leaveCorrectionModal.addEventListener('click', (event) => {
+    if (event.target === leaveCorrectionModal) {
+      closeLeaveCorrectionModal();
+    }
+  });
 }
 
 function openVacationCorrectionModal(employee, rangeStart, rangeEnd) {
@@ -4618,45 +4725,15 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
 
     select.addEventListener('change', async () => {
       await setShiftForCell({ employee, day, month, shiftCode: select.value });
-      renderSchedule();
+      renderAll();
     });
 
     cell.appendChild(select);
 
-    const entryValidation = scheduleId
-      ? state.scheduleEntryValidationsById[`${scheduleId}|${employee.id}|${day}`]
-      : null;
     const entrySnapshot = scheduleId
       ? state.scheduleEntrySnapshotsById[`${scheduleId}|${employee.id}|${day}`]
       : null;
     snapshotEntriesByDay.push(entrySnapshot || {});
-
-    const warningMessages = Array.isArray(entryValidation?.warnings) ? entryValidation.warnings.filter(Boolean) : [];
-    const errorMessages = Array.isArray(entryValidation?.errors) ? entryValidation.errors.filter(Boolean) : [];
-    if (errorMessages.length || warningMessages.length) {
-      const marker = document.createElement('span');
-      marker.className = `cell-validation-marker ${errorMessages.length ? 'cell-validation-marker--error' : 'cell-validation-marker--warning'}`;
-      marker.textContent = errorMessages.length ? '❌' : '⚠';
-      const details = [];
-      if (errorMessages.length) {
-        details.push(`Грешки: ${truncateMessages(errorMessages).join(' | ')}`);
-      }
-      if (warningMessages.length) {
-        details.push(`Предупреждения: ${truncateMessages(warningMessages).join(' | ')}`);
-      }
-      marker.title = details.join('\n');
-      cell.appendChild(marker);
-    }
-
-    if (!isAdditionalShiftCode(effectiveShift) && safeNum(entrySnapshot?.overtimeMinutes) > 0) {
-      const overtimeBadge = document.createElement('span');
-      overtimeBadge.className = 'cell-ot-badge';
-      overtimeBadge.textContent = 'OT';
-      overtimeBadge.title = `Извънредни: ${minutesToHoursDecimal(entrySnapshot?.overtimeMinutes)} ч`;
-      cell.classList.add('day-overtime');
-      cell.appendChild(overtimeBadge);
-    }
-
 
     row.appendChild(cell);
     collectSummary(summary, employee, effectiveShift, holiday, weekend, inEmployment, entrySnapshot);
