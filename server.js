@@ -41,7 +41,7 @@ const {
   dateAdd,
   finalizeSirvOvertimeAllocations,
 } = require('./schedule_calculations');
-const { computeShiftSnapshot } = require('./lib/shift-engine');
+const { computeShiftSnapshot, parseTimeToMinutes, normalizeShiftInterval, calcWorkMinutes } = require('./lib/shift-engine');
 const {
   enumerateDates: enumerateLeaveDates,
   computeAdjustedNormMinutes,
@@ -356,6 +356,23 @@ function isLegacyInternalShiftCode(code) {
 
 function filterVisibleShiftTemplates(shiftTemplates = []) {
   return (Array.isArray(shiftTemplates) ? shiftTemplates : []).filter((row) => !isLegacyInternalShiftCode(row.code));
+}
+
+
+function isSystemShiftCode(code) {
+  return ['R', 'P', 'O', 'B'].includes(normalizeShiftCode(code));
+}
+
+function deriveWorkHours({ startTime, endTime, breakMinutes, breakIncluded }) {
+  const startMinutes = parseTimeToMinutes(startTime);
+  const endMinutes = parseTimeToMinutes(endTime);
+  const normalizedInterval = normalizeShiftInterval(startMinutes, endMinutes);
+  if (!normalizedInterval) {
+    return 0;
+  }
+  const [start, end] = normalizedInterval;
+  const workMinutes = calcWorkMinutes(end - start, breakMinutes, breakIncluded);
+  return Number((workMinutes / 60).toFixed(2));
 }
 
 async function buildHolidayResolver(tenantId, fromDate = null, toDate = null) {
@@ -3317,17 +3334,18 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
   }
 
   const code = cleanStr(req.body?.code);
-  const { name } = validation.value;
-  const start = validation.value.startTime;
-  const end = validation.value.endTime;
-  const hours = validation.value.hours;
-  const breakMinutes = validation.value.breakMinutes;
-  const breakIncluded = validation.value.breakIncluded;
-  const isSirvShift = req.body?.is_sirv_shift === undefined && req.body?.isSirvShift === undefined
+  const normalizedCode = normalizeShiftCode(code);
+  let { name } = validation.value;
+  let start = validation.value.startTime;
+  let end = validation.value.endTime;
+  let hours = validation.value.hours;
+  let breakMinutes = validation.value.breakMinutes;
+  let breakIncluded = validation.value.breakIncluded;
+  let isSirvShift = req.body?.is_sirv_shift === undefined && req.body?.isSirvShift === undefined
     ? null
     : Boolean(req.body?.is_sirv_shift ?? req.body?.isSirvShift);
   const departmentIdRaw = req.body?.department_id ?? req.body?.departmentId;
-  const departmentId = departmentIdRaw === null || departmentIdRaw === '' ? null : cleanStr(departmentIdRaw);
+  let departmentId = departmentIdRaw === null || departmentIdRaw === '' ? null : cleanStr(departmentIdRaw);
 
   if (!code) {
     return res.status(400).json({ message: 'Невалиден код за смяна.' });
@@ -3349,6 +3367,46 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
       if (!departmentExists.rowCount) {
         return res.status(400).json({ message: 'Избраният отдел за смяната не е намерен.' });
       }
+    }
+
+
+    if (isSystemShiftCode(normalizedCode) && normalizedCode !== 'R') {
+      return res.status(403).json({ message: 'Системните смени П/О/Б не подлежат на редакция.' });
+    }
+
+    if (normalizedCode === 'R') {
+      if (hasDepartmentId && departmentId) {
+        return res.status(400).json({ message: 'Редовна смяна (Р) може да е само глобална (без отдел).' });
+      }
+      departmentId = null;
+
+      const existingR = await pool.query(
+        `SELECT COALESCE(break_minutes, 60) AS break_minutes,
+                COALESCE(break_included, FALSE) AS break_included,
+                is_sirv_shift
+         FROM shift_templates
+         WHERE UPPER(code) = 'R'
+           ${hasTenantId ? 'AND tenant_id = $1' : ''}
+           ${hasDepartmentId ? 'AND department_id IS NULL' : ''}
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        hasTenantId ? [req.tenantId] : []
+      );
+
+      const lockedBreakMinutes = existingR.rowCount ? Number(existingR.rows[0].break_minutes || 60) : 60;
+      const lockedBreakIncluded = existingR.rowCount ? Boolean(existingR.rows[0].break_included) : false;
+      const lockedSirv = existingR.rowCount ? (existingR.rows[0].is_sirv_shift === null ? null : Boolean(existingR.rows[0].is_sirv_shift)) : null;
+
+      name = 'Редовна';
+      breakMinutes = lockedBreakMinutes;
+      breakIncluded = lockedBreakIncluded;
+      isSirvShift = lockedSirv;
+      hours = deriveWorkHours({
+        startTime: start,
+        endTime: end,
+        breakMinutes,
+        breakIncluded,
+      });
     }
 
     if (hasTenantId) {
@@ -3534,6 +3592,11 @@ app.post('/api/departments/:id/shifts/import/commit', requireAuth, requireTenant
 
 app.delete('/api/shift-template/:code', requireAuth, requireTenantContext, async (req, res) => {
   try {
+    const normalizedCode = normalizeShiftCode(req.params.code);
+    if (isSystemShiftCode(normalizedCode)) {
+      return res.status(403).json({ message: 'Системните смени не могат да бъдат изтрити.' });
+    }
+
     const hasTenantId = await hasShiftTemplatesTenantId();
     const hasDepartmentId = await hasShiftTemplatesDepartmentId();
     const departmentIdRaw = req.query?.department_id ?? req.query?.departmentId;
