@@ -4725,7 +4725,7 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
 
     select.addEventListener('change', async () => {
       await setShiftForCell({ employee, day, month, shiftCode: select.value });
-      renderSchedule();
+      renderAll();
     });
 
     cell.appendChild(select);
