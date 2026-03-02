@@ -78,8 +78,8 @@ header p {
 
 .backend-connection-indicator {
   position: fixed;
-  top: 4.9rem;
-  right: 1rem;
+  left: 1.5rem;
+  bottom: 1.2rem;
   z-index: 1150;
   display: inline-flex;
   align-items: center;
@@ -118,8 +118,7 @@ header p {
 
   .backend-connection-indicator {
     left: 0.75rem;
-    right: auto;
-    top: 5.2rem;
+    bottom: 0.75rem;
   }
 }
 
@@ -419,7 +418,34 @@ button:hover {
   padding: 0.45rem 0.65rem;
 }
 .table-wrap {
-  overflow-x: auto;
+  overflow: auto;
+  max-width: 100%;
+}
+
+.schedule-zoom-content {
+  transform-origin: top left;
+}
+
+.schedule-zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.6rem 0;
+  padding: 0.4rem 0.55rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+}
+
+.schedule-zoom-controls button {
+  min-width: 2rem;
+  padding: 0.15rem 0.35rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+#scheduleZoomRange {
+  width: 140px;
 }
 table {
   border-collapse: collapse;
