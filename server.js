@@ -3375,9 +3375,7 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
     }
 
     if (normalizedCode === 'R') {
-      if (hasDepartmentId && departmentId) {
-        return res.status(400).json({ message: 'Редовна смяна (Р) може да е само глобална (без отдел).' });
-      }
+      // R is tenant-global. If UI sends a department context, coerce to global.
       departmentId = null;
 
       const existingR = await pool.query(
