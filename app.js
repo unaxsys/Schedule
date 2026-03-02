@@ -24,6 +24,19 @@ const SYSTEM_SHIFTS = [
 
 const DEFAULT_WORK_SHIFT = { code: 'R', label: 'Р', name: 'Редовна', type: 'work', start: '08:00', end: '17:00', hours: 8, locked: true };
 
+const LEAVE_SUMMARY_COLUMNS = SYSTEM_SHIFTS
+  .filter((shift) => shift.type === 'leave')
+  .map((shift) => ({
+    key: `leaveDays${String(shift.code || '').toUpperCase()}`,
+    label: shift.name,
+    shiftCode: String(shift.code || '').toUpperCase()
+  }));
+
+const LEAVE_DAY_SUMMARY_KEY_BY_SHIFT_CODE = LEAVE_SUMMARY_COLUMNS.reduce((acc, column) => {
+  acc[column.shiftCode] = column.key;
+  return acc;
+}, {});
+
 const SUMMARY_COLUMNS = [
   { key: 'workedDays', label: 'Отр. дни' },
   { key: 'workedHours', label: 'Часове' },
@@ -39,7 +52,8 @@ const SUMMARY_COLUMNS = [
   { key: 'payableHours', label: 'Платими часове' },
   { key: 'vacationDays', label: 'Отпуск' },
   { key: 'remainingVacation', label: 'Ост. отпуск' },
-  { key: 'sickDays', label: 'Болничен' }
+  { key: 'sickDays', label: 'Болничен' },
+  ...LEAVE_SUMMARY_COLUMNS.map(({ key, label }) => ({ key, label }))
 ];
 
 const state = {
@@ -328,28 +342,6 @@ function renderScheduleOverviewTotals(totals) {
       ${items.map(([label, minutes]) => `<div class="schedule-overview-item"><span>${label}</span><strong>${minutesToHoursDecimal(minutes)} ч</strong></div>`).join('')}
     </div>
   `;
-}
-
-function appendSnapshotTotalsColumns(row, totals, isTotalsRow = false) {
-  const columns = [
-    totals.workMinutesTotal,
-    totals.nightMinutes,
-    totals.weekendMinutes,
-    totals.holidayMinutes,
-    totals.overtimeMinutes,
-  ];
-  columns.forEach((value, index) => {
-    const cell = document.createElement('td');
-    cell.className = 'summary-col schedule-snapshot-total';
-    if (index === 4 && safeNum(value) > 0) {
-      cell.classList.add('negative');
-    }
-    cell.textContent = `${minutesToHoursDecimal(value)} ч`;
-    if (isTotalsRow) {
-      cell.classList.add('schedule-snapshot-total--grand');
-    }
-    row.appendChild(cell);
-  });
 }
 
 init();
@@ -4643,7 +4635,8 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
     nightWorkedHours: 0,
     nightConvertedHours: 0,
     vacationDays: 0,
-    sickDays: 0
+    sickDays: 0,
+    ...createLeaveSummaryCounters()
   };
   const snapshotEntriesByDay = [];
 
@@ -4747,7 +4740,6 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
   appendSummaryColumns(row, employeeTotals, visibleSummaryColumns);
 
   const employeeSnapshotTotals = sumEmployeeTotals(snapshotEntriesByDay);
-  appendSnapshotTotalsColumns(row, employeeSnapshotTotals);
   employeeSnapshotTotalsList.push(employeeSnapshotTotals);
   return { row, employeeSnapshotTotals };
 }
@@ -4892,20 +4884,14 @@ function renderSchedule() {
     cell.textContent = column.label;
     header.appendChild(cell);
   });
-  ['Общо', 'Нощни', 'Уикенд', 'Празнични', 'Извънредни'].forEach((label) => {
-    const cell = document.createElement('th');
-    cell.className = 'summary-col schedule-snapshot-total';
-    cell.textContent = label;
-    header.appendChild(cell);
-  });
-
   scheduleTable.innerHTML = '';
   scheduleTable.appendChild(header);
 
   const totals = {
     workedDays: 0, workedHours: 0, normHours: 0, deviation: 0, sirvNormHours: 0, sirvWorkedHours: 0,
     overtimeHours: 0, holidayWorkedHours: 0, weekendWorkedHours: 0, nightWorkedHours: 0,
-    nightConvertedHours: 0, payableHours: 0, vacationDays: 0, remainingVacation: 0, sickDays: 0
+    nightConvertedHours: 0, payableHours: 0, vacationDays: 0, remainingVacation: 0, sickDays: 0,
+    ...createLeaveSummaryCounters()
   };
 
   const departmentTotalsList = [];
@@ -4918,7 +4904,7 @@ function renderSchedule() {
       const sectionRow = document.createElement('tr');
       sectionRow.className = 'schedule-department-header-row';
       const sectionCell = document.createElement('td');
-      sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length + 5;
+      sectionCell.colSpan = 1 + totalDays + visibleSummaryColumns.length;
       sectionCell.innerHTML = `<b>${group.deptName}</b> <small>(${groupEmployees.length} служители)</small>`;
       sectionRow.appendChild(sectionCell);
       scheduleTable.appendChild(sectionRow);
@@ -4927,7 +4913,7 @@ function renderSchedule() {
     if (!groupEmployees.length) {
       const emptyRow = document.createElement('tr');
       const emptyCell = document.createElement('td');
-      emptyCell.colSpan = 1 + totalDays + visibleSummaryColumns.length + 5;
+      emptyCell.colSpan = 1 + totalDays + visibleSummaryColumns.length;
       emptyCell.className = 'schedule-empty-department';
       emptyCell.textContent = 'Няма служители в този отдел';
       emptyRow.appendChild(emptyCell);
@@ -4945,9 +4931,6 @@ function renderSchedule() {
       departmentTotalsList.push({ deptId: group.deptId, ...employeeSnapshotTotals });
     });
 
-    const deptTotals = window.ScheduleTotals?.sumGridTotals
-      ? window.ScheduleTotals.sumGridTotals(employeeSnapshotTotalsList)
-      : sumGridTotals(employeeSnapshotTotalsList);
 
     if (shouldGroupByDepartments) {
       const deptRow = document.createElement('tr');
@@ -4967,7 +4950,6 @@ function renderSchedule() {
         filler.textContent = '—';
         deptRow.appendChild(filler);
       }
-      appendSnapshotTotalsColumns(deptRow, deptTotals, true);
       scheduleTable.appendChild(deptRow);
     }
   });
@@ -4988,7 +4970,6 @@ function renderSchedule() {
 
     appendSummaryColumns(totalsRow, totals, visibleSummaryColumns, true);
     const snapshotGrandTotals = sumGridTotals(departmentTotalsList);
-    appendSnapshotTotalsColumns(totalsRow, snapshotGrandTotals, true);
     renderScheduleOverviewTotals(snapshotGrandTotals);
     scheduleTable.appendChild(totalsRow);
   } else {
@@ -5017,7 +4998,7 @@ function formatSummaryColumnValue(columnKey, data, isTotals) {
     return value ?? '0';
   }
 
-  if (['workedDays', 'vacationDays', 'remainingVacation', 'sickDays'].includes(columnKey)) {
+  if (columnKey === 'workedDays' || columnKey === 'vacationDays' || columnKey === 'remainingVacation' || columnKey === 'sickDays' || columnKey.startsWith('leaveDays')) {
     return isTotals ? Math.round(value) : String(value);
   }
 
@@ -5072,7 +5053,8 @@ function calculateEmployeeTotals({ employee, summary, year, month, monthNormHour
     payableHours,
     vacationDays: summary.vacationDays,
     remainingVacation,
-    sickDays: summary.sickDays
+    sickDays: summary.sickDays,
+    ...buildLeaveSummaryValues(summary)
   };
 }
 
@@ -5092,6 +5074,31 @@ function accumulateTotals(totals, employeeTotals) {
   totals.vacationDays += employeeTotals.vacationDays;
   totals.remainingVacation += employeeTotals.remainingVacation;
   totals.sickDays += employeeTotals.sickDays;
+  LEAVE_SUMMARY_COLUMNS.forEach((column) => {
+    totals[column.key] += Number(employeeTotals[column.key] || 0);
+  });
+}
+
+function createLeaveSummaryCounters() {
+  return LEAVE_SUMMARY_COLUMNS.reduce((acc, column) => {
+    acc[column.key] = 0;
+    return acc;
+  }, {});
+}
+
+function buildLeaveSummaryValues(summary) {
+  return LEAVE_SUMMARY_COLUMNS.reduce((acc, column) => {
+    acc[column.key] = Number(summary[column.key] || 0);
+    return acc;
+  }, {});
+}
+
+function incrementLeaveSummaryByShiftCode(summary, shiftCode) {
+  const normalizedShiftCode = normalizeShiftCodeForApi(shiftCode);
+  const summaryKey = LEAVE_DAY_SUMMARY_KEY_BY_SHIFT_CODE[normalizedShiftCode];
+  if (summaryKey) {
+    summary[summaryKey] = Number(summary[summaryKey] || 0) + 1;
+  }
 }
 
 function getStoredShiftHours(shift) {
@@ -5144,6 +5151,7 @@ function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmploy
     if (shift.type === 'sick') {
       summary.sickDays += 1;
     }
+    incrementLeaveSummaryByShiftCode(summary, shiftCode);
     return;
   }
 
@@ -5169,6 +5177,7 @@ function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmploy
   if (shift.type === 'sick') {
     summary.sickDays += 1;
   }
+  incrementLeaveSummaryByShiftCode(summary, shiftCode);
 }
 
 
