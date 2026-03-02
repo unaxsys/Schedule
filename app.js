@@ -3453,7 +3453,7 @@ function renderVacationEmployeeOptions() {
 
 
 function renderLeavesPanel() {
-  if (!leaveEmployeeSelect || !leaveTypeSelect || !leaveList) {
+  if (!leaveEmployeeSelect || !leaveTypeSelect) {
     return;
   }
 
@@ -3466,41 +3466,6 @@ function renderLeavesPanel() {
     if (el) {
       el.disabled = !canManage;
     }
-  });
-
-  const month = state.month || todayMonth();
-  const rows = (state.leaves || []).filter((leave) => {
-    const leaveCode = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
-    if (leaveCode === 'PAID_LEAVE') {
-      return false;
-    }
-    return String(leave.date_from || '').startsWith(month) || String(leave.date_to || '').startsWith(month);
-  });
-  if (!rows.length) {
-    leaveList.innerHTML = '<small>Няма отсъствия за избрания месец (платеният отпуск е в досието).</small>';
-    return;
-  }
-
-  leaveList.innerHTML = rows.map((leave) => {
-    const employee = state.employees.find((entry) => entry.id === leave.employee_id);
-    const canDelete = canManage ? `<button type="button" class="btn-delete leave-delete-btn" data-leave-id="${leave.id}">Изтрий</button>` : '';
-    return `<div class="schedule-list-item"><strong>${employee?.name || leave.employee_id}</strong> • ${leave.leave_type?.name || leave.leave_type_name || leave.leave_type_code || 'Отсъствие'} • ${leave.date_from} → ${leave.date_to} ${canDelete}</div>`;
-  }).join('');
-
-  leaveList.querySelectorAll('.leave-delete-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      try {
-        const response = await apiFetch(`/api/leaves/${btn.dataset.leaveId}`, { method: 'DELETE' });
-        if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
-          throw new Error(payload.message || 'Неуспешно изтриване');
-        }
-        await refreshMonthlyView();
-        renderAll();
-      } catch (error) {
-        setStatus(error.message, false);
-      }
-    });
   });
 }
 
@@ -3540,17 +3505,45 @@ async function createLeaveEntry({ employeeId, leaveTypeId, dateFrom, dateTo, min
   }
 }
 
-async function removePaidLeaveForScheduleCell(employee, monthKey, day) {
-  const paidLeaveType = getPaidLeaveType();
-  if (!paidLeaveType) {
+function getLeaveCodeForShiftCode(shiftCode) {
+  const normalized = String(shiftCode || '').toUpperCase();
+  const map = {
+    O: 'PAID_LEAVE',
+    B: 'SICK',
+    N: 'UNPAID',
+    M: 'MATERNITY',
+    S: 'SELF_ABSENCE',
+  };
+  return map[normalized] || null;
+}
+
+function getLeaveTypeByCode(leaveCode) {
+  const normalized = String(leaveCode || '').toUpperCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized === 'SELF_ABSENCE') {
+    return (state.leaveTypes || []).find((type) => ['SELF_ABSENCE', 'ABSENCE'].includes(String(type?.code || '').toUpperCase())) || null;
+  }
+
+  return (state.leaveTypes || []).find((type) => String(type?.code || '').toUpperCase() === normalized) || null;
+}
+
+async function removeLeaveForScheduleCellByCode(employee, monthKey, day, leaveCode) {
+  const normalizedCode = String(leaveCode || '').toUpperCase();
+  if (!normalizedCode) {
     return { removed: false };
   }
 
   const dateKey = `${monthKey}-${String(day).padStart(2, '0')}`;
+  const leaveType = getLeaveTypeByCode(normalizedCode);
+  const leaveTypeId = leaveType?.id ? Number(leaveType.id) : null;
   const matches = (state.leaves || []).filter((leave) => {
     const employeeId = String(leave.employee_id || '');
-    const leaveCode = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
-    if (employeeId !== String(employee.id || '') || leaveCode !== 'PAID_LEAVE') {
+    const code = String(leave?.leave_type_code || leave?.leave_type?.code || '').toUpperCase();
+    const isSameType = leaveTypeId ? Number(leave?.leave_type_id) === leaveTypeId : code === normalizedCode;
+    if (employeeId !== String(employee.id || '') || !isSameType) {
       return false;
     }
     const from = normalizeDateOnly(leave.date_from);
@@ -3568,13 +3561,13 @@ async function removePaidLeaveForScheduleCell(employee, monthKey, day) {
     const response = await apiFetch(`/api/leaves/${leave.id}`, { method: 'DELETE' });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.message || 'Неуспешно изтриване на платен отпуск.');
+      throw new Error(payload.message || 'Неуспешно изтриване на отсъствие.');
     }
 
     if (from && from < dateKey) {
       await createLeaveEntry({
         employeeId: employee.id,
-        leaveTypeId: paidLeaveType.id,
+        leaveTypeId: Number(leave.leave_type_id),
         dateFrom: from,
         dateTo: addDaysToDateKey(dateKey, -1),
       });
@@ -3582,7 +3575,7 @@ async function removePaidLeaveForScheduleCell(employee, monthKey, day) {
     if (to && to > dateKey) {
       await createLeaveEntry({
         employeeId: employee.id,
-        leaveTypeId: paidLeaveType.id,
+        leaveTypeId: Number(leave.leave_type_id),
         dateFrom: addDaysToDateKey(dateKey, 1),
         dateTo: to,
       });
@@ -3592,15 +3585,22 @@ async function removePaidLeaveForScheduleCell(employee, monthKey, day) {
   return { removed: true };
 }
 
-async function ensurePaidLeaveForScheduleCell(employee, monthKey, day) {
-  const paidLeaveType = getPaidLeaveType();
-  if (!paidLeaveType) {
+async function ensureLeaveForScheduleCellByCode(employee, monthKey, day, leaveCode) {
+  const leaveType = getLeaveTypeByCode(leaveCode);
+  if (!leaveType?.id) {
     return { created: false, skipped: true };
   }
 
   const dateKey = `${monthKey}-${String(day).padStart(2, '0')}`;
-  if (getLeaveForCell(employee.id, monthKey, day)) {
+  const existing = getLeaveForCell(employee.id, monthKey, day);
+  const existingCode = String(existing?.leave_type_code || existing?.leave_type?.code || '').toUpperCase();
+  const targetCode = String(leaveCode || '').toUpperCase();
+  if (existingCode === targetCode) {
     return { created: false, skipped: true };
+  }
+
+  if (existingCode) {
+    await removeLeaveForScheduleCellByCode(employee, monthKey, day, existingCode);
   }
 
   const response = await apiFetch('/api/leaves', {
@@ -3608,7 +3608,7 @@ async function ensurePaidLeaveForScheduleCell(employee, monthKey, day) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       employee_id: employee.id,
-      leave_type_id: Number(paidLeaveType.id),
+      leave_type_id: Number(leaveType.id),
       date_from: dateKey,
       date_to: dateKey,
       minutes_per_day: null,
@@ -3624,7 +3624,7 @@ async function ensurePaidLeaveForScheduleCell(employee, monthKey, day) {
     return { created: false, skipped: true };
   }
 
-  throw new Error(payload.message || 'Неуспешно добавяне на платен отпуск от графика.');
+  throw new Error(payload.message || 'Неуспешно добавяне на отсъствие от графика.');
 }
 
 function attachLeavesControls() {
@@ -4327,7 +4327,7 @@ async function setVacationShiftForDateRange(employee, startDateKey, endDateKey, 
 async function setShiftForCell({ employee, day, month, shiftCode }) {
   const monthKey = month || state.month || todayMonth();
   const localKey = scheduleKey(employee.id, monthKey, day);
-  const previousShiftCode = String(state.schedule[localKey] || 'P').toUpperCase();
+  const previousShiftCode = String(getShiftCodeForCell(employee, monthKey, day) || 'P').toUpperCase();
   state.schedule[localKey] = shiftCode;
   saveScheduleLocal();
 
@@ -4338,16 +4338,18 @@ async function setShiftForCell({ employee, day, month, shiftCode }) {
   }
 
   const nextShiftCode = String(shiftCode || '').toUpperCase();
+  const previousLeaveCode = getLeaveCodeForShiftCode(previousShiftCode);
+  const nextLeaveCode = getLeaveCodeForShiftCode(nextShiftCode);
   let needsRefresh = false;
 
-  if (nextShiftCode === 'O' && previousShiftCode !== 'O') {
-    const leaveSync = await ensurePaidLeaveForScheduleCell(employee, monthKey, day);
-    needsRefresh = needsRefresh || leaveSync.created;
+  if (previousLeaveCode && previousLeaveCode !== nextLeaveCode) {
+    const leaveSync = await removeLeaveForScheduleCellByCode(employee, monthKey, day, previousLeaveCode);
+    needsRefresh = needsRefresh || leaveSync.removed;
   }
 
-  if (previousShiftCode === 'O' && nextShiftCode !== 'O') {
-    const leaveSync = await removePaidLeaveForScheduleCell(employee, monthKey, day);
-    needsRefresh = needsRefresh || leaveSync.removed;
+  if (nextLeaveCode) {
+    const leaveSync = await ensureLeaveForScheduleCellByCode(employee, monthKey, day, nextLeaveCode);
+    needsRefresh = needsRefresh || leaveSync.created;
   }
 
   if (needsRefresh) {
@@ -4497,6 +4499,12 @@ function filterShiftTemplatesByDepartment(shiftTemplates = [], departmentId = nu
 }
 
 function getShiftCodeForCell(employee, month, day) {
+  const leave = getLeaveForCell(employee.id, month, day);
+  const leaveShiftCode = getLeaveShiftCodeForDisplay(leave);
+  if (leaveShiftCode) {
+    return leaveShiftCode;
+  }
+
   const localValue = state.schedule[scheduleKey(employee.id, month, day)] || 'P';
   const scheduleId = getEmployeeScheduleId(employee);
   if (scheduleId) {
