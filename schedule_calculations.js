@@ -157,7 +157,9 @@ function validateScheduleEntry({ prevShiftEndAt = null, shift = {} }) {
     warnings.push('check_rest_after_12h_shift');
   }
   if (Number.isFinite(prevShiftEndAt)) {
-    const rest = start - prevShiftEndAt;
+    const rest = start >= prevShiftEndAt
+      ? start - prevShiftEndAt
+      : (start + MINUTES_PER_DAY) - prevShiftEndAt;
     if (rest < 12 * 60) {
       errors.push('insufficient_interdaily_rest');
     }

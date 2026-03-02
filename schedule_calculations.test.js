@@ -6,6 +6,7 @@ const {
   holidayResolverFactory,
   countBusinessDays,
   finalizeSirvOvertimeAllocations,
+  validateScheduleEntry,
 } = require('./schedule_calculations');
 
 test('08:00-17:00 break 60 excluded => 480', () => {
@@ -101,4 +102,20 @@ test('holiday_minutes split across midnight by day holiday flags', () => {
   });
   assert.equal(metrics.work_minutes_total, 480);
   assert.equal(metrics.holiday_minutes, 240);
+});
+
+test('interdaily rest allows overnight gap >= 12h', () => {
+  const validation = validateScheduleEntry({
+    prevShiftEndAt: 17 * 60,
+    shift: { start_time: '08:00', end_time: '16:00' },
+  });
+  assert.ok(!validation.errors.includes('insufficient_interdaily_rest'));
+});
+
+test('interdaily rest blocks overnight gap < 12h', () => {
+  const validation = validateScheduleEntry({
+    prevShiftEndAt: 22 * 60,
+    shift: { start_time: '08:00', end_time: '16:00' },
+  });
+  assert.ok(validation.errors.includes('insufficient_interdaily_rest'));
 });
