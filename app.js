@@ -3,7 +3,8 @@ const DEFAULT_RATES = {
   holiday: 2
 };
 
-const NIGHT_HOURS_COEFFICIENT = 1.14286;
+const NIGHT_HOURS_COEFFICIENT = 1.43;
+const MIN_NIGHT_HOURS_FOR_ELIGIBILITY = 3;
 const MAX_NIGHT_SHIFT_HOURS = 12;
 const STANDARD_BREAK_HOURS = 1;
 const BREAK_DEDUCTION_THRESHOLD_HOURS = 9;
@@ -34,7 +35,7 @@ const SUMMARY_COLUMNS = [
   { key: 'holidayWorkedHours', label: 'Труд празник (ч)' },
   { key: 'weekendWorkedHours', label: 'Труд почивен (ч)' },
   { key: 'nightWorkedHours', label: 'Нощен труд (ч)' },
-  { key: 'nightConvertedHours', label: 'Нощен коеф. (ч)' },
+  { key: 'nightConvertedHours', label: 'Нощен т-д конв. (ч)' },
   { key: 'payableHours', label: 'Платими часове' },
   { key: 'vacationDays', label: 'Отпуск' },
   { key: 'remainingVacation', label: 'Ост. отпуск' },
@@ -4605,7 +4606,7 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
 
 
     row.appendChild(cell);
-    collectSummary(summary, effectiveShift, holiday, weekend, inEmployment, entrySnapshot);
+    collectSummary(summary, employee, effectiveShift, holiday, weekend, inEmployment, entrySnapshot);
     if (inEmployment && !holiday && !weekend) {
       summary.monthNormHours += 8;
     }
@@ -4914,9 +4915,10 @@ function calculateEmployeeTotals({ employee, summary, year, month, monthNormHour
   const normalizedWeekendHours = isSirvEmployee
     ? summary.weekendWorkedHours
     : summary.weekendWorkedHours * state.rates.weekend;
+  const nightPremiumHours = Math.max(0, summary.nightConvertedHours - summary.nightWorkedHours);
   const payableHours =
-    summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + summary.nightConvertedHours;
-  const deviation = summary.workedHours + summary.nightConvertedHours - monthNormHours;
+    summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + nightPremiumHours;
+  const deviation = summary.workedHours + nightPremiumHours - monthNormHours;
   const employeeSirvPeriod = Number(employee?.sirvPeriodMonths || 1) || 1;
   const sirvTotals = getSirvTotalsForEmployee(employee, month, isSirvEmployee ? employeeSirvPeriod : 1);
   const overtimeHours = isSirvEmployee
@@ -4982,7 +4984,7 @@ function getWorkShiftHours(shift) {
   return getStoredShiftHours(shift);
 }
 
-function collectSummary(summary, shiftCode, holiday, weekend, inEmployment = true, snapshot = null) {
+function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmployment = true, snapshot = null) {
   if (!inEmployment) {
     return;
   }
@@ -5002,7 +5004,7 @@ function collectSummary(summary, shiftCode, holiday, weekend, inEmployment = tru
       summary.workedHours += workHours;
     }
     summary.nightWorkedHours += nightHours;
-    summary.nightConvertedHours += nightHours * (NIGHT_HOURS_COEFFICIENT - 1);
+    summary.nightConvertedHours += nightHours * NIGHT_HOURS_COEFFICIENT;
     summary.holidayWorkedHours += holidayHours;
     summary.weekendWorkedHours += weekendHours;
 
@@ -5017,12 +5019,12 @@ function collectSummary(summary, shiftCode, holiday, weekend, inEmployment = tru
 
   if (shift.type === 'work') {
     const shiftHours = getWorkShiftHours(shift);
-    const nightHours = calcNightHours(shift.start, shift.end);
+    const nightHours = calcNightHours(shift.start, shift.end, { isYoungWorker: Boolean(employee?.youngWorker) });
 
     summary.workedDays += 1;
     summary.workedHours += shiftHours;
     summary.nightWorkedHours += nightHours;
-    summary.nightConvertedHours += nightHours * (NIGHT_HOURS_COEFFICIENT - 1);
+    summary.nightConvertedHours += nightHours * NIGHT_HOURS_COEFFICIENT;
 
     if (holiday) {
       summary.holidayWorkedHours += shiftHours;
@@ -5204,7 +5206,7 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
         continue;
       }
       const workedHours = getWorkShiftHours(shift);
-      const nightHours = calcNightHours(shift.start, shift.end);
+      const nightHours = calcNightHours(shift.start, shift.end, { isYoungWorker: Boolean(employee?.youngWorker) });
       totals.convertedWorkedHours += workedHours + nightHours * (NIGHT_HOURS_COEFFICIENT - 1);
     }
   });
@@ -6585,7 +6587,7 @@ function isMonthLocked(_month) {
   return String(active.status || '').toLowerCase() === 'locked';
 }
 
-function calcNightHours(start, end) {
+function calcNightHours(start, end, { isYoungWorker = false, minNightHours = MIN_NIGHT_HOURS_FOR_ELIGIBILITY } = {}) {
   if (!start || !end) {
     return 0;
   }
@@ -6603,10 +6605,15 @@ function calcNightHours(start, end) {
     endMinutes += 24 * 60;
   }
 
-  const windows = [
-    [22 * 60, 24 * 60],
-    [24 * 60, 30 * 60]
-  ];
+  const windows = isYoungWorker
+    ? [
+      [20 * 60, 24 * 60],
+      [24 * 60, 30 * 60]
+    ]
+    : [
+      [22 * 60, 24 * 60],
+      [24 * 60, 30 * 60]
+    ];
 
   let nightMinutes = 0;
   windows.forEach(([windowStart, windowEnd]) => {
@@ -6616,6 +6623,10 @@ function calcNightHours(start, end) {
       nightMinutes += overlapEnd - overlapStart;
     }
   });
+
+  if (nightMinutes < minNightHours * 60) {
+    return 0;
+  }
 
   return Number((nightMinutes / 60).toFixed(2));
 }

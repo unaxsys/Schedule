@@ -348,13 +348,14 @@ function getSirvPeriodBounds(monthKey, periodMonths = 1) {
   return { periodStart, periodEnd: periodEndDate.toISOString().slice(0, 10) };
 }
 
-async function computeEntrySnapshot({ date, shift, isHoliday, sirvEnabled = false, dailyNormMinutes = 480 }) {
+async function computeEntrySnapshot({ date, shift, isHoliday, sirvEnabled = false, dailyNormMinutes = 480, isYoungWorker = false }) {
   const metrics = computeEntryMetrics({
     dateISO: date,
     shift,
     isHoliday,
     sirvEnabled,
     dailyNormMinutes,
+    isYoungWorker,
   });
 
   return {
@@ -2565,6 +2566,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         isHoliday: holidayResolver,
         sirvEnabled: Boolean(schedule.sirv_enabled),
         dailyNormMinutes: Number(employee.workdayMinutes || 480),
+        isYoungWorker: Boolean(employee.youngWorker),
       });
     }
 

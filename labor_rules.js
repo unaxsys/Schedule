@@ -1,4 +1,5 @@
-const NIGHT_HOURS_COEFFICIENT = 1.14286;
+const NIGHT_HOURS_COEFFICIENT = 1.43;
+const MIN_NIGHT_MINUTES_FOR_ELIGIBILITY = 3 * 60;
 const DEFAULT_WEEKEND_RATE = 1.75;
 const DEFAULT_HOLIDAY_RATE = 2;
 const REST_BETWEEN_SHIFTS_MINUTES = 12 * 60;
@@ -49,7 +50,7 @@ function calcShiftDurationHours(startHHMM, endHHMM, hoursFieldOptional) {
   return round2((endMinutes - startMinutes) / 60);
 }
 
-function calcNightHours(startHHMM, endHHMM) {
+function calcNightMinutes(startHHMM, endHHMM, { isYoungWorker = false, minNightMinutes = MIN_NIGHT_MINUTES_FOR_ELIGIBILITY } = {}) {
   const startMinutes = parseTimeToMinutes(startHHMM);
   const endMinutesRaw = parseTimeToMinutes(endHHMM);
   if (!Number.isFinite(startMinutes) || !Number.isFinite(endMinutesRaw)) {
@@ -61,10 +62,15 @@ function calcNightHours(startHHMM, endHHMM) {
     endMinutes += 24 * 60;
   }
 
-  const windows = [
-    [22 * 60, 24 * 60],
-    [24 * 60, 30 * 60],
-  ];
+  const windows = isYoungWorker
+    ? [
+      [20 * 60, 24 * 60],
+      [24 * 60, 30 * 60],
+    ]
+    : [
+      [22 * 60, 24 * 60],
+      [24 * 60, 30 * 60],
+    ];
 
   let nightMinutes = 0;
   for (const [windowStart, windowEnd] of windows) {
@@ -75,7 +81,15 @@ function calcNightHours(startHHMM, endHHMM) {
     }
   }
 
-  return round2(nightMinutes / 60);
+  if (nightMinutes < minNightMinutes) {
+    return 0;
+  }
+
+  return nightMinutes;
+}
+
+function calcNightHours(startHHMM, endHHMM, options = {}) {
+  return round2(calcNightMinutes(startHHMM, endHHMM, options) / 60);
 }
 
 function orthodoxEasterDate(year) {
@@ -319,7 +333,9 @@ function computeMonthlySummary({
         const end = shift.end_time || shift.end || '';
         const shiftHours = calcShiftDurationHours(start, end, shift.hours);
         shiftMinutes = Math.round(shiftHours * 60);
-        nightMinutes = Math.round(calcNightHours(start, end) * 60);
+        nightMinutes = calcNightMinutes(start, end, {
+          isYoungWorker: Boolean(employee.young_worker ?? employee.youngWorker),
+        });
 
         const dayType = calcDayType(dateISO);
         holidayMinutes = dayType.isHoliday ? shiftMinutes : 0;
@@ -540,6 +556,7 @@ module.exports = {
   parseTimeToMinutes,
   calcShiftDurationHours,
   calcNightHours,
+  calcNightMinutes,
   calcDayType,
   calcNormMinutes,
   calcWorkedMinutes,
