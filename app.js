@@ -1974,7 +1974,7 @@ function attachRatesForm() {
 }
 
 
-function upsertShiftTemplate({ code, name, departmentId = null, start, end, breakMinutes = 0, breakIncluded = false, intervals = [] }) {
+async function upsertShiftTemplate({ code, name, departmentId = null, start, end, breakMinutes = 0, breakIncluded = false, intervals = [] }) {
   const normalizedCode = String(code || '').trim().toUpperCase();
   const normalizedName = String(name || '').trim();
   const normalizedDepartmentId = cleanStoredValue(departmentId) || null;
@@ -2001,57 +2001,18 @@ function upsertShiftTemplate({ code, name, departmentId = null, start, end, brea
     return { ok: false, message: 'Невалиден интервал за смяна.' };
   }
 
-  const existingShiftIndex = state.shiftTemplates.findIndex((shift) => (
-    shift.code === normalizedCode && cleanStoredValue(shift.departmentId) === (effectiveDepartmentId || '')
-  ));
+  const nightHours = hasSplitIntervals
+    ? Number(normalizedIntervals.reduce((sum, interval) => sum + calcNightHours(interval.start, interval.end), 0).toFixed(2))
+    : calcNightHours(effectiveStart, effectiveEnd);
+  if (nightHours > 0 && hours > MAX_NIGHT_SHIFT_HOURS) {
+    return { ok: false, message: 'Нощна смяна при СИРВ може да е максимум 12 часа.' };
+  }
 
   const payloadName = normalizedCode === 'R' ? 'Редовна' : normalizedName;
   const backendName = encodeShiftNameWithIntervals(payloadName, normalizedIntervals);
 
-  if (existingShiftIndex >= 0) {
-    const existingShift = state.shiftTemplates[existingShiftIndex];
-    state.shiftTemplates[existingShiftIndex] = {
-      ...existingShift,
-      code: normalizedCode,
-      label: toCyrillicShiftLabel(normalizedCode),
-      name: payloadName,
-      departmentId: effectiveDepartmentId,
-      type: 'work',
-      start: effectiveStart,
-      end: effectiveEnd,
-      hours,
-      locked: normalizedCode === 'R' ? true : Boolean(existingShift.locked),
-      break_minutes: effectiveBreakMinutes,
-      break_included: effectiveBreakIncluded,
-      intervals: normalizedIntervals,
-    };
-  } else {
-    const nightHours = hasSplitIntervals
-      ? Number(normalizedIntervals.reduce((sum, interval) => sum + calcNightHours(interval.start, interval.end), 0).toFixed(2))
-      : calcNightHours(effectiveStart, effectiveEnd);
-    if (nightHours > 0 && hours > MAX_NIGHT_SHIFT_HOURS) {
-      return { ok: false, message: 'Нощна смяна при СИРВ може да е максимум 12 часа.' };
-    }
-
-    state.shiftTemplates.push({
-      code: normalizedCode,
-      label: toCyrillicShiftLabel(normalizedCode),
-      name: payloadName,
-      departmentId: effectiveDepartmentId,
-      type: 'work',
-      start: effectiveStart,
-      end: effectiveEnd,
-      hours,
-      locked: false,
-      break_minutes: effectiveBreakMinutes,
-      break_included: effectiveBreakIncluded,
-      intervals: normalizedIntervals,
-    });
-  }
-
-  saveShiftTemplates();
   if (effectiveDepartmentId) {
-    void saveDepartmentShiftBackend(effectiveDepartmentId, {
+    const backendResult = await saveDepartmentShiftBackend(effectiveDepartmentId, {
       code: normalizedCode,
       name: backendName,
       start_time: backendStart,
@@ -2059,9 +2020,11 @@ function upsertShiftTemplate({ code, name, departmentId = null, start, end, brea
       break_minutes: effectiveBreakMinutes,
       break_included: effectiveBreakIncluded,
     });
-    void loadDepartmentShifts(effectiveDepartmentId, { force: true });
+    if (!backendResult.ok) {
+      return backendResult;
+    }
   } else {
-    void saveShiftTemplateBackend({
+    const backendResult = await saveShiftTemplateBackend({
       code: normalizedCode,
       name: backendName,
       start: backendStart,
@@ -2071,6 +2034,44 @@ function upsertShiftTemplate({ code, name, departmentId = null, start, end, brea
       break_minutes: effectiveBreakMinutes,
       break_included: effectiveBreakIncluded,
     });
+    if (!backendResult.ok) {
+      return backendResult;
+    }
+  }
+
+  const existingShiftIndex = state.shiftTemplates.findIndex((shift) => (
+    shift.code === normalizedCode && cleanStoredValue(shift.departmentId) === (effectiveDepartmentId || '')
+  ));
+
+  const nextShift = {
+    code: normalizedCode,
+    label: toCyrillicShiftLabel(normalizedCode),
+    name: payloadName,
+    departmentId: effectiveDepartmentId,
+    type: 'work',
+    start: effectiveStart,
+    end: effectiveEnd,
+    hours,
+    locked: normalizedCode === 'R',
+    break_minutes: effectiveBreakMinutes,
+    break_included: effectiveBreakIncluded,
+    intervals: normalizedIntervals,
+  };
+
+  if (existingShiftIndex >= 0) {
+    const existingShift = state.shiftTemplates[existingShiftIndex];
+    state.shiftTemplates[existingShiftIndex] = {
+      ...existingShift,
+      ...nextShift,
+      locked: normalizedCode === 'R' ? true : Boolean(existingShift.locked),
+    };
+  } else {
+    state.shiftTemplates.push(nextShift);
+  }
+
+  saveShiftTemplates();
+  if (effectiveDepartmentId) {
+    await loadDepartmentShifts(effectiveDepartmentId, { force: true });
   }
 
   return { ok: true };
@@ -2201,7 +2202,7 @@ function attachShiftForm() {
 
   setShiftFormMode(Boolean(shiftSplitInput?.checked));
 
-  shiftForm.addEventListener('submit', (event) => {
+  shiftForm.addEventListener('submit', async (event) => {
     event.preventDefault();
 
     const isSplitMode = Boolean(shiftSplitInput?.checked);
@@ -2221,7 +2222,7 @@ function attachShiftForm() {
       splitIntervals = splitConfig.intervals;
     }
 
-    const result = upsertShiftTemplate({
+    const result = await upsertShiftTemplate({
       code: shiftCodeInput.value,
       name: shiftNameInput.value,
       departmentId: cleanStoredValue(shiftDepartmentInput?.value) || null,
@@ -3600,14 +3601,14 @@ function attachShiftEditModalControls() {
     return;
   }
 
-  shiftEditForm.addEventListener('submit', (event) => {
+  shiftEditForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!state.shiftEditContext?.code) {
       setStatus('Липсва контекст за редакция на смяна.', false);
       return;
     }
 
-    const result = upsertShiftTemplate({
+    const result = await upsertShiftTemplate({
       code: state.shiftEditContext.code,
       name: shiftEditNameInput?.value || '',
       departmentId: state.shiftEditContext.departmentId,
@@ -7250,7 +7251,7 @@ async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) 
 
 async function saveShiftTemplateBackend(shift) {
   if (!state.backendAvailable) {
-    return;
+    return { ok: true, localOnly: true };
   }
 
   try {
@@ -7260,14 +7261,20 @@ async function saveShiftTemplateBackend(shift) {
       body: JSON.stringify(shift)
     });
 
+    const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error('Save shift template failed');
+      const message = payload.message || 'Неуспешно записване на глобална смяна.';
+      setStatus(message, false);
+      return { ok: false, message };
     }
-  } catch {
-    setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
-    // keep backend mode active; surface error via status
+    return { ok: true, payload };
+  } catch (error) {
+    const message = error?.message || `Грешка към бекенд (${state.apiBaseUrl}).`;
+    setStatus(message, false);
+    return { ok: false, message };
   }
 }
+
 
 async function deleteShiftTemplateBackend(code, departmentId = null) {
   if (!state.backendAvailable) {
@@ -7818,18 +7825,27 @@ function orthodoxEaster(year) {
 
 
 async function saveDepartmentShiftBackend(departmentId, payload) {
-  if (!state.backendAvailable) return;
+  if (!state.backendAvailable) return { ok: true, localOnly: true };
   try {
     const response = await apiFetch(`/api/departments/${encodeURIComponent(departmentId)}/shifts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    if (!response.ok) throw new Error('Create department shift failed');
+    const responsePayload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = responsePayload.message || 'Неуспешно добавяне на смяна към отдел.';
+      setStatus(message, false);
+      return { ok: false, message };
+    }
+    return { ok: true, payload: responsePayload };
   } catch (error) {
-    setStatus(error.message || 'Неуспешно добавяне на смяна към отдел.', false);
+    const message = error?.message || 'Неуспешно добавяне на смяна към отдел.';
+    setStatus(message, false);
+    return { ok: false, message };
   }
 }
+
 
 async function loadDepartmentShifts(departmentId, options = {}) {
   if (!departmentId || !state.backendAvailable) return [];
