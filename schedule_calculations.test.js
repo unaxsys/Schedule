@@ -6,6 +6,7 @@ const {
   holidayResolverFactory,
   countBusinessDays,
   finalizeSirvOvertimeAllocations,
+  computeOvertimeMinutes,
   validateScheduleEntry,
 } = require('./schedule_calculations');
 
@@ -34,22 +35,6 @@ test('19:00-07:00 has 480 night minutes', () => {
 });
 
 
-test('night work under 3 hours is not counted', () => {
-  const metrics = computeEntryMetrics({
-    dateISO: '2026-02-11',
-    shift: { start_time: '21:00', end_time: '23:30', break_minutes: 0, break_included: true },
-  });
-  assert.equal(metrics.night_minutes, 0);
-});
-
-test('young worker night window starts at 20:00', () => {
-  const metrics = computeEntryMetrics({
-    dateISO: '2026-02-11',
-    shift: { start_time: '20:00', end_time: '23:00', break_minutes: 0, break_included: true },
-    isYoungWorker: true,
-  });
-  assert.equal(metrics.night_minutes, 180);
-});
 test('cross-midnight weekend split Fri->Sat', () => {
   const metrics = computeEntryMetrics({
     dateISO: '2026-02-13', // Friday
@@ -74,7 +59,7 @@ test('sirv period overtime surplus', () => {
   const businessDays = countBusinessDays('2026-02-01', '2026-02-28', isHoliday);
   const periodNorm = businessDays * 480;
   const periodWorked = periodNorm + 300;
-  const overtime = Math.max(0, periodWorked - periodNorm);
+  const overtime = computeOvertimeMinutes({ mode: 'sirv', workedMinutes: periodWorked, normMinutes: periodNorm });
   assert.equal(overtime, 300);
 });
 

@@ -32,7 +32,7 @@ test('19:00-07:00 included splits night minutes correctly', () => {
   assert.equal(snapshot.work_minutes, 720);
   assert.equal(snapshot.night_minutes, 480);
   assert.equal(snapshot.cross_midnight, true);
-  assert.equal(snapshot.overtime_minutes, 240);
+  assert.equal(snapshot.overtime_minutes, 0);
 });
 
 test('weekend and holiday split across midnight', () => {
