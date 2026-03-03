@@ -5603,8 +5603,14 @@ function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmploy
   if (hasSnapshotMinutes) {
     const workHours = snapshotWorkMinutes / 60;
     const nightHours = Number(snapshot.nightMinutes || 0) / 60;
-    const holidayHours = Number(snapshot.holidayMinutes || 0) / 60;
-    const weekendHours = Number(snapshot.weekendMinutes || 0) / 60;
+    const snapshotHolidayHours = Number(snapshot.holidayMinutes || 0) / 60;
+    const snapshotWeekendHours = Number(snapshot.weekendMinutes || 0) / 60;
+    const shouldRecalculateSpecialHours = shift?.type === 'work' && Boolean(dateISO);
+    const splitHours = shouldRecalculateSpecialHours
+      ? calculateHolidayAndWeekendHoursByShift(shift, dateISO)
+      : { holidayHours: snapshotHolidayHours, weekendHours: snapshotWeekendHours };
+    const holidayHours = splitHours.holidayHours;
+    const weekendHours = splitHours.weekendHours;
 
     if (workHours > 0) {
       summary.workedDays += 1;
