@@ -309,10 +309,29 @@
         color: #1e3a8a;
       }
 
-      .sa-holiday-grid {
+      .sa-holiday-layout {
         display: grid;
-        grid-template-columns: minmax(260px, 360px) 1fr;
         gap: 1rem;
+      }
+
+      .sa-holiday-controls {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(220px, 1fr));
+        gap: 0.8rem;
+        align-items: end;
+      }
+
+      .sa-holiday-form {
+        display: grid;
+        grid-template-columns: minmax(180px, 220px) 1fr minmax(180px, 220px) auto;
+        gap: 0.8rem;
+        align-items: end;
+      }
+
+      .sa-holiday-form label,
+      .sa-holiday-controls label {
+        display: grid;
+        gap: 0.3rem;
       }
 
       .sa-holiday-type {
@@ -328,22 +347,13 @@
         color: #1e40af;
       }
 
-      .sa-holiday-type--company {
-        background: #dcfce7;
-        color: #166534;
-      }
-
-      .sa-holiday-type--override_working {
-        background: #fef3c7;
-        color: #92400e;
-      }
-
       @media (max-width: 950px) {
         .sa-grid-2 {
           grid-template-columns: 1fr;
         }
 
-        .sa-holiday-grid {
+        .sa-holiday-controls,
+        .sa-holiday-form {
           grid-template-columns: 1fr;
         }
       }
@@ -465,49 +475,41 @@
 
       <section id="saHolidaysTab" class="sa-tab-panel" hidden>
         <section class="panel">
-          <h3>Празници и почивни дни по фирма</h3>
-          <p>Избери фирма и управлявай фирмените празници/почивни дни. Промените се отразяват в графиците автоматично чрез holiday API.</p>
-          <div class="sa-holiday-grid">
-            <form id="saHolidayForm" class="employee-form">
+          <h3>Глобални официални и национални празници</h3>
+          <p>Този таб управлява глобалния календар за цялата платформа (без избор на фирма).</p>
+
+          <div class="sa-holiday-layout">
+            <div class="sa-holiday-controls">
               <label>
-                Фирма
-                <select id="saHolidayTenant" required>
-                  <option value="">Избери фирма…</option>
-                </select>
+                Година за преглед
+                <input id="saHolidayYear" type="number" min="2020" max="2100" value="2026" />
               </label>
-              <label>Година<input id="saHolidayYear" type="number" min="2020" max="2100" value="2026" /></label>
-              <button id="saHolidayLoadBtn" type="button">Зареди за годината</button>
-              <hr />
+              <button id="saHolidayLoadBtn" type="button">Зареди празниците</button>
+              <button id="saHolidaySeedBtn" type="button">Генерирай официалните за годината</button>
+            </div>
+
+            <form id="saHolidayForm" class="sa-holiday-form">
               <label>Дата<input id="saHolidayDate" type="date" required /></label>
-              <label>Име<input id="saHolidayName" type="text" placeholder="напр. Фирмен празник" required /></label>
-              <label>
-                Тип
-                <select id="saHolidayType">
-                  <option value="company">Почивен ден (фирмен)</option>
-                  <option value="override_working">Работен ден (override)</option>
-                </select>
-              </label>
-              <label>Бележка (по избор)<input id="saHolidayNote" type="text" placeholder="Бележка" /></label>
-              <button type="submit">Запази деня</button>
+              <label>Име на празник<input id="saHolidayName" type="text" placeholder="напр. Освобождение на България" required /></label>
+              <label>Източник<input id="saHolidaySource" type="text" placeholder="напр. BG official" value="platform" /></label>
+              <button type="submit">Запази</button>
             </form>
 
-            <div>
-              <h4>Списък за избраната година</h4>
-              <div class="sa-table-wrap">
-                <table class="sa-table">
-                  <thead>
-                    <tr>
-                      <th>Дата</th>
-                      <th>Име</th>
-                      <th>Тип</th>
-                      <th>Действия</th>
-                    </tr>
-                  </thead>
-                  <tbody id="saHolidayRows">
-                    <tr><td colspan="4">Няма заредени данни.</td></tr>
-                  </tbody>
-                </table>
-              </div>
+            <div class="sa-table-wrap">
+              <table class="sa-table">
+                <thead>
+                  <tr>
+                    <th>Дата</th>
+                    <th>Име</th>
+                    <th>Тип</th>
+                    <th>Източник</th>
+                    <th>Действия</th>
+                  </tr>
+                </thead>
+                <tbody id="saHolidayRows">
+                  <tr><td colspan="5">Няма заредени данни.</td></tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </section>
@@ -541,9 +543,9 @@
       const longShiftRotationsInput = document.getElementById('saLongShiftRotations');
       const logicSummaryEl = document.getElementById('saLogicSummary');
       const logicFormulaEl = document.getElementById('saLogicFormula');
-      const holidaysTenantInput = document.getElementById('saHolidayTenant');
       const holidaysYearInput = document.getElementById('saHolidayYear');
       const holidaysLoadBtn = document.getElementById('saHolidayLoadBtn');
+      const holidaysSeedBtn = document.getElementById('saHolidaySeedBtn');
       const holidaysForm = document.getElementById('saHolidayForm');
       const holidaysRowsEl = document.getElementById('saHolidayRows');
 
@@ -580,13 +582,6 @@
         tabStatsBtn.classList.toggle('is-active', statsActive);
         tabLogicBtn.classList.toggle('is-active', logicActive);
         tabHolidaysBtn.classList.toggle('is-active', holidaysActive);
-      }
-
-      function tenantScopedPath(path, tenantId) {
-        const cleanPath = String(path || '');
-        if (!tenantId) return cleanPath;
-        const separator = cleanPath.includes('?') ? '&' : '?';
-        return `${cleanPath}${separator}tenantId=${encodeURIComponent(tenantId)}`;
       }
 
       function toPositiveNumber(value, fallback = 0) {
@@ -881,6 +876,48 @@
         renderHolidayRows(payload.holidays || []);
       }
 
+      function holidayTypeLabel(type) {
+        const map = {
+          official: 'Официален празник',
+        };
+        return map[type] || 'Официален празник';
+      }
+
+      function renderHolidayRows(rows = []) {
+        if (!holidaysRowsEl) {
+          return;
+        }
+        if (!rows.length) {
+          holidaysRowsEl.innerHTML = '<tr><td colspan="5">Няма дни за тази година.</td></tr>';
+          return;
+        }
+
+        holidaysRowsEl.innerHTML = rows
+          .map((row) => {
+            const rowType = String(row.isOfficial ? 'official' : 'official');
+            return `
+              <tr>
+                <td>${escapeHtml(row.date || '—')}</td>
+                <td>${escapeHtml(row.name || '—')}</td>
+                <td><span class="sa-holiday-type sa-holiday-type--official">${escapeHtml(holidayTypeLabel(rowType))}</span></td>
+                <td>${escapeHtml(row.source || '—')}</td>
+                <td><button type="button" onclick="window.__saDeleteHoliday('${escapeHtml(row.date)}')">Изтрий</button></td>
+              </tr>
+            `;
+          })
+          .join('');
+      }
+
+      async function loadPublicHolidays() {
+        const year = Number(holidaysYearInput?.value || new Date().getFullYear());
+        if (!Number.isInteger(year) || year < 2020 || year > 2100) {
+          setStatus('Невалидна година за празници.', false);
+          return;
+        }
+        const payload = await apiRequest(`/api/platform/super-admin/public-holidays?year=${encodeURIComponent(String(year))}`);
+        renderHolidayRows(payload.holidays || []);
+      }
+
       function renderBubbles(row, hiddenKeys = new Set()) {
         const bubbles = Object.entries(row || {})
           .filter(([key]) => !hiddenKeys.has(key))
@@ -1028,13 +1065,13 @@
 
       window.__saDeleteHoliday = async (date) => {
         try {
-          if (!selectedHolidayTenantId || !date) {
+          if (!date) {
             return;
           }
-          await apiRequest(tenantScopedPath(`/api/holidays/${encodeURIComponent(date)}`, selectedHolidayTenantId), {
+          await apiRequest(`/api/platform/super-admin/public-holidays/${encodeURIComponent(date)}`, {
             method: 'DELETE',
           });
-          await loadTenantHolidays();
+          await loadPublicHolidays();
           setStatus('Денят е изтрит успешно.');
         } catch (error) {
           setStatus(error.message, false);
@@ -1057,15 +1094,25 @@
       tabHolidaysBtn.addEventListener('click', () => switchTab('holidays'));
       logicForm.addEventListener('input', () => renderCalculationLogic());
 
-      holidaysTenantInput.addEventListener('change', async () => {
-        selectedHolidayTenantId = holidaysTenantInput.value;
-        await loadTenantHolidays();
-      });
-
       holidaysLoadBtn.addEventListener('click', async () => {
         try {
-          await loadTenantHolidays();
+          await loadPublicHolidays();
           setStatus('Празниците са заредени.');
+        } catch (error) {
+          setStatus(error.message, false);
+        }
+      });
+
+
+      holidaysSeedBtn.addEventListener('click', async () => {
+        try {
+          const year = Number(holidaysYearInput?.value || new Date().getFullYear());
+          await apiRequest('/api/holidays/seed', {
+            method: 'POST',
+            body: JSON.stringify({ year }),
+          });
+          await loadPublicHolidays();
+          setStatus('Официалните празници са генерирани за годината.');
         } catch (error) {
           setStatus(error.message, false);
         }
@@ -1074,26 +1121,15 @@
       holidaysForm.addEventListener('submit', async (event) => {
         event.preventDefault();
         try {
-          if (!selectedHolidayTenantId) {
-            throw new Error('Избери фирма.');
-          }
           const date = document.getElementById('saHolidayDate').value;
           const name = document.getElementById('saHolidayName').value.trim();
-          const type = document.getElementById('saHolidayType').value;
-          const note = document.getElementById('saHolidayNote').value.trim();
-          await apiRequest('/api/holidays', {
+          const source = document.getElementById('saHolidaySource').value.trim();
+          await apiRequest('/api/platform/super-admin/public-holidays', {
             method: 'POST',
-            body: JSON.stringify({
-              tenantId: selectedHolidayTenantId,
-              date,
-              name,
-              note,
-              isCompanyDayOff: type === 'company',
-              isWorkingDayOverride: type === 'override_working',
-            }),
+            body: JSON.stringify({ date, name, source }),
           });
-          await loadTenantHolidays();
-          setStatus('Празничният/почивният ден е запазен.');
+          await loadPublicHolidays();
+          setStatus('Глобалният празничен ден е запазен.');
         } catch (error) {
           setStatus(error.message, false);
         }
