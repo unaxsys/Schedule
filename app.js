@@ -209,6 +209,7 @@ const shiftSingleFields = document.getElementById('shiftSingleFields');
 const shiftIntervalsSection = document.getElementById('shiftIntervalsSection');
 const shiftIntervalsList = document.getElementById('shiftIntervalsList');
 const addShiftIntervalBtn = document.getElementById('addShiftIntervalBtn');
+const shiftBreakIncludedWrap = document.getElementById('shiftBreakIncludedWrap');
 const shiftStartInput = document.getElementById('shiftStartInput');
 const shiftEndInput = document.getElementById('shiftEndInput');
 const shiftBreakMinutesInput = document.getElementById('shiftBreakMinutesInput');
@@ -2012,6 +2013,7 @@ function setShiftFormMode(isSplit) {
 
   if (isSplit) {
     shiftSingleFields.classList.add('hidden');
+    shiftBreakIncludedWrap?.classList.add('hidden');
     shiftIntervalsSection.classList.remove('hidden');
     shiftStartInput.required = false;
     shiftEndInput.required = false;
@@ -2020,6 +2022,7 @@ function setShiftFormMode(isSplit) {
     }
   } else {
     shiftSingleFields.classList.remove('hidden');
+    shiftBreakIncludedWrap?.classList.remove('hidden');
     shiftIntervalsSection.classList.add('hidden');
     shiftStartInput.required = true;
     shiftEndInput.required = true;
