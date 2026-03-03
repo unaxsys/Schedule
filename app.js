@@ -3146,7 +3146,7 @@ function renderLegend() {
 
 function getShiftHoursBreakdown(shift) {
   if (!shift || shift.type !== 'work') {
-    return { attendanceHours: 0, workHours: 0, restHours: 0 };
+    return { attendanceHours: 0, workHours: 0, restHours: 0, nightHours: 0 };
   }
 
   const start = String(shift.start || '').trim();
@@ -3156,7 +3156,10 @@ function getShiftHoursBreakdown(shift) {
   const attendanceHours = hasTimes ? calcShiftHours(start, end, 0, true) : Number(shift.hours || 0);
   const workHours = getStoredShiftHours(shift);
   const restHours = Math.max(0, attendanceHours - workHours);
-  return { attendanceHours, workHours, restHours };
+  const nightHours = hasTimes
+    ? calcNightHours(start, end, { minNightHours: 0 })
+    : 0;
+  return { attendanceHours, workHours, restHours, nightHours };
 }
 
 function renderShiftHoursCellContent(shift) {
@@ -3164,12 +3167,17 @@ function renderShiftHoursCellContent(shift) {
     return String(Number(shift?.hours || 0));
   }
 
-  const { attendanceHours, workHours, restHours } = getShiftHoursBreakdown(shift);
+  const { attendanceHours, workHours, restHours, nightHours } = getShiftHoursBreakdown(shift);
+  const nightRow = nightHours > 0
+    ? `<div><span>нощен труд</span><b>${nightHours.toFixed(2)}</b></div>`
+    : '';
+
   return `
     <div class="shift-hours-breakdown">
       <div><span>присъствени</span><b>${attendanceHours.toFixed(2)}</b></div>
       <div><span>работни</span><b>${workHours.toFixed(2)}</b></div>
       <div><span>почивка</span><b>${restHours.toFixed(2)}</b></div>
+      ${nightRow}
     </div>
   `;
 }
