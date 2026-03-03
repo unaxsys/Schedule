@@ -5585,12 +5585,7 @@ function renderSchedule() {
   lockScheduleBtn.disabled = monthLocked || !canManageScheduleLock();
   unlockScheduleBtn.disabled = !monthLocked || !canUnlockSchedule();
 
-  monthInfo.innerHTML = `
-    <b>Работни дни по календар:</b> ${monthStats.workingDays} ·
-    <b>Почивни дни:</b> ${monthStats.weekendDays} ·
-    <b>Официални празници:</b> ${monthStats.holidayDays} ·
-    <b>Норма:</b> ${monthStats.normHours} ч.
-  `;
+  monthInfo.innerHTML = buildMonthInfoMarkup({ year, monthIndex, monthStats });
 
   const monthCalendarMarkup = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
   if (sidebarMonthCalendar) {
