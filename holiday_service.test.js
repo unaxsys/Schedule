@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 
 const { createHolidayService, getBgHolidaySeedRows } = require('./holidayService');
 
-function createMockPool({ tenant = [], official = [], legacyOfficialColumns = false } = {}) {
+function createMockPool({ tenant = [], official = [], legacyOfficialColumns = false, noDateUnique = false } = {}) {
   return {
     async query(sql, values) {
       const text = String(sql);
@@ -35,6 +35,11 @@ function createMockPool({ tenant = [], official = [], legacyOfficialColumns = fa
         error.code = '42703';
         throw error;
       }
+      if (noDateUnique && text.includes('ON CONFLICT (date)')) {
+        const error = new Error('there is no unique or exclusion constraint matching the ON CONFLICT specification');
+        error.code = '42P10';
+        throw error;
+      }
       if (text.includes('FROM holidays')) {
         if (text.includes('BETWEEN')) {
           const rows = official.filter((item) => item.date >= values[0] && item.date <= values[1]);
@@ -42,6 +47,19 @@ function createMockPool({ tenant = [], official = [], legacyOfficialColumns = fa
         }
         const row = official.find((item) => item.date === values[0]);
         return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+      }
+
+
+      if (text.includes('UPDATE holidays')) {
+        const date = values[0];
+        const name = values[1];
+        const source = values[2];
+        const idx = official.findIndex((item) => item.date === date);
+        if (idx >= 0) {
+          official[idx] = { ...official[idx], name, ...(source ? { source } : {}), is_official: true };
+          return { rows: [official[idx]], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
       }
 
       if (text.includes('INSERT INTO holidays')) {
@@ -157,5 +175,28 @@ test('upsertPublicHoliday supports legacy holidays table without extra columns',
 
   assert.equal(row.date, '2026-02-01');
   assert.equal(row.name, 'Тест');
+  assert.equal(row.isOfficial, true);
+});
+
+
+test('upsertPublicHoliday works when date has no unique constraint (modern columns)', async () => {
+  const pool = createMockPool({ official: [], noDateUnique: true });
+  const service = createHolidayService(pool);
+
+  const row = await service.upsertPublicHoliday({ date: '2026-02-02', name: 'Неработен', source: 'Админ' });
+
+  assert.equal(row.date, '2026-02-02');
+  assert.equal(row.name, 'Неработен');
+  assert.equal(row.source, 'Админ');
+});
+
+test('upsertPublicHoliday works when legacy table has no date unique constraint', async () => {
+  const pool = createMockPool({ official: [], legacyOfficialColumns: true, noDateUnique: true });
+  const service = createHolidayService(pool);
+
+  const row = await service.upsertPublicHoliday({ date: '2026-02-03', name: 'Тест legacy', source: 'Админ' });
+
+  assert.equal(row.date, '2026-02-03');
+  assert.equal(row.name, 'Тест legacy');
   assert.equal(row.isOfficial, true);
 });
