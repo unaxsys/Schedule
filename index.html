@@ -341,7 +341,7 @@
               </div>
               <div class="shift-options-stack">
                 <label><input id="shiftSplitInput" type="checkbox" /> Прекъсната смяна (2+ интервала)</label>
-                <label id="shiftBreakIncludedWrap"><input id="shiftBreakIncludedInput" type="checkbox" /> Почивката е включена</label>
+                <label id="shiftBreakIncludedWrap"><input id="shiftBreakIncludedInput" type="checkbox" /> Почивката е платена</label>
               </div>
               <button type="submit">Добави смяна</button>
               <div id="shiftIntervalsSection" class="hidden shift-intervals-section">
@@ -358,7 +358,7 @@
                 <option value="">Изберете отдел</option>
               </select>
               <label><input type="checkbox" id="shiftImportUpdateDuplicatesInput" /> Update duplicates</label>
-              <button type="button" id="shiftImportCommitBtn">Commit</button>
+              <button type="button" id="shiftImportCommitBtn">Запиши в база</button>
             </div>
             <div id="shiftImportSummary" class="shift-import-summary"></div>
             <div id="shiftImportPreview" class="shift-import-preview"></div>
@@ -639,7 +639,7 @@
           <label class="field-inline">Начало <input id="shiftEditStartInput" type="time" required /></label>
           <label class="field-inline">Край <input id="shiftEditEndInput" type="time" required /></label>
           <label class="field-inline">Почивка (мин) <input id="shiftEditBreakMinutesInput" type="number" min="0" step="1" value="0" /></label>
-          <label class="field-inline field-checkbox"><input id="shiftEditBreakIncludedInput" type="checkbox" /> Почивката е включена</label>
+          <label class="field-inline field-checkbox"><input id="shiftEditBreakIncludedInput" type="checkbox" /> Почивката е платена</label>
           <div id="shiftEditInfo" class="role-permission-note"></div>
           <div class="modal-actions">
             <button type="submit" class="btn-edit">Запази</button>

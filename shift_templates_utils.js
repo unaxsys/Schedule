@@ -26,7 +26,13 @@ function validateShiftTemplatePayload(payload) {
   const startTime = String(payload?.start_time ?? payload?.start ?? '').trim();
   const endTime = String(payload?.end_time ?? payload?.end ?? '').trim();
   const breakMinutes = Math.max(0, Number(payload?.break_minutes ?? payload?.breakMinutes ?? 0));
-  const breakIncluded = Boolean(payload?.break_included ?? payload?.breakIncluded ?? false);
+  const breakIncluded = Boolean(
+    payload?.break_included
+    ?? payload?.breakIncluded
+    ?? payload?.break_paid
+    ?? payload?.breakPaid
+    ?? false
+  );
   const durationMinutes = calculateDurationMinutes(startTime, endTime);
 
   if (!name) {

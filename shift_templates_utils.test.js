@@ -29,3 +29,19 @@ test('validateShiftTemplatePayload rejects invalid HH:MM and duration > 12h', ()
 test('calculateDurationMinutes supports overnight shifts', () => {
   assert.equal(calculateDurationMinutes('22:00', '06:00'), 480);
 });
+
+
+test('validateShiftTemplatePayload maps break_paid as paid break (included)', () => {
+  const result = validateShiftTemplatePayload({
+    name: 'Ранна',
+    code: 'R1',
+    start_time: '07:00',
+    end_time: '16:00',
+    break_minutes: 60,
+    break_paid: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.value.breakIncluded, true);
+  assert.equal(result.value.workedMinutes, 540);
+});

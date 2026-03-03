@@ -3454,10 +3454,22 @@ app.post('/api/departments/:departmentId/shifts', requireAuth, requireTenantCont
   }
 
   try {
-    const departmentId = await resolveTenantDepartmentOrThrow({
-      departmentId: req.params.departmentId,
-      tenantId: req.tenantId,
-    });
+    let departmentId = null;
+    const routeDepartmentId = cleanStr(req.params.departmentId);
+    const payloadDepartmentIdRaw = req.body?.department_id ?? req.body?.departmentId;
+    const payloadDepartmentId = payloadDepartmentIdRaw === null ? null : cleanStr(payloadDepartmentIdRaw);
+
+    if (payloadDepartmentId !== '' && payloadDepartmentId !== null) {
+      departmentId = await resolveTenantDepartmentOrThrow({
+        departmentId: payloadDepartmentId,
+        tenantId: req.tenantId,
+      });
+    } else if (routeDepartmentId && routeDepartmentId.toLowerCase() !== 'global' && routeDepartmentId.toLowerCase() !== 'all' && routeDepartmentId.toLowerCase() !== 'null') {
+      departmentId = await resolveTenantDepartmentOrThrow({
+        departmentId: routeDepartmentId,
+        tenantId: req.tenantId,
+      });
+    }
 
     const hasTenantId = await hasShiftTemplatesTenantId();
     const hasDepartmentId = await hasShiftTemplatesDepartmentId();
@@ -3466,51 +3478,48 @@ app.post('/api/departments/:departmentId/shifts', requireAuth, requireTenantCont
     }
 
     const { name, startTime, endTime, breakMinutes, breakIncluded, hours } = validation.value;
+    const scopeParams = hasTenantId ? [req.tenantId] : [];
+    const existsResult = await pool.query(
+      `SELECT id
+       FROM shift_templates
+       WHERE code = $1
+         ${hasTenantId ? 'AND tenant_id = $2' : ''}
+         AND (
+           (department_id IS NULL AND $${scopeParams.length + 2}::uuid IS NULL)
+           OR department_id = $${scopeParams.length + 2}
+         )
+       LIMIT 1`,
+      [code, ...scopeParams, departmentId]
+    );
+    if (existsResult.rowCount > 0) {
+      return res.status(409).json({ message: 'Смяна с този код вече съществува за избрания отдел.' });
+    }
 
+    let insertResult;
     if (hasTenantId) {
-      await pool.query(
+      insertResult = await pool.query(
         `INSERT INTO shift_templates (tenant_id, department_id, code, name, start_time, end_time, break_minutes, break_included, hours)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (tenant_id, department_id, code) WHERE department_id IS NOT NULL
-         DO UPDATE SET
-           name = EXCLUDED.name,
-           start_time = EXCLUDED.start_time,
-           end_time = EXCLUDED.end_time,
-           break_minutes = EXCLUDED.break_minutes,
-           break_included = EXCLUDED.break_included,
-           hours = EXCLUDED.hours`,
+         RETURNING id, code, name, department_id, start_time, end_time, break_minutes, break_included, hours`,
         [req.tenantId, departmentId, code, name, startTime, endTime, breakMinutes, breakIncluded, hours]
       );
     } else {
-      await pool.query(
+      insertResult = await pool.query(
         `INSERT INTO shift_templates (department_id, code, name, start_time, end_time, break_minutes, break_included, hours)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (department_id, code) WHERE department_id IS NOT NULL
-         DO UPDATE SET
-           name = EXCLUDED.name,
-           start_time = EXCLUDED.start_time,
-           end_time = EXCLUDED.end_time,
-           break_minutes = EXCLUDED.break_minutes,
-           break_included = EXCLUDED.break_included,
-           hours = EXCLUDED.hours`,
+         RETURNING id, code, name, department_id, start_time, end_time, break_minutes, break_included, hours`,
         [departmentId, code, name, startTime, endTime, breakMinutes, breakIncluded, hours]
       );
     }
 
-    return res.json({
+    return res.status(201).json({
       ok: true,
-      shift: {
-        code,
-        name,
-        department_id: departmentId,
-        start_time: startTime,
-        end_time: endTime,
-        break_minutes: breakMinutes,
-        break_included: breakIncluded,
-        hours,
-      },
+      shift: insertResult.rows[0],
     });
   } catch (error) {
+    if (error?.code === '23505') {
+      return res.status(409).json({ message: 'Смяна с този код вече съществува за избрания отдел.' });
+    }
     if (error.status) {
       return res.status(error.status).json({ message: error.message });
     }
@@ -3542,7 +3551,7 @@ app.get('/api/departments/:departmentId/shifts', requireAuth, requireTenantConte
         COALESCE(break_included, FALSE) AS break_included,
         hours
       FROM shift_templates
-      WHERE department_id = $1
+      WHERE (department_id = $1 OR department_id IS NULL)
       ${hasTenantId ? 'AND tenant_id = $2' : ''}
       ORDER BY code ASC
     `;
