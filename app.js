@@ -5594,26 +5594,11 @@ function renderSchedule() {
   lockScheduleBtn.disabled = monthLocked || !canManageScheduleLock();
   unlockScheduleBtn.disabled = !monthLocked || !canUnlockSchedule();
 
-<<<<<<< HEAD
-  monthInfo.innerHTML = buildMonthInfoMarkup({ year, monthIndex, monthStats });
-
 const monthCalendarMarkup = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
-  if (sidebarMonthCalendar) {
+if (sidebarMonthCalendar) {
+  sidebarMonthCalendar.innerHTML = monthCalendarMarkup;
+}
 
-    sidebarMonthCalendar.innerHTML = monthCalendarMarkup;
-  }
-
-  if (sidebarMonthCalendar) {
-
-  }
-
-  if (sidebarMonthCalendar) {
-
-    sidebarMonthCalendar.innerHTML = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
-  }
-=======
-  monthInfo.innerHTML = buildMonthInfoMarkup({ monthStats });
->>>>>>> 2eb3d939a7b240963516156c0ee490b94af68158
 
   if (sidebarMonthCalendar) {
 
