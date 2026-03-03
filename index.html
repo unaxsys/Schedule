@@ -327,17 +327,27 @@
           <div id="shiftsSettingsPanel" class="settings-subtab-panel">
             <h3>Смени на отдела (начало/край)</h3>
             <p>Смените тук са само за избрания отдел. Ако няма отделни смени, се ползват global смени.</p>
-            <form id="shiftForm" class="row">
+            <form id="shiftForm" class="row shift-form-layout">
               <input id="shiftCodeInput" maxlength="4" required placeholder="Код (напр. D1)" />
               <input id="shiftNameInput" required placeholder="Име на смяна" />
               <select id="shiftDepartmentInput">
                 <option value="">Всички отдели (global)</option>
               </select>
-              <input id="shiftStartInput" type="time" required />
-              <input id="shiftEndInput" type="time" required />
-              <input id="shiftBreakMinutesInput" type="number" min="0" step="1" value="0" placeholder="Почивка (мин)" />
-              <label><input id="shiftBreakIncludedInput" type="checkbox" /> Почивката е включена</label>
+              <div id="shiftSingleFields" class="shift-single-fields">
+                <input id="shiftStartInput" type="time" required />
+                <input id="shiftEndInput" type="time" required />
+                <input id="shiftBreakMinutesInput" type="number" min="0" step="1" value="0" placeholder="Почивка (мин)" />
+              </div>
+              <div class="shift-options-stack">
+                <label><input id="shiftSplitInput" type="checkbox" /> Прекъсната смяна (2+ интервала)</label>
+                <label id="shiftBreakIncludedWrap"><input id="shiftBreakIncludedInput" type="checkbox" /> Почивката е включена</label>
+              </div>
               <button type="submit">Добави смяна</button>
+              <div id="shiftIntervalsSection" class="hidden shift-intervals-section">
+                <strong>Интервали:</strong>
+                <div id="shiftIntervalsList" class="shift-intervals-list"></div>
+                <button id="addShiftIntervalBtn" type="button">➕ Добави интервал</button>
+              </div>
             </form>
             <div class="row shift-import-row">
               <button type="button" id="downloadShiftImportTemplateBtn">Свали шаблон</button>
