@@ -3109,7 +3109,7 @@ function isWorkingDateInputValue(value) {
     return false;
   }
 
-  return !isWeekend(date) && !isOfficialHoliday(date);
+  return isCalendarWorkingDay(date);
 }
 
 function updateVacationDateInputValidity(input, options = {}) {
@@ -3147,7 +3147,7 @@ function getVacationDateKeysInRange(startDateKey, endDateKey) {
   const dates = [];
   const current = new Date(start);
   while (current <= end) {
-    if (!isWeekend(current) && !isOfficialHoliday(current)) {
+    if (isCalendarWorkingDay(current)) {
       dates.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(current.getDate()).padStart(2, '0')}`);
     }
     current.setDate(current.getDate() + 1);
@@ -3211,7 +3211,7 @@ function getWorkingVacationDates(startDate, workingDays) {
   let remaining = Number(workingDays);
 
   while (remaining > 0) {
-    if (!isWeekend(current) && !isOfficialHoliday(current)) {
+    if (isCalendarWorkingDay(current)) {
       dates.push(new Date(current));
       remaining -= 1;
     }
@@ -4920,7 +4920,7 @@ function getWorkingDaysBetween(startDateKey, endDateKey) {
   let count = 0;
   const current = new Date(start);
   while (current <= end) {
-    if (!isWeekend(current) && !isOfficialHoliday(current)) {
+    if (isCalendarWorkingDay(current)) {
       count += 1;
     }
     current.setDate(current.getDate() + 1);
@@ -4942,7 +4942,7 @@ async function setVacationShiftForDateRange(employee, startDateKey, endDateKey, 
   const current = new Date(start);
 
   while (current <= end) {
-    if (!isWeekend(current) && !isOfficialHoliday(current)) {
+    if (isCalendarWorkingDay(current)) {
       const monthKey = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`;
       if (isMonthLocked(monthKey)) {
         skipped += 1;
@@ -5214,11 +5214,15 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
     const holidayMeta = getHolidayMeta(dateISO);
     const holiday = Boolean(holidayMeta?.isHoliday);
     const weekend = isWeekend(date);
+    const forcedNonWorking = isForcedNonWorkingDate(dateISO);
     const cell = document.createElement('td');
     if (holiday) {
       cell.classList.add('day-holiday');
-    } else if (weekend) {
+    } else if (weekend || forcedNonWorking) {
       cell.classList.add('day-weekend');
+    }
+    if (forcedNonWorking && !holiday && !weekend) {
+      cell.title = 'Неработен ден (корекция по календар)';
     }
 
     const leave = getLeaveForCell(employee.id, month, day);
@@ -5631,15 +5635,18 @@ if (sidebarMonthCalendar) {
     const holidayMeta = getHolidayMeta(dateISO);
     const holiday = Boolean(holidayMeta?.isHoliday);
     const weekend = isWeekend(date);
+    const forcedNonWorking = isForcedNonWorkingDate(dateISO);
     const th = document.createElement('th');
     th.textContent = String(day);
     if (holiday) {
       th.className = 'day-holiday';
-    } else if (weekend) {
+    } else if (weekend || forcedNonWorking) {
       th.className = 'day-weekend';
     }
     if (holiday) {
       th.title = holidayMeta?.name || 'Празник';
+    } else if (forcedNonWorking && !weekend) {
+      th.title = 'Неработен ден (корекция по календар)';
     }
     header.appendChild(th);
   }
@@ -7425,7 +7432,7 @@ function isContinuousVacationPeriod(previousDateKey, currentDateKey) {
 
   const cursor = new Date(nextDay);
   while (cursor < currentDate) {
-    if (!isWeekend(cursor) && !isOfficialHoliday(cursor)) {
+    if (isCalendarWorkingDay(cursor)) {
       return false;
     }
     cursor.setDate(cursor.getDate() + 1);
@@ -7732,6 +7739,11 @@ function isWeekend(date) {
 function isOfficialHoliday(date) {
   const iso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   return Boolean(getHolidayMeta(iso)?.isHoliday);
+}
+
+function isCalendarWorkingDay(date) {
+  const iso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  return isNormWorkingDay({ dateISO: iso, holiday: isOfficialHoliday(date), weekend: isWeekend(date) });
 }
 
 function orthodoxEaster(year) {
