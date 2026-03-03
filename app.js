@@ -7833,6 +7833,7 @@ async function loadDepartmentShifts(departmentId, options = {}) {
       const response = await apiFetch(`/api/departments/${encodeURIComponent(departmentId)}/shifts`);
       if (!response.ok) throw new Error('Неуспешно зареждане на смени за отдел.');
       const payload = await response.json();
+      console.log('[loadDepartmentShifts] response payload:', payload);
       const mapped = Array.isArray(payload.shifts) ? payload.shifts.map((shift) => ({
         id: shift.id || null,
         code: String(shift.code || '').toUpperCase(),
