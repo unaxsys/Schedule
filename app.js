@@ -5572,8 +5572,13 @@ function buildMonthCalendarMarkup({ year, monthIndex, monthStats }) {
   `;
 }
 
-function buildMonthInfoMarkup(args) {
-  return buildMonthCalendarMarkup(args);
+function buildMonthInfoMarkup({ monthStats }) {
+  return `
+    <b>Работни дни по календар:</b> ${monthStats.workingDays} ·
+    <b>Почивни дни:</b> ${monthStats.weekendDays} ·
+    <b>Официални празници:</b> ${monthStats.holidayDays} ·
+    <b>Норма:</b> ${monthStats.normHours} ч.
+  `;
 }
 
 function renderSchedule() {
@@ -5589,6 +5594,7 @@ function renderSchedule() {
   lockScheduleBtn.disabled = monthLocked || !canManageScheduleLock();
   unlockScheduleBtn.disabled = !monthLocked || !canUnlockSchedule();
 
+<<<<<<< HEAD
   monthInfo.innerHTML = buildMonthInfoMarkup({ year, monthIndex, monthStats });
 
 const monthCalendarMarkup = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
@@ -5605,6 +5611,9 @@ const monthCalendarMarkup = buildMonthCalendarMarkup({ year, monthIndex, monthSt
 
     sidebarMonthCalendar.innerHTML = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
   }
+=======
+  monthInfo.innerHTML = buildMonthInfoMarkup({ monthStats });
+>>>>>>> 2eb3d939a7b240963516156c0ee490b94af68158
 
   if (sidebarMonthCalendar) {
 
