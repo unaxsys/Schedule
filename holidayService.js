@@ -127,14 +127,18 @@ function createHolidayService(pool) {
     if (publicTableCache !== null) {
       return publicTableCache;
     }
-    const hasLegacy = await pool.query("SELECT to_regclass('public.holidays') IS NOT NULL AS exists");
-    if (hasLegacy.rows[0]?.exists) {
-      publicTableCache = 'holidays';
+    const hasNew = await pool.query("SELECT to_regclass('public.public_holidays_bg') IS NOT NULL AS exists");
+    if (hasNew.rows[0]?.exists) {
+      publicTableCache = 'public_holidays_bg';
       return publicTableCache;
     }
-    const hasNew = await pool.query("SELECT to_regclass('public.public_holidays_bg') IS NOT NULL AS exists");
-    publicTableCache = hasNew.rows[0]?.exists ? 'public_holidays_bg' : '';
+    const hasLegacy = await pool.query("SELECT to_regclass('public.holidays') IS NOT NULL AS exists");
+    publicTableCache = hasLegacy.rows[0]?.exists ? 'holidays' : '';
     return publicTableCache;
+  }
+
+  function isMissingColumnError(error) {
+    return String(error?.code || '') === '42703' || String(error?.message || '').toLowerCase().includes('column');
   }
 
   async function isHoliday(tenantId, dateISO) {
@@ -246,13 +250,28 @@ function createHolidayService(pool) {
 
     const table = await publicTableName();
     if (table) {
-      const rows = await pool.query(
-        `SELECT date::text AS date, name, COALESCE(is_official, TRUE) AS is_official, source
-         FROM ${table}
-         WHERE date BETWEEN $1::date AND $2::date
-         ORDER BY date`,
-        [from, to]
-      );
+      let rows;
+      try {
+        rows = await pool.query(
+          `SELECT date::text AS date, name, COALESCE(is_official, TRUE) AS is_official, source
+           FROM ${table}
+           WHERE date BETWEEN $1::date AND $2::date
+           ORDER BY date`,
+          [from, to]
+        );
+      } catch (error) {
+        if (!isMissingColumnError(error)) {
+          throw error;
+        }
+        rows = await pool.query(
+          `SELECT date::text AS date, name
+           FROM ${table}
+           WHERE date BETWEEN $1::date AND $2::date
+           ORDER BY date`,
+          [from, to]
+        );
+      }
+
       for (const row of rows.rows) {
         byDate.set(row.date, {
           date: row.date,
@@ -276,18 +295,38 @@ function createHolidayService(pool) {
       throw new Error('public holidays table is missing');
     }
 
-    const result = await pool.query(
-      `INSERT INTO ${table}(date, name, is_official, source)
-       VALUES ($1::date, $2, TRUE, $3)
-       ON CONFLICT (date) DO UPDATE
-       SET name = EXCLUDED.name,
-           is_official = EXCLUDED.is_official,
-           source = COALESCE(EXCLUDED.source, ${table}.source)
-       RETURNING date::text AS date, name, COALESCE(is_official, TRUE) AS "isOfficial", source`,
-      [normalizedDate, String(name).trim(), String(source || '').trim() || 'platform']
-    );
+    let result;
+    try {
+      result = await pool.query(
+        `INSERT INTO ${table}(date, name, is_official, source)
+         VALUES ($1::date, $2, TRUE, $3)
+         ON CONFLICT (date) DO UPDATE
+         SET name = EXCLUDED.name,
+             is_official = EXCLUDED.is_official,
+             source = COALESCE(EXCLUDED.source, ${table}.source)
+         RETURNING date::text AS date, name, COALESCE(is_official, TRUE) AS "isOfficial", source`,
+        [normalizedDate, String(name).trim(), String(source || '').trim() || 'platform']
+      );
+    } catch (error) {
+      if (!isMissingColumnError(error)) {
+        throw error;
+      }
+      result = await pool.query(
+        `INSERT INTO ${table}(date, name)
+         VALUES ($1::date, $2)
+         ON CONFLICT (date) DO UPDATE
+         SET name = EXCLUDED.name
+         RETURNING date::text AS date, name`,
+        [normalizedDate, String(name).trim()]
+      );
+    }
 
-    return result.rows[0] || null;
+    return {
+      date: result.rows[0]?.date || normalizedDate,
+      name: result.rows[0]?.name || String(name).trim(),
+      isOfficial: true,
+      source: result.rows[0]?.source || String(source || '').trim() || 'platform',
+    };
   }
 
   async function deletePublicHoliday(date) {
