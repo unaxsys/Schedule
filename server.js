@@ -687,15 +687,19 @@ async function ensureDefaultShiftTemplatesForTenant(tenantId) {
 }
 
 function appendSystemShiftTemplates(shiftTemplates = []) {
-  const byCode = new Map();
+  const byScopeAndCode = new Map();
+  const buildShiftTemplateKey = (departmentId, code) => `${cleanStr(departmentId) || '__global__'}::${code}`;
   for (const template of shiftTemplates) {
     const code = cleanStr(template.code).toUpperCase();
     if (!code) {
       continue;
     }
-    byCode.set(code, {
+    const departmentId = cleanStr(template.department_id ?? template.departmentId) || null;
+    byScopeAndCode.set(buildShiftTemplateKey(departmentId, code), {
       ...template,
       code,
+      department_id: departmentId,
+      departmentId,
       start_time: template.start_time || template.start || '',
       end_time: template.end_time || template.end || '',
       hours: Number(template.hours || 0),
@@ -706,12 +710,13 @@ function appendSystemShiftTemplates(shiftTemplates = []) {
   }
 
   for (const shift of SYSTEM_SHIFT_TEMPLATES) {
-    if (!byCode.has(shift.code)) {
-      byCode.set(shift.code, { ...shift });
+    const globalSystemShiftKey = buildShiftTemplateKey(null, shift.code);
+    if (!byScopeAndCode.has(globalSystemShiftKey)) {
+      byScopeAndCode.set(globalSystemShiftKey, { ...shift, department_id: null, departmentId: null });
     }
   }
 
-  return Array.from(byCode.values());
+  return Array.from(byScopeAndCode.values());
 }
 
 function signAccessToken({ user, tenantId = null, role = null }) {
@@ -3556,8 +3561,16 @@ app.get('/api/departments/:departmentId/shifts', requireAuth, requireTenantConte
       ORDER BY code ASC
     `;
     const values = hasTenantId ? [departmentId, req.tenantId] : [departmentId];
+    console.log('[GET /api/departments/:departmentId/shifts] SQL:', queryText.trim());
+    console.log('[GET /api/departments/:departmentId/shifts] params:', {
+      tenant_id: hasTenantId ? req.tenantId : null,
+      department_id: departmentId,
+      values,
+    });
     const result = await pool.query(queryText, values);
-    return res.json({ shifts: filterVisibleShiftTemplates(result.rows) });
+    const visibleRows = filterVisibleShiftTemplates(result.rows);
+    console.log('[GET /api/departments/:departmentId/shifts] codes:', visibleRows.map((row) => row.code));
+    return res.json({ shifts: visibleRows });
   } catch (error) {
     if (error.status) {
       return res.status(error.status).json({ message: error.message });
