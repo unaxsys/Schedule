@@ -5572,6 +5572,10 @@ function buildMonthCalendarMarkup({ year, monthIndex, monthStats }) {
   `;
 }
 
+function buildMonthInfoMarkup(args) {
+  return buildMonthCalendarMarkup(args);
+}
+
 function renderSchedule() {
   const month = state.month || todayMonth();
   const [year, monthIndex] = month.split('-').map(Number);
@@ -5586,6 +5590,11 @@ function renderSchedule() {
   unlockScheduleBtn.disabled = !monthLocked || !canUnlockSchedule();
 
   monthInfo.innerHTML = buildMonthInfoMarkup({ year, monthIndex, monthStats });
+
+  const monthCalendarMarkup = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
+  if (sidebarMonthCalendar) {
+    sidebarMonthCalendar.innerHTML = monthCalendarMarkup;
+  }
 
   const monthCalendarMarkup = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
   if (sidebarMonthCalendar) {
