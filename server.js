@@ -2695,13 +2695,16 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
 
     const previousDay = dateAdd(entryDate, -1);
     const previousDayInt = Number(String(previousDay).slice(-2));
-    const prevEntryResult = await pool.query(
-      `SELECT se.shift_code, se.shift_id
+    const prevEntryParams = [scheduleId, employeeId, previousDayInt];
+    let prevEntrySql = `SELECT se.shift_code, se.shift_id
        FROM schedule_entries se
-       WHERE se.schedule_id = $1 AND se.employee_id = $2 AND se.day = $3
-       LIMIT 1`,
-      [scheduleId, employeeId, previousDayInt]
-    );
+       WHERE se.schedule_id = $1 AND se.employee_id = $2 AND se.day = $3`;
+    if (hasScheduleEntriesMonthKey) {
+      prevEntryParams.push(previousDay);
+      prevEntrySql += ` AND se.month_key = $${prevEntryParams.length}`;
+    }
+    prevEntrySql += ' LIMIT 1';
+    const prevEntryResult = await pool.query(prevEntrySql, prevEntryParams);
     let validation = { errors: [], warnings: [] };
     if (selectedShiftForSnapshot) {
       let prevShiftEndAt = null;
