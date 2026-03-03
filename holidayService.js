@@ -67,12 +67,6 @@ function buildObservedNonWorkingDays(rows) {
   return observedRows;
 }
 
-const BG_SPECIAL_NON_WORKING_DAYS = {
-  2026: [
-    ['01-02', 'Почивен ден (Нова година)']
-  ]
-};
-
 function getBgHolidaySeedRows(year) {
   const fixed = [
     ['01-01', 'Нова година'],
@@ -88,13 +82,6 @@ function getBgHolidaySeedRows(year) {
   ];
 
   const rows = fixed.map(([mmdd, name]) => ({ date: `${year}-${mmdd}`, name, is_official: true, source: 'BG official' }));
-  const specialRows = (BG_SPECIAL_NON_WORKING_DAYS[year] || []).map(([mmdd, name]) => ({
-    date: `${year}-${mmdd}`,
-    name,
-    is_official: true,
-    source: 'BG official (special)'
-  }));
-  rows.push(...specialRows);
   const easter = orthodoxEasterDate(year);
   rows.push({ date: toISODate(addDays(easter, -2)), name: 'Велики петък', is_official: true, source: 'BG official (easter)' });
   rows.push({ date: toISODate(addDays(easter, -1)), name: 'Велика събота', is_official: true, source: 'BG official (easter)' });

@@ -4971,7 +4971,7 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
 
     row.appendChild(cell);
     collectSummary(summary, employee, effectiveShift, holiday, weekend, inEmployment, entrySnapshot);
-    if (inEmployment && !holiday && !weekend) {
+    if (inEmployment && !holiday && !weekend && !isNormExcludedDate(dateISO)) {
       summary.monthNormHours += 8;
     }
   }
@@ -5029,11 +5029,16 @@ const FALLBACK_BG_FIXED_HOLIDAYS = [
   ['12-26', 'Рождество Христово'],
 ];
 
-const FALLBACK_BG_SPECIAL_NON_WORKING_DAYS = {
-  2026: [
-    ['01-02', 'Почивен ден (Нова година)']
-  ]
+const NORM_EXCLUDED_WORKDAYS_BY_MONTH = {
+  '2026-01': ['2026-01-02']
 };
+
+function isNormExcludedDate(dateISO) {
+  const normalizedDate = String(dateISO || '').slice(0, 10);
+  const monthKey = normalizedDate.slice(0, 7);
+  const excludedDates = NORM_EXCLUDED_WORKDAYS_BY_MONTH[monthKey] || [];
+  return excludedDates.includes(normalizedDate);
+}
 
 const fallbackHolidayCache = new Map();
 
@@ -5093,15 +5098,6 @@ function getFallbackOfficialHolidayMap(year) {
     type: 'official',
     source: 'fallback official'
   }));
-  const specialRows = (FALLBACK_BG_SPECIAL_NON_WORKING_DAYS[normalizedYear] || []).map(([mmdd, name]) => ({
-    date: `${normalizedYear}-${mmdd}`,
-    name,
-    isHoliday: true,
-    type: 'official',
-    source: 'fallback official (special)'
-  }));
-  rows.push(...specialRows);
-
   const easter = orthodoxEaster(normalizedYear);
   const easterRows = [
     { offset: -2, name: 'Велики петък' },
@@ -5615,7 +5611,7 @@ function getMonthStats(year, monthIndex, totalDays) {
     if (weekend) {
       weekendDays += 1;
     }
-    if (!holiday && !weekend) {
+    if (!holiday && !weekend && !isNormExcludedDate(dateISO)) {
       workingDays += 1;
     }
   }
@@ -5696,7 +5692,8 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
       }
 
       const date = new Date(year, monthIndex - 1, day);
-      if (!isOfficialHoliday(date) && !isWeekend(date)) {
+      const dateISO = `${year}-${String(monthIndex).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      if (!isOfficialHoliday(date) && !isWeekend(date) && !isNormExcludedDate(dateISO)) {
         totals.normHours += 8;
       }
 
