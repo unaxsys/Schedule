@@ -5501,6 +5501,76 @@ function renderHolidaysAdminTable() {
   });
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function buildMonthInfoMarkup({ year, monthIndex, monthStats }) {
+  const monthDate = new Date(Date.UTC(year, monthIndex - 1, 1));
+  const monthLabel = new Intl.DateTimeFormat('bg-BG', { month: 'long' }).format(monthDate).toUpperCase();
+  const weekdayLabels = ['П', 'В', 'С', 'Ч', 'П', 'С', 'Н'];
+  const totalDays = new Date(year, monthIndex, 0).getDate();
+  const firstWeekday = new Date(Date.UTC(year, monthIndex - 1, 1)).getUTCDay();
+  const mondayIndex = (firstWeekday + 6) % 7;
+  const cells = [];
+
+  for (let i = 0; i < mondayIndex; i += 1) {
+    cells.push({ text: '', classes: 'is-outside' });
+  }
+
+  for (let day = 1; day <= totalDays; day += 1) {
+    const date = new Date(Date.UTC(year, monthIndex - 1, day));
+    const dateISO = `${year}-${String(monthIndex).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const holidayMeta = getHolidayMeta(dateISO);
+    const weekday = date.getUTCDay();
+    const isWeekendDay = weekday === 0 || weekday === 6;
+    const classes = [];
+    if (isWeekendDay) {
+      classes.push('is-weekend');
+    }
+    if (holidayMeta?.isHoliday) {
+      classes.push('is-holiday');
+    }
+    cells.push({ text: String(day), classes: classes.join(' '), title: holidayMeta?.name || '' });
+  }
+
+  while (cells.length % 7 !== 0) {
+    cells.push({ text: '', classes: 'is-outside' });
+  }
+
+  const rows = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    const row = cells.slice(i, i + 7)
+      .map((cell) => `<td class="${cell.classes || ''}" title="${escapeHtml(cell.title || '')}">${cell.text}</td>`)
+      .join('');
+    rows.push(`<tr>${row}</tr>`);
+  }
+
+  return `
+    <div class="month-info__stats">
+      <b>Работни дни по календар:</b> ${monthStats.workingDays} ·
+      <b>Почивни дни:</b> ${monthStats.weekendDays} ·
+      <b>Официални празници:</b> ${monthStats.holidayDays} ·
+      <b>Норма:</b> ${monthStats.normHours} ч.
+    </div>
+    <div class="month-info__calendar" aria-label="Календар за ${monthLabel}">
+      <h4 class="month-info__calendar-title">${monthLabel}</h4>
+      <table class="month-info__calendar-grid" aria-hidden="true">
+        <thead>
+          <tr>${weekdayLabels.map((label) => `<th>${label}</th>`).join('')}</tr>
+        </thead>
+        <tbody>${rows.join('')}</tbody>
+      </table>
+      <p class="month-info__summary">${monthStats.workingDays} работни дни<br />${monthStats.normHours} часа</p>
+    </div>
+  `;
+}
+
 function renderSchedule() {
   const month = state.month || todayMonth();
   const [year, monthIndex] = month.split('-').map(Number);
@@ -5514,12 +5584,7 @@ function renderSchedule() {
   lockScheduleBtn.disabled = monthLocked || !canManageScheduleLock();
   unlockScheduleBtn.disabled = !monthLocked || !canUnlockSchedule();
 
-  monthInfo.innerHTML = `
-    <b>Работни дни по календар:</b> ${monthStats.workingDays} ·
-    <b>Почивни дни:</b> ${monthStats.weekendDays} ·
-    <b>Официални празници:</b> ${monthStats.holidayDays} ·
-    <b>Норма:</b> ${monthStats.normHours} ч.
-  `;
+  monthInfo.innerHTML = buildMonthInfoMarkup({ year, monthIndex, monthStats });
 
   const visibleSummaryColumns = getVisibleSummaryColumns();
   const selectedSet = getSelectedDepartmentIdsSet();
