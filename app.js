@@ -6355,11 +6355,7 @@ async function refreshMonthlyView() {
   await loadSchedulesForMonth();
 
   const monthParam = encodeURIComponent(month);
-  const singleDepartmentFilter = getEffectiveSingleDepartmentFilter();
-  const employeeQuery = singleDepartmentFilter
-    ? `/api/employees?department_id=${encodeURIComponent(singleDepartmentFilter)}&month_key=${monthParam}`
-    : `/api/employees?month_key=${monthParam}`;
-  const employeeResponse = await apiFetch(employeeQuery);
+  const employeeResponse = await apiFetch(`/api/employees?month_key=${monthParam}`);
   const employeePayload = employeeResponse.ok ? await employeeResponse.json() : { employees: [] };
   const allowedEmployees = Array.isArray(employeePayload.employees) ? employeePayload.employees : [];
   const allowedIds = new Set(allowedEmployees.map((employee) => employee.id));
@@ -6378,9 +6374,6 @@ async function refreshMonthlyView() {
 
   try {
     const leaveQuery = new URLSearchParams({ month });
-    if (singleDepartmentFilter) {
-      leaveQuery.set('department_id', singleDepartmentFilter);
-    }
     const leavesResponse = await apiFetch(`/api/leaves?${leaveQuery.toString()}`);
     if (leavesResponse.ok) {
       const leavesPayload = await leavesResponse.json();
