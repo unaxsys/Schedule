@@ -983,6 +983,19 @@ function cleanStoredValue(value) {
   return String(value || '').trim();
 }
 
+function resolveDepartmentIdInput(value) {
+  const raw = cleanStoredValue(value);
+  if (!raw) {
+    return null;
+  }
+  if (isValidUuid(raw)) {
+    return raw;
+  }
+
+  const byName = state.departments.find((department) => String(department?.name || '').trim().toLowerCase() === raw.toLowerCase());
+  return cleanStoredValue(byName?.id) || null;
+}
+
 
 function isValidUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(cleanStoredValue(value));
@@ -2225,7 +2238,7 @@ function attachShiftForm() {
     const result = await upsertShiftTemplate({
       code: shiftCodeInput.value,
       name: shiftNameInput.value,
-      departmentId: cleanStoredValue(shiftDepartmentInput?.value) || null,
+      departmentId: resolveDepartmentIdInput(shiftDepartmentInput?.value),
       start: shiftStartInput.value,
       end: shiftEndInput.value,
       breakMinutes: Math.max(0, Number(shiftBreakMinutesInput?.value || 0)),

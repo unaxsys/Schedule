@@ -97,14 +97,25 @@ function normalizeShiftImportRowsPayload(payload) {
 }
 
 async function resolveTenantDepartmentOrThrow({ departmentId, tenantId }) {
-  if (!isValidUuid(departmentId)) {
+  const normalizedDepartmentInput = cleanStr(departmentId);
+  if (!normalizedDepartmentInput) {
     throw createHttpError(400, 'Невалиден department_id.');
   }
 
-  const result = await pool.query(
-    'SELECT id FROM departments WHERE id = $1 AND tenant_id = $2 LIMIT 1',
-    [departmentId, tenantId]
-  );
+  const result = isValidUuid(normalizedDepartmentInput)
+    ? await pool.query(
+      'SELECT id FROM departments WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+      [normalizedDepartmentInput, tenantId]
+    )
+    : await pool.query(
+      `SELECT id
+       FROM departments
+       WHERE tenant_id = $1
+         AND LOWER(name) = LOWER($2)
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [tenantId, normalizedDepartmentInput]
+    );
 
   if (!result.rowCount) {
     throw createHttpError(404, 'Отделът не е намерен или е извън tenant scope.');
