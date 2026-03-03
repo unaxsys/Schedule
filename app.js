@@ -5605,6 +5605,10 @@ function renderSchedule() {
     sidebarMonthCalendar.innerHTML = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
   }
 
+  if (sidebarMonthCalendar) {
+    sidebarMonthCalendar.innerHTML = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
+  }
+
   const visibleSummaryColumns = getVisibleSummaryColumns();
   const selectedSet = getSelectedDepartmentIdsSet();
   const employeesToRender = getEmployeesForSelectedSchedules();
