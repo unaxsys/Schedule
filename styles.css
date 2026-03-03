@@ -1095,16 +1095,35 @@ select.shift-select {
 
 .auth-form-card {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.65rem;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
-  padding: 0.85rem;
+  padding: 0.95rem;
   margin-top: 0.7rem;
 }
 
 .auth-form-card h3,
 .auth-form-card p {
   margin: 0;
+}
+
+.magos-auth-card .employee-form {
+  grid-template-columns: 1fr;
+  gap: 0.65rem;
+}
+
+.magos-auth-card .employee-form > * {
+  grid-column: 1 / -1;
+}
+
+.magos-auth-card .employee-form input,
+.magos-auth-card .employee-form button,
+.magos-auth-card .employee-form .btn-add {
+  width: 100%;
+}
+
+.magos-auth-card .employee-form button {
+  white-space: normal;
 }
 
 .magos-landing {
@@ -1204,6 +1223,8 @@ select.shift-select {
 }
 
 .magos-auth-card {
+  display: grid;
+  gap: 0.6rem;
   background: #ffffff;
   border: 1px solid #dbe4f2;
   border-radius: 14px;
