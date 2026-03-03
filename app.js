@@ -1857,6 +1857,108 @@ function attachApiControls() {
   });
 }
 
+
+const SHIFT_INTERVALS_META_PREFIX = '@@SPLIT:';
+
+function normalizeSplitIntervals(intervals) {
+  if (!Array.isArray(intervals)) {
+    return [];
+  }
+  return intervals
+    .map((interval) => ({
+      start: String(interval?.start || '').trim(),
+      end: String(interval?.end || '').trim(),
+    }))
+    .filter((interval) => interval.start && interval.end && calcShiftHours(interval.start, interval.end, 0, true) > 0);
+}
+
+function encodeShiftNameWithIntervals(name, intervals) {
+  const normalizedName = String(name || '').trim();
+  const normalizedIntervals = normalizeSplitIntervals(intervals);
+  if (normalizedIntervals.length < 2) {
+    return normalizedName;
+  }
+  const encoded = encodeURIComponent(JSON.stringify(normalizedIntervals));
+  return `${normalizedName} ${SHIFT_INTERVALS_META_PREFIX}${encoded}`;
+}
+
+function decodeShiftNameWithIntervals(rawName) {
+  const text = String(rawName || '').trim();
+  const markerIndex = text.lastIndexOf(SHIFT_INTERVALS_META_PREFIX);
+  if (markerIndex < 0) {
+    return { name: text, intervals: [] };
+  }
+
+  const cleanName = text.slice(0, markerIndex).trim();
+  const encodedPart = text.slice(markerIndex + SHIFT_INTERVALS_META_PREFIX.length).trim();
+  try {
+    const parsed = JSON.parse(decodeURIComponent(encodedPart));
+    return { name: cleanName || text, intervals: normalizeSplitIntervals(parsed) };
+  } catch {
+    return { name: text, intervals: [] };
+  }
+}
+
+function parseTimeToMinutes(timeValue) {
+  const [hours, minutes] = String(timeValue || '').split(':').map(Number);
+  if ([hours, minutes].some((value) => Number.isNaN(value))) {
+    return NaN;
+  }
+  return (hours * 60) + minutes;
+}
+
+function buildSplitShiftFromIntervals(intervals) {
+  const normalizedIntervals = normalizeSplitIntervals(intervals);
+  if (normalizedIntervals.length < 2) {
+    return null;
+  }
+
+  const intervalMinutes = normalizedIntervals.map((interval) => ({
+    start: parseTimeToMinutes(interval.start),
+    end: parseTimeToMinutes(interval.end),
+  }));
+  if (intervalMinutes.some((interval) => !Number.isFinite(interval.start) || !Number.isFinite(interval.end) || interval.end <= interval.start)) {
+    return null;
+  }
+
+  for (let index = 1; index < intervalMinutes.length; index += 1) {
+    if (intervalMinutes[index].start < intervalMinutes[index - 1].end) {
+      return null;
+    }
+  }
+
+  const start = normalizedIntervals[0].start;
+  const end = normalizedIntervals[normalizedIntervals.length - 1].end;
+  const totalWorkedHours = Number(normalizedIntervals
+    .reduce((sum, interval) => sum + calcShiftHours(interval.start, interval.end, 0, true), 0)
+    .toFixed(2));
+  const attendanceHours = calcShiftHours(start, end, 0, true);
+  const breakMinutes = Math.max(0, Math.round((attendanceHours - totalWorkedHours) * 60));
+
+  return {
+    start,
+    end,
+    breakMinutes,
+    breakIncluded: false,
+    hours: totalWorkedHours,
+    intervals: normalizedIntervals,
+  };
+}
+
+function getShiftIntervals(shift) {
+  return normalizeSplitIntervals(shift?.intervals);
+}
+
+function getShiftNightHours(shift, options = {}) {
+  const intervals = getShiftIntervals(shift);
+  if (intervals.length >= 2) {
+    return Number(intervals
+      .reduce((sum, interval) => sum + calcNightHours(interval.start, interval.end, options), 0)
+      .toFixed(2));
+  }
+  return calcNightHours(shift?.start, shift?.end, options);
+}
+
 function attachRatesForm() {
   ratesForm.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -1871,14 +1973,25 @@ function attachRatesForm() {
 }
 
 
-function upsertShiftTemplate({ code, name, departmentId = null, start, end, breakMinutes = 0, breakIncluded = false }) {
+function upsertShiftTemplate({ code, name, departmentId = null, start, end, breakMinutes = 0, breakIncluded = false, intervals = [] }) {
   const normalizedCode = String(code || '').trim().toUpperCase();
   const normalizedName = String(name || '').trim();
   const normalizedDepartmentId = cleanStoredValue(departmentId) || null;
   const effectiveDepartmentId = normalizedCode === 'R' ? null : normalizedDepartmentId;
-  const hours = calcShiftHours(start, end, breakMinutes, breakIncluded);
+  const normalizedIntervals = normalizeSplitIntervals(intervals);
+  const hasSplitIntervals = normalizedIntervals.length >= 2;
 
-  if (!normalizedCode || !normalizedName || !start || !end) {
+  const effectiveStart = hasSplitIntervals ? normalizedIntervals[0].start : start;
+  const effectiveEnd = hasSplitIntervals ? normalizedIntervals[normalizedIntervals.length - 1].end : end;
+  const effectiveBreakMinutes = hasSplitIntervals
+    ? Math.max(0, Math.round((calcShiftHours(effectiveStart, effectiveEnd, 0, true) - normalizedIntervals.reduce((sum, interval) => sum + calcShiftHours(interval.start, interval.end, 0, true), 0)) * 60))
+    : Math.max(0, Number(breakMinutes) || 0);
+  const effectiveBreakIncluded = hasSplitIntervals ? false : Boolean(breakIncluded);
+  const hours = hasSplitIntervals
+    ? Number(normalizedIntervals.reduce((sum, interval) => sum + calcShiftHours(interval.start, interval.end, 0, true), 0).toFixed(2))
+    : calcShiftHours(effectiveStart, effectiveEnd, effectiveBreakMinutes, effectiveBreakIncluded);
+
+  if (!normalizedCode || !normalizedName || !effectiveStart || !effectiveEnd) {
     return { ok: false, message: 'Попълнете всички полета за смяна.' };
   }
   if (hours <= 0) {
@@ -1889,24 +2002,30 @@ function upsertShiftTemplate({ code, name, departmentId = null, start, end, brea
     shift.code === normalizedCode && cleanStoredValue(shift.departmentId) === (effectiveDepartmentId || '')
   ));
 
+  const payloadName = normalizedCode === 'R' ? 'Редовна' : normalizedName;
+  const backendName = encodeShiftNameWithIntervals(payloadName, normalizedIntervals);
+
   if (existingShiftIndex >= 0) {
     const existingShift = state.shiftTemplates[existingShiftIndex];
     state.shiftTemplates[existingShiftIndex] = {
       ...existingShift,
       code: normalizedCode,
       label: toCyrillicShiftLabel(normalizedCode),
-      name: normalizedCode === 'R' ? 'Редовна' : normalizedName,
+      name: payloadName,
       departmentId: effectiveDepartmentId,
       type: 'work',
-      start,
-      end,
+      start: effectiveStart,
+      end: effectiveEnd,
       hours,
       locked: normalizedCode === 'R' ? true : Boolean(existingShift.locked),
-      break_minutes: Math.max(0, Number(breakMinutes) || 0),
-      break_included: Boolean(breakIncluded)
+      break_minutes: effectiveBreakMinutes,
+      break_included: effectiveBreakIncluded,
+      intervals: normalizedIntervals,
     };
   } else {
-    const nightHours = calcNightHours(start, end);
+    const nightHours = hasSplitIntervals
+      ? Number(normalizedIntervals.reduce((sum, interval) => sum + calcNightHours(interval.start, interval.end), 0).toFixed(2))
+      : calcNightHours(effectiveStart, effectiveEnd);
     if (nightHours > 0 && hours > MAX_NIGHT_SHIFT_HOURS) {
       return { ok: false, message: 'Нощна смяна при СИРВ може да е максимум 12 часа.' };
     }
@@ -1914,24 +2033,41 @@ function upsertShiftTemplate({ code, name, departmentId = null, start, end, brea
     state.shiftTemplates.push({
       code: normalizedCode,
       label: toCyrillicShiftLabel(normalizedCode),
-      name: normalizedName,
+      name: payloadName,
       departmentId: effectiveDepartmentId,
       type: 'work',
-      start,
-      end,
+      start: effectiveStart,
+      end: effectiveEnd,
       hours,
       locked: false,
-      break_minutes: Math.max(0, Number(breakMinutes) || 0),
-      break_included: Boolean(breakIncluded)
+      break_minutes: effectiveBreakMinutes,
+      break_included: effectiveBreakIncluded,
+      intervals: normalizedIntervals,
     });
   }
 
   saveShiftTemplates();
   if (effectiveDepartmentId) {
-    void saveDepartmentShiftBackend(effectiveDepartmentId, { code: normalizedCode, name: normalizedName, start_time: start, end_time: end, break_minutes: breakMinutes, break_included: breakIncluded });
+    void saveDepartmentShiftBackend(effectiveDepartmentId, {
+      code: normalizedCode,
+      name: backendName,
+      start_time: effectiveStart,
+      end_time: effectiveEnd,
+      break_minutes: effectiveBreakMinutes,
+      break_included: effectiveBreakIncluded,
+    });
     void loadDepartmentShifts(effectiveDepartmentId, { force: true });
   } else {
-    void saveShiftTemplateBackend({ code: normalizedCode, name: normalizedCode === 'R' ? 'Редовна' : normalizedName, start, end, hours, department_id: effectiveDepartmentId, break_minutes: breakMinutes, break_included: breakIncluded });
+    void saveShiftTemplateBackend({
+      code: normalizedCode,
+      name: backendName,
+      start: effectiveStart,
+      end: effectiveEnd,
+      hours,
+      department_id: effectiveDepartmentId,
+      break_minutes: effectiveBreakMinutes,
+      break_included: effectiveBreakIncluded,
+    });
   }
 
   return { ok: true };
@@ -2065,19 +2201,21 @@ function attachShiftForm() {
   shiftForm.addEventListener('submit', (event) => {
     event.preventDefault();
 
-    if (shiftSplitInput?.checked) {
-      const intervals = collectSplitIntervals();
-      if (intervals.length < 2) {
+    const isSplitMode = Boolean(shiftSplitInput?.checked);
+    let splitIntervals = [];
+
+    if (isSplitMode) {
+      splitIntervals = collectSplitIntervals();
+      if (splitIntervals.length < 2) {
         setStatus('Добавете поне 2 интервала за прекъсната смяна.', false);
         return;
       }
-      const hasInvalidInterval = intervals.some((interval) => !interval.start || !interval.end || calcShiftHours(interval.start, interval.end) <= 0);
-      if (hasInvalidInterval) {
-        setStatus('Попълнете валидни начало и край за всеки интервал.', false);
+      const splitConfig = buildSplitShiftFromIntervals(splitIntervals);
+      if (!splitConfig) {
+        setStatus('Интервалите трябва да са валидни, подредени и без застъпване.', false);
         return;
       }
-      setStatus('Прекъснатите смени (2+ интервала) са само UI визуализация на този етап.', false);
-      return;
+      splitIntervals = splitConfig.intervals;
     }
 
     const result = upsertShiftTemplate({
@@ -2088,6 +2226,7 @@ function attachShiftForm() {
       end: shiftEndInput.value,
       breakMinutes: Math.max(0, Number(shiftBreakMinutesInput?.value || 0)),
       breakIncluded: Boolean(shiftBreakIncludedInput?.checked),
+      intervals: splitIntervals,
     });
 
     if (!result.ok) {
@@ -3326,7 +3465,7 @@ function getShiftHoursBreakdown(shift) {
   const workHours = getStoredShiftHours(shift);
   const restHours = Math.max(0, attendanceHours - workHours);
   const nightHours = hasTimes
-    ? calcNightHours(start, end, { minNightHours: 0 })
+    ? getShiftNightHours(shift, { minNightHours: 0 })
     : 0;
   return { attendanceHours, workHours, restHours, nightHours };
 }
@@ -5644,6 +5783,13 @@ function incrementLeaveSummaryByShiftCode(summary, shiftCode) {
 }
 
 function getStoredShiftHours(shift) {
+  const intervals = getShiftIntervals(shift);
+  if (intervals.length >= 2) {
+    return Number(intervals
+      .reduce((sum, interval) => sum + calcShiftHours(interval.start, interval.end, 0, true), 0)
+      .toFixed(2));
+  }
+
   const start = String(shift?.start || '').trim();
   const end = String(shift?.end || '').trim();
   if (start && end) {
@@ -5671,44 +5817,62 @@ function calculateHolidayAndWeekendHoursByShift(shift, dateISO, workedMinutesOve
     return { holidayHours: 0, weekendHours: 0 };
   }
 
-  const parseMinutes = (timeValue) => {
-    const [hours, minutes] = String(timeValue || '').split(':').map(Number);
-    if ([hours, minutes].some((value) => Number.isNaN(value))) {
-      return NaN;
-    }
-    return (hours * 60) + minutes;
-  };
+  const parseMinutes = (timeValue) => parseTimeToMinutes(timeValue);
 
-  const startMinutes = parseMinutes(shift.start);
-  const endRawMinutes = parseMinutes(shift.end);
-  if (!Number.isFinite(startMinutes) || !Number.isFinite(endRawMinutes)) {
+  const intervals = getShiftIntervals(shift);
+  const intervalParts = intervals.length >= 2 ? intervals : [{ start: shift.start, end: shift.end }];
+
+  const totals = intervalParts.reduce((acc, part) => {
+    const startMinutes = parseMinutes(part.start);
+    const endRawMinutes = parseMinutes(part.end);
+    if (!Number.isFinite(startMinutes) || !Number.isFinite(endRawMinutes)) {
+      return acc;
+    }
+
+    let endMinutes = endRawMinutes;
+    if (endMinutes <= startMinutes) {
+      endMinutes += 24 * 60;
+    }
+
+    const durationMinutes = Math.max(0, endMinutes - startMinutes);
+    if (durationMinutes <= 0) {
+      return acc;
+    }
+
+    const firstDayMinutes = Math.min(endMinutes, 24 * 60) - startMinutes;
+    const secondDayMinutes = Math.max(0, endMinutes - (24 * 60));
+    acc.durationMinutes += durationMinutes;
+    acc.segments.push(
+      ...[
+        { dateISO, durationMinutes: firstDayMinutes },
+        ...(secondDayMinutes > 0 ? [{ dateISO: addDaysToDateKey(dateISO, 1), durationMinutes: secondDayMinutes }] : [])
+      ].filter((segment) => segment.durationMinutes > 0)
+    );
+    return acc;
+  }, { durationMinutes: 0, segments: [] });
+
+  const durationMinutes = totals.durationMinutes;
+  if (durationMinutes <= 0) {
     return { holidayHours: 0, weekendHours: 0 };
   }
 
-  let endMinutes = endRawMinutes;
-  if (endMinutes <= startMinutes) {
-    endMinutes += 24 * 60;
-  }
-
-  const durationMinutes = Math.max(0, endMinutes - startMinutes);
-  const breakMinutes = Math.max(0, Number(shift.break_minutes ?? shift.breakMinutes ?? 0) || 0);
-  const calculatedWorkedMinutes = Boolean(shift.break_included ?? shift.breakIncluded)
+  const breakMinutes = intervals.length >= 2
+    ? 0
+    : Math.max(0, Number(shift.break_minutes ?? shift.breakMinutes ?? 0) || 0);
+  const calculatedWorkedMinutes = intervals.length >= 2
     ? durationMinutes
-    : Math.max(durationMinutes - breakMinutes, 0);
+    : (Boolean(shift.break_included ?? shift.breakIncluded)
+      ? durationMinutes
+      : Math.max(durationMinutes - breakMinutes, 0));
   const workedMinutes = Number.isFinite(Number(workedMinutesOverride))
     ? Math.max(0, Number(workedMinutesOverride))
     : calculatedWorkedMinutes;
 
-  if (workedMinutes <= 0 || durationMinutes <= 0) {
+  if (workedMinutes <= 0) {
     return { holidayHours: 0, weekendHours: 0 };
   }
 
-  const firstDayMinutes = Math.min(endMinutes, 24 * 60) - startMinutes;
-  const secondDayMinutes = Math.max(0, endMinutes - (24 * 60));
-  const segments = [
-    { dateISO, durationMinutes: firstDayMinutes },
-    ...(secondDayMinutes > 0 ? [{ dateISO: addDaysToDateKey(dateISO, 1), durationMinutes: secondDayMinutes }] : [])
-  ].filter((segment) => segment.durationMinutes > 0);
+  const segments = totals.segments;
 
   let distributedWorkedMinutes = 0;
   const weightedSegments = segments.map((segment) => {
@@ -5782,7 +5946,7 @@ function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmploy
 
   if (shift.type === 'work') {
     const shiftHours = getWorkShiftHours(shift);
-    const nightHours = calcNightHours(shift.start, shift.end, { isYoungWorker: Boolean(employee?.youngWorker) });
+    const nightHours = getShiftNightHours(shift, { isYoungWorker: Boolean(employee?.youngWorker) });
     const specialHours = calculateHolidayAndWeekendHoursByShift(shift, dateISO, shiftHours * 60);
 
     summary.workedDays += 1;
@@ -5969,7 +6133,7 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
         continue;
       }
       const workedHours = getWorkShiftHours(shift);
-      const nightHours = calcNightHours(shift.start, shift.end, { isYoungWorker: Boolean(employee?.youngWorker) });
+      const nightHours = getShiftNightHours(shift, { isYoungWorker: Boolean(employee?.youngWorker) });
       totals.convertedWorkedHours += workedHours + nightHours * (NIGHT_HOURS_COEFFICIENT - 1);
     }
   });
@@ -7340,24 +7504,31 @@ function mergeShiftTemplates(backendShiftTemplates) {
       return;
     }
 
+    const decodedName = decodeShiftNameWithIntervals(String(shift.name || code));
+    const parsedIntervals = normalizeSplitIntervals(shift.intervals || decodedName.intervals);
+    const parsedStart = String(shift.start || shift.start_time || '');
+    const parsedEnd = String(shift.end || shift.end_time || '');
+
     merged.push({
       id: shift.id || null,
       code,
       label: toCyrillicShiftLabel(code),
-      name: String(shift.name || code),
+      name: decodedName.name || String(shift.name || code),
       departmentId,
       type: 'work',
-      start: String(shift.start || ''),
-      end: String(shift.end || ''),
-      hours: getStoredShiftHours(shift),
+      start: parsedStart,
+      end: parsedEnd,
+      hours: getStoredShiftHours({ ...shift, intervals: parsedIntervals, start: parsedStart, end: parsedEnd }),
       locked: false,
       break_minutes: getBreakMinutes(shift),
-      break_included: getBreakIncluded(shift)
+      break_included: getBreakIncluded(shift),
+      intervals: parsedIntervals,
     });
   });
 
   return merged;
 }
+
 
 function loadShiftTemplates() {
   try {
