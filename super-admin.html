@@ -548,6 +548,13 @@
       const holidaysSeedBtn = document.getElementById('saHolidaySeedBtn');
       const holidaysForm = document.getElementById('saHolidayForm');
       const holidaysRowsEl = document.getElementById('saHolidayRows');
+      const holidaysTenantInput = document.getElementById('saHolidayTenant'); // compatibility for old cached handlers
+
+      function safeAddListener(element, eventName, handler) {
+        if (element && typeof element.addEventListener === 'function') {
+          element.addEventListener(eventName, handler);
+        }
+      }
 
       const REFRESH_EVERY_MS = 5000;
       let refreshTimer = null;
@@ -960,6 +967,48 @@
         renderHolidayRows(payload.holidays || []);
       }
 
+      function holidayTypeLabel(type) {
+        const map = {
+          official: 'Официален празник',
+        };
+        return map[type] || 'Официален празник';
+      }
+
+      function renderHolidayRows(rows = []) {
+        if (!holidaysRowsEl) {
+          return;
+        }
+        if (!rows.length) {
+          holidaysRowsEl.innerHTML = '<tr><td colspan="5">Няма дни за тази година.</td></tr>';
+          return;
+        }
+
+        holidaysRowsEl.innerHTML = rows
+          .map((row) => {
+            const rowType = String(row.isOfficial ? 'official' : 'official');
+            return `
+              <tr>
+                <td>${escapeHtml(row.date || '—')}</td>
+                <td>${escapeHtml(row.name || '—')}</td>
+                <td><span class="sa-holiday-type sa-holiday-type--official">${escapeHtml(holidayTypeLabel(rowType))}</span></td>
+                <td>${escapeHtml(row.source || '—')}</td>
+                <td><button type="button" onclick="window.__saDeleteHoliday('${escapeHtml(row.date)}')">Изтрий</button></td>
+              </tr>
+            `;
+          })
+          .join('');
+      }
+
+      async function loadPublicHolidays() {
+        const year = Number(holidaysYearInput?.value || new Date().getFullYear());
+        if (!Number.isInteger(year) || year < 2020 || year > 2100) {
+          setStatus('Невалидна година за празници.', false);
+          return;
+        }
+        const payload = await apiRequest(`/api/platform/super-admin/public-holidays?year=${encodeURIComponent(String(year))}`);
+        renderHolidayRows(payload.holidays || []);
+      }
+
       function renderBubbles(row, hiddenKeys = new Set()) {
         const bubbles = Object.entries(row || {})
           .filter(([key]) => !hiddenKeys.has(key))
@@ -1084,7 +1133,8 @@
           renderLogs(payload);
           setStatus(`${isAuto ? 'Live' : 'Ръчно'} обновяване: ${new Date().toLocaleTimeString('bg-BG')}`);
         } catch (error) {
-          setStatus(error.message, false);
+          const message = String(error?.message || '');
+          setStatus(message.includes('Failed to fetch') ? 'Failed to fetch: Няма връзка с API сървъра.' : message, false);
         }
       }
 
@@ -1120,23 +1170,23 @@
         }
       };
 
-      connectBtn.addEventListener('click', async () => {
+      safeAddListener(connectBtn, 'click', async () => {
         apiBaseUrl = apiUrlInput.value.trim().replace(/\/$/, '');
         localStorage.setItem('apiBaseUrl', apiBaseUrl);
         setStatus(`API URL е записан: ${apiBaseUrl}`);
         await refreshOverview();
       });
 
-      refreshBtn.addEventListener('click', async () => {
+      safeAddListener(refreshBtn, 'click', async () => {
         await refreshOverview();
       });
 
-      tabStatsBtn.addEventListener('click', () => switchTab('stats'));
-      tabLogicBtn.addEventListener('click', () => switchTab('logic'));
-      tabHolidaysBtn.addEventListener('click', () => switchTab('holidays'));
-      logicForm.addEventListener('input', () => renderCalculationLogic());
+      safeAddListener(tabStatsBtn, 'click', () => switchTab('stats'));
+      safeAddListener(tabLogicBtn, 'click', () => switchTab('logic'));
+      safeAddListener(tabHolidaysBtn, 'click', () => switchTab('holidays'));
+      safeAddListener(logicForm, 'input', () => renderCalculationLogic());
 
-      holidaysLoadBtn.addEventListener('click', async () => {
+      safeAddListener(holidaysLoadBtn, 'click', async () => {
         try {
           await loadPublicHolidays();
           setStatus('Празниците са заредени.');
@@ -1146,7 +1196,7 @@
       });
 
 
-      holidaysSeedBtn.addEventListener('click', async () => {
+      safeAddListener(holidaysSeedBtn, 'click', async () => {
         try {
           const year = Number(holidaysYearInput?.value || new Date().getFullYear());
           await apiRequest('/api/holidays/seed', {
@@ -1160,7 +1210,17 @@
         }
       });
 
-      holidaysForm.addEventListener('submit', async (event) => {
+
+      // Backward-compatibility guard: older bundles referenced holidaysTenantInput.
+      safeAddListener(holidaysTenantInput, 'change', async () => {
+        try {
+          await loadPublicHolidays();
+        } catch (error) {
+          setStatus(String(error?.message || error), false);
+        }
+      });
+
+      safeAddListener(holidaysForm, 'submit', async (event) => {
         event.preventDefault();
         try {
           const date = document.getElementById('saHolidayDate').value;
@@ -1177,7 +1237,7 @@
         }
       });
 
-      tableForm.addEventListener('submit', async (event) => {
+      safeAddListener(tableForm, 'submit', async (event) => {
         event.preventDefault();
         try {
           const tableName = tableNameInput.value;
