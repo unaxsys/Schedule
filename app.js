@@ -6002,7 +6002,7 @@ function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmploy
     return;
   }
 
-  const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
+  const shift = getShiftByCode(shiftCode, { employee }) || getShiftByCode('P', { employee });
 
   const snapshotWorkMinutes = Number(snapshot?.workMinutesTotal ?? snapshot?.workMinutes);
   const hasSnapshotMinutes = Number.isFinite(snapshotWorkMinutes);
@@ -6110,8 +6110,30 @@ function getShiftDisplayLabel(shift) {
   return displayCode;
 }
 
-function getShiftByCode(code) {
-  return state.shiftTemplates.find((shift) => shift.code === code);
+function getShiftByCode(code, options = {}) {
+  const normalizedCode = String(code || '').trim().toUpperCase();
+  if (!normalizedCode) {
+    return null;
+  }
+
+  const employee = options?.employee || null;
+  if (employee) {
+    const employeeDepartmentId = cleanStoredValue(employee.departmentId || employee.department_id) || null;
+    const scheduleId = options?.scheduleId || getEmployeeScheduleId(employee);
+    const hasDepartmentShiftCache = employeeDepartmentId && Array.isArray(state.departmentShiftsCache[employeeDepartmentId]);
+    const rawShiftTemplates = hasDepartmentShiftCache
+      ? state.departmentShiftsCache[employeeDepartmentId]
+      : (scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
+        ? state.scheduleShiftTemplatesById[scheduleId]
+        : state.shiftTemplates);
+    const scopedShiftTemplates = filterShiftTemplatesByDepartment(rawShiftTemplates, employeeDepartmentId);
+    const departmentShift = scopedShiftTemplates.find((shift) => String(shift?.code || '').trim().toUpperCase() === normalizedCode);
+    if (departmentShift) {
+      return departmentShift;
+    }
+  }
+
+  return state.shiftTemplates.find((shift) => String(shift?.code || '').trim().toUpperCase() === normalizedCode) || null;
 }
 
 function getMonthStats(year, monthIndex, totalDays) {
@@ -6223,7 +6245,7 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
       // fallback to cross-month SIRV cache for months not loaded in-grid.
       const rawShiftCode = state.schedule[key] || state.sirvSchedule[key] || 'P';
       const shiftCode = normalizeShiftCodeForApi(rawShiftCode);
-      const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
+      const shift = getShiftByCode(shiftCode, { employee }) || getShiftByCode('P', { employee });
       if (shift.type !== 'work') {
         continue;
       }
