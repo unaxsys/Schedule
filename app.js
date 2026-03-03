@@ -4997,7 +4997,7 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
 
     row.appendChild(cell);
     collectSummary(summary, employee, effectiveShift, holiday, weekend, inEmployment, entrySnapshot);
-    if (inEmployment && !holiday && !weekend) {
+    if (inEmployment && isNormWorkingDay({ dateISO, holiday, weekend })) {
       summary.monthNormHours += 8;
     }
   }
@@ -5054,6 +5054,31 @@ const FALLBACK_BG_FIXED_HOLIDAYS = [
   ['12-25', 'Рождество Христово'],
   ['12-26', 'Рождество Христово'],
 ];
+
+const CALENDAR_WORKDAY_OVERRIDES = {
+  forceNonWorking: new Set([
+    '2026-01-02'
+  ]),
+  forceWorking: new Set([])
+};
+
+function isForcedNonWorkingDate(dateISO) {
+  return CALENDAR_WORKDAY_OVERRIDES.forceNonWorking.has(String(dateISO || '').slice(0, 10));
+}
+
+function isForcedWorkingDate(dateISO) {
+  return CALENDAR_WORKDAY_OVERRIDES.forceWorking.has(String(dateISO || '').slice(0, 10));
+}
+
+function isNormWorkingDay({ dateISO, holiday, weekend }) {
+  if (isForcedNonWorkingDate(dateISO)) {
+    return false;
+  }
+  if (isForcedWorkingDate(dateISO)) {
+    return true;
+  }
+  return !holiday && !weekend;
+}
 
 const fallbackHolidayCache = new Map();
 
@@ -5113,7 +5138,6 @@ function getFallbackOfficialHolidayMap(year) {
     type: 'official',
     source: 'fallback official'
   }));
-
   const easter = orthodoxEaster(normalizedYear);
   const easterRows = [
     { offset: -2, name: 'Велики петък' },
@@ -5627,7 +5651,7 @@ function getMonthStats(year, monthIndex, totalDays) {
     if (weekend) {
       weekendDays += 1;
     }
-    if (!holiday && !weekend) {
+    if (isNormWorkingDay({ dateISO, holiday, weekend })) {
       workingDays += 1;
     }
   }
@@ -5708,7 +5732,8 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
       }
 
       const date = new Date(year, monthIndex - 1, day);
-      if (!isOfficialHoliday(date) && !isWeekend(date)) {
+      const dateISO = `${year}-${String(monthIndex).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      if (isNormWorkingDay({ dateISO, holiday: isOfficialHoliday(date), weekend: isWeekend(date) })) {
         totals.normHours += 8;
       }
 
