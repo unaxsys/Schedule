@@ -474,7 +474,66 @@ button:hover {
   margin-top: 0.6rem;
   background: #eff6ff;
   border-radius: 8px;
-  padding: 0.45rem 0.65rem;
+  padding: 0.7rem 0.8rem;
+}
+
+.month-info__stats {
+  margin-bottom: 0.55rem;
+}
+
+.month-info__calendar {
+  width: 180px;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.month-info__calendar-title {
+  margin: 0;
+  padding: 0.25rem 0.4rem;
+  text-align: center;
+  font-size: 1.1rem;
+  line-height: 1.2;
+  text-transform: uppercase;
+  color: #fff;
+  background: #f59e0b;
+}
+
+.month-info__calendar-grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.month-info__calendar-grid th,
+.month-info__calendar-grid td {
+  border: none;
+  min-width: 20px;
+  padding: 0.12rem 0.2rem;
+  text-align: center;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #1f2b5b;
+}
+
+.month-info__calendar-grid td.is-outside {
+  color: #b9c0d3;
+}
+
+.month-info__calendar-grid td.is-weekend,
+.month-info__calendar-grid td.is-holiday,
+.month-info__calendar-grid td.is-nonworking {
+  background: #f9b84b;
+  color: #fff;
+}
+
+.month-info__summary {
+  margin: 0;
+  padding: 0.4rem 0.4rem 0.5rem;
+  border-top: 1px solid #fde68a;
+  text-align: center;
+  color: #1f2b5b;
+  font-weight: 700;
 }
 .table-wrap {
   overflow: auto;
