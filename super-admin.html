@@ -408,6 +408,16 @@
                 <label>Нощни часове (премия)<input id="saNightPremiumHours" type="number" min="0" step="0.25" value="2" /></label>
                 <label>Коефициент празник<input id="saHolidayRate" type="number" min="1" step="0.01" value="2" /></label>
                 <label>Коефициент уикенд<input id="saWeekendRate" type="number" min="1" step="0.01" value="1.75" /></label>
+
+                <fieldset class="sa-logic-flags">
+                  <legend>Критерии за режим (фиксиран график vs СИРВ)</legend>
+                  <label><input id="saFixedWeeklyPattern" type="checkbox" checked /> Фиксиран седмичен модел (повтаря се всяка седмица)</label>
+                  <label><input id="saFixedRestDays" type="checkbox" checked /> Почивните дни са фиксирани</label>
+                  <label><input id="saEvenWeeklyLoad" type="checkbox" checked /> Седмичното натоварване е равномерно</label>
+                  <label><input id="saUsesBalancingPeriod" type="checkbox" /> Използва се изравняване за период (1+ месеца)</label>
+                  <label><input id="saRotatingRestDays" type="checkbox" /> Почивните дни се въртят/плават</label>
+                  <label><input id="saLongShiftRotations" type="checkbox" /> Има 12ч/24ч смени или типични ротации (2/2, 4/2, ден/нощ)</label>
+                </fieldset>
               </form>
             </article>
             <article class="sa-logic-card">
@@ -437,6 +447,12 @@
       const logicTab = document.getElementById('saLogicTab');
       const logicForm = document.getElementById('saLogicForm');
       const logicModeInput = document.getElementById('saLogicMode');
+      const fixedWeeklyPatternInput = document.getElementById('saFixedWeeklyPattern');
+      const fixedRestDaysInput = document.getElementById('saFixedRestDays');
+      const evenWeeklyLoadInput = document.getElementById('saEvenWeeklyLoad');
+      const usesBalancingPeriodInput = document.getElementById('saUsesBalancingPeriod');
+      const rotatingRestDaysInput = document.getElementById('saRotatingRestDays');
+      const longShiftRotationsInput = document.getElementById('saLongShiftRotations');
       const logicSummaryEl = document.getElementById('saLogicSummary');
       const logicFormulaEl = document.getElementById('saLogicFormula');
 
@@ -478,8 +494,41 @@
         return Math.max(parsed, 0);
       }
 
+      function resolveCalculatedMode(selectedMode) {
+        const fixedWeeklyPattern = Boolean(fixedWeeklyPatternInput?.checked);
+        const fixedRestDays = Boolean(fixedRestDaysInput?.checked);
+        const evenWeeklyLoad = Boolean(evenWeeklyLoadInput?.checked);
+        const usesBalancingPeriod = Boolean(usesBalancingPeriodInput?.checked);
+        const rotatingRestDays = Boolean(rotatingRestDaysInput?.checked);
+        const longShiftRotations = Boolean(longShiftRotationsInput?.checked);
+
+        const looksNormal = fixedWeeklyPattern && fixedRestDays && evenWeeklyLoad && !usesBalancingPeriod && !rotatingRestDays;
+        const looksSirv = usesBalancingPeriod || rotatingRestDays || longShiftRotations || !fixedWeeklyPattern || !fixedRestDays || !evenWeeklyLoad;
+
+        if (looksNormal && !looksSirv) {
+          return {
+            mode: 'normal',
+            reason: 'Фиксиран седмичен модел + фиксирани почивки + равномерни седмични часове без изравняване за период.'
+          };
+        }
+        if (looksSirv && !looksNormal) {
+          return {
+            mode: 'sirv',
+            reason: 'Има въртене/плаващи почивки или изравняване по отчетен период, което е характерно за СИРВ.'
+          };
+        }
+        return {
+          mode: selectedMode,
+          reason: selectedMode === 'sirv'
+            ? 'Индикаторите са смесени — използван е избраният от потребителя режим СИРВ.'
+            : 'Индикаторите са смесени — използван е избраният от потребителя нормален режим.'
+        };
+      }
+
       function renderCalculationLogic() {
-        const mode = logicModeInput.value === 'sirv' ? 'sirv' : 'normal';
+        const selectedMode = logicModeInput.value === 'sirv' ? 'sirv' : 'normal';
+        const resolvedMode = resolveCalculatedMode(selectedMode);
+        const mode = resolvedMode.mode;
         const workedHours = toPositiveNumber(document.getElementById('saWorkedHours').value);
         const normHours = toPositiveNumber(document.getElementById('saNormHours').value);
         const holidayHours = toPositiveNumber(document.getElementById('saHolidayHours').value);
@@ -495,12 +544,14 @@
 
         logicSummaryEl.innerHTML = `
           <strong>${mode === 'sirv' ? 'СИРВ режим' : 'Нормален режим'}</strong><br />
+          Основание: ${escapeHtml(resolvedMode.reason)}<br />
           Платими часове: <strong>${payableHours.toFixed(2)}</strong><br />
           Извънреден труд: <strong>${overtimeHours.toFixed(2)}</strong><br />
           Норма за сравнение: <strong>${normHours.toFixed(2)}</strong>
         `;
 
         logicFormulaEl.innerHTML = [
+          `Избран режим: ${selectedMode === 'sirv' ? 'СИРВ' : 'Нормално'} → Приложен режим: ${mode === 'sirv' ? 'СИРВ' : 'Нормално'}`,
           `Празнични: ${holidayHours.toFixed(2)} × ${holidayRate.toFixed(2)} = ${normalizedHolidayHours.toFixed(2)}`,
           mode === 'sirv'
             ? `Уикенд (СИРВ): ${weekendHours.toFixed(2)} × 1.00 = ${normalizedWeekendHours.toFixed(2)}`
