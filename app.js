@@ -1590,13 +1590,14 @@ function renderScheduleList() {
     return;
   }
 
+  const visibleSchedules = getVisibleSchedulesByDepartmentFilter();
   scheduleList.innerHTML = '';
-  if (!state.schedules.length) {
+  if (!visibleSchedules.length) {
     scheduleList.textContent = 'Няма графици за избрания месец.';
     return;
   }
 
-  state.schedules.forEach((schedule) => {
+  visibleSchedules.forEach((schedule) => {
     const label = document.createElement('label');
     label.className = 'settings-checkbox';
 
@@ -1615,10 +1616,10 @@ function renderScheduleList() {
         state.selectedScheduleIds = state.selectedScheduleIds.filter((id) => id !== schedule.id);
       }
 
-      if (!state.selectedScheduleIds.length && state.schedules.length) {
+      if (!state.selectedScheduleIds.length && visibleSchedules.length) {
         state.selectedScheduleIds = [DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)
-          ? state.schedules.map((item) => item.id)
-          : [state.schedules[0].id];
+          ? visibleSchedules.map((item) => item.id)
+          : [visibleSchedules[0].id];
       }
 
       if (!state.selectedScheduleIds.includes(state.activeScheduleId)) {
@@ -1639,6 +1640,31 @@ function renderScheduleList() {
   });
 
   updateCreateScheduleButtonState();
+}
+
+function scheduleMatchesSelectedDepartmentFilter(schedule) {
+  if ([DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)) {
+    return true;
+  }
+
+  const selectedDepartmentId = cleanStoredValue(state.selectedDepartmentId);
+  if (!selectedDepartmentId) {
+    return true;
+  }
+
+  const scheduleDepartmentId = cleanStoredValue(schedule?.departmentId || schedule?.department_id);
+  if (scheduleDepartmentId) {
+    return scheduleDepartmentId === selectedDepartmentId;
+  }
+
+  const selectedDepartment = state.departments.find((department) => cleanStoredValue(department.id) === selectedDepartmentId);
+  const selectedDepartmentName = String(selectedDepartment?.name || '').trim();
+  const scheduleDepartmentName = String(schedule?.department || '').trim();
+  return Boolean(selectedDepartmentName) && scheduleDepartmentName === selectedDepartmentName;
+}
+
+function getVisibleSchedulesByDepartmentFilter() {
+  return state.schedules.filter((schedule) => scheduleMatchesSelectedDepartmentFilter(schedule));
 }
 
 function findScheduleByMonthAndDepartment(month, department) {
@@ -6112,10 +6138,6 @@ async function loadSchedulesForMonth() {
   const wasSelectAll = previousScheduleIds.length > 0 && previousScheduleIds.every((id) => previousSelectedIds.includes(id));
 
   const query = new URLSearchParams({ month_key: monthKey });
-  const singleDepartmentFilter = getEffectiveSingleDepartmentFilter();
-  if (singleDepartmentFilter) {
-    query.set('department_id', singleDepartmentFilter);
-  }
 
   const response = await apiFetch(`/api/schedules?${query.toString()}`);
   if (!response.ok) {
@@ -6134,10 +6156,17 @@ async function loadSchedulesForMonth() {
     selectedScheduleIds = state.schedules.map((schedule) => schedule.id);
   }
 
-  if (!selectedScheduleIds.length && state.schedules.length) {
+  const visibleSchedules = getVisibleSchedulesByDepartmentFilter();
+  const visibleScheduleIds = new Set(visibleSchedules.map((schedule) => schedule.id));
+
+  if (![DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)) {
+    selectedScheduleIds = selectedScheduleIds.filter((id) => visibleScheduleIds.has(id));
+  }
+
+  if (!selectedScheduleIds.length && visibleSchedules.length) {
     selectedScheduleIds = [DEPARTMENT_VIEW_ALL, DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS].includes(state.selectedDepartmentId)
       ? state.schedules.map((schedule) => schedule.id)
-      : [state.schedules[0].id];
+      : [visibleSchedules[0].id];
   }
 
   state.selectedScheduleIds = selectedScheduleIds;
