@@ -6219,7 +6219,9 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
       }
 
       const key = scheduleKey(employeeId, monthKey, day);
-      const rawShiftCode = state.sirvSchedule[key] || state.schedule[key] || 'P';
+      // Prefer the currently loaded schedule cells for the active view;
+      // fallback to cross-month SIRV cache for months not loaded in-grid.
+      const rawShiftCode = state.schedule[key] || state.sirvSchedule[key] || 'P';
       const shiftCode = normalizeShiftCodeForApi(rawShiftCode);
       const shift = getShiftByCode(shiftCode) || getShiftByCode('P');
       if (shift.type !== 'work') {
