@@ -109,7 +109,8 @@ const state = {
   leaveTypes: [],
   leaves: [],
   leavesByEmployeeDay: {},
-  holidaysByMonthCache: {}
+  holidaysByMonthCache: {},
+  shiftEditContext: null
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -218,6 +219,16 @@ const shiftImportPreview = document.getElementById('shiftImportPreview');
 const shiftImportSummary = document.getElementById('shiftImportSummary');
 const downloadShiftImportTemplateBtn = document.getElementById('downloadShiftImportTemplateBtn');
 const shiftLegend = document.getElementById('shiftLegend');
+const shiftEditModal = document.getElementById('shiftEditModal');
+const shiftEditForm = document.getElementById('shiftEditForm');
+const shiftEditCodeInput = document.getElementById('shiftEditCodeInput');
+const shiftEditNameInput = document.getElementById('shiftEditNameInput');
+const shiftEditStartInput = document.getElementById('shiftEditStartInput');
+const shiftEditEndInput = document.getElementById('shiftEditEndInput');
+const shiftEditBreakMinutesInput = document.getElementById('shiftEditBreakMinutesInput');
+const shiftEditBreakIncludedInput = document.getElementById('shiftEditBreakIncludedInput');
+const shiftEditInfo = document.getElementById('shiftEditInfo');
+const cancelShiftEditBtn = document.getElementById('cancelShiftEditBtn');
 const lockScheduleBtn = document.getElementById('lockScheduleBtn');
 const unlockScheduleBtn = document.getElementById('unlockScheduleBtn');
 const exportExcelBtn = document.getElementById('exportExcelBtn');
@@ -313,6 +324,12 @@ const safeNum = window.ScheduleTotals?.safeNum || ((value, fallback = 0) => {
 const minutesToHoursDecimal = window.ScheduleTotals?.minutesToHoursDecimal || ((minutes) => (safeNum(minutes, 0) / 60).toFixed(2));
 const sumEmployeeTotals = window.ScheduleTotals?.sumEmployeeTotals || ((entriesByDay) => ({
   workMinutesTotal: (entriesByDay || []).reduce((acc, entry) => acc + safeNum(entry?.workMinutesTotal ?? entry?.workMinutes), 0),
+  attendanceMinutesTotal: (entriesByDay || []).reduce((acc, entry) => {
+    const worked = safeNum(entry?.workMinutesTotal ?? entry?.workMinutes);
+    const rest = Math.max(0, safeNum(entry?.breakMinutesApplied));
+    return acc + worked + rest;
+  }, 0),
+  restMinutesTotal: (entriesByDay || []).reduce((acc, entry) => acc + Math.max(0, safeNum(entry?.breakMinutesApplied)), 0),
   nightMinutes: (entriesByDay || []).reduce((acc, entry) => acc + safeNum(entry?.nightMinutes), 0),
   weekendMinutes: (entriesByDay || []).reduce((acc, entry) => acc + safeNum(entry?.weekendMinutes), 0),
   holidayMinutes: (entriesByDay || []).reduce((acc, entry) => acc + safeNum(entry?.holidayMinutes), 0),
@@ -320,11 +337,13 @@ const sumEmployeeTotals = window.ScheduleTotals?.sumEmployeeTotals || ((entriesB
 }));
 const sumGridTotals = window.ScheduleTotals?.sumGridTotals || ((visibleEmployees) => (visibleEmployees || []).reduce((acc, employee) => ({
   workMinutesTotal: acc.workMinutesTotal + safeNum(employee?.workMinutesTotal),
+  attendanceMinutesTotal: acc.attendanceMinutesTotal + safeNum(employee?.attendanceMinutesTotal),
+  restMinutesTotal: acc.restMinutesTotal + safeNum(employee?.restMinutesTotal),
   nightMinutes: acc.nightMinutes + safeNum(employee?.nightMinutes),
   weekendMinutes: acc.weekendMinutes + safeNum(employee?.weekendMinutes),
   holidayMinutes: acc.holidayMinutes + safeNum(employee?.holidayMinutes),
   overtimeMinutes: acc.overtimeMinutes + safeNum(employee?.overtimeMinutes),
-}), { workMinutesTotal: 0, nightMinutes: 0, weekendMinutes: 0, holidayMinutes: 0, overtimeMinutes: 0 }));
+}), { workMinutesTotal: 0, attendanceMinutesTotal: 0, restMinutesTotal: 0, nightMinutes: 0, weekendMinutes: 0, holidayMinutes: 0, overtimeMinutes: 0 }));
 
 function truncateMessages(messages, maxItems = 2) {
   const source = Array.isArray(messages) ? messages.filter(Boolean) : [];
@@ -339,7 +358,9 @@ function renderScheduleOverviewTotals(totals) {
     return;
   }
   const items = [
-    ['Общо часове', totals.workMinutesTotal],
+    ['Присъствени часове', totals.attendanceMinutesTotal],
+    ['Работни часове', totals.workMinutesTotal],
+    ['Часове почивка', totals.restMinutesTotal],
     ['Нощни', totals.nightMinutes],
     ['Уикенд', totals.weekendMinutes],
     ['Празнични', totals.holidayMinutes],
@@ -387,6 +408,7 @@ async function init() {
   attachVacationDateValidationControls();
   attachLeavesControls();
   attachShiftForm();
+  attachShiftEditModalControls();
   attachShiftUiSelectionState();
   attachShiftImportControls();
   attachLockAndExport();
@@ -1816,6 +1838,73 @@ function attachRatesForm() {
   });
 }
 
+
+function upsertShiftTemplate({ code, name, departmentId = null, start, end, breakMinutes = 0, breakIncluded = false }) {
+  const normalizedCode = String(code || '').trim().toUpperCase();
+  const normalizedName = String(name || '').trim();
+  const normalizedDepartmentId = cleanStoredValue(departmentId) || null;
+  const effectiveDepartmentId = normalizedCode === 'R' ? null : normalizedDepartmentId;
+  const hours = calcShiftHours(start, end, breakMinutes, breakIncluded);
+
+  if (!normalizedCode || !normalizedName || !start || !end) {
+    return { ok: false, message: 'Попълнете всички полета за смяна.' };
+  }
+  if (hours <= 0) {
+    return { ok: false, message: 'Невалиден интервал за смяна.' };
+  }
+
+  const existingShiftIndex = state.shiftTemplates.findIndex((shift) => (
+    shift.code === normalizedCode && cleanStoredValue(shift.departmentId) === (effectiveDepartmentId || '')
+  ));
+
+  if (existingShiftIndex >= 0) {
+    const existingShift = state.shiftTemplates[existingShiftIndex];
+    state.shiftTemplates[existingShiftIndex] = {
+      ...existingShift,
+      code: normalizedCode,
+      label: toCyrillicShiftLabel(normalizedCode),
+      name: normalizedCode === 'R' ? 'Редовна' : normalizedName,
+      departmentId: effectiveDepartmentId,
+      type: 'work',
+      start,
+      end,
+      hours,
+      locked: normalizedCode === 'R' ? true : Boolean(existingShift.locked),
+      break_minutes: Math.max(0, Number(breakMinutes) || 0),
+      break_included: Boolean(breakIncluded)
+    };
+  } else {
+    const nightHours = calcNightHours(start, end);
+    if (nightHours > 0 && hours > MAX_NIGHT_SHIFT_HOURS) {
+      return { ok: false, message: 'Нощна смяна при СИРВ може да е максимум 12 часа.' };
+    }
+
+    state.shiftTemplates.push({
+      code: normalizedCode,
+      label: toCyrillicShiftLabel(normalizedCode),
+      name: normalizedName,
+      departmentId: effectiveDepartmentId,
+      type: 'work',
+      start,
+      end,
+      hours,
+      locked: false,
+      break_minutes: Math.max(0, Number(breakMinutes) || 0),
+      break_included: Boolean(breakIncluded)
+    });
+  }
+
+  saveShiftTemplates();
+  if (effectiveDepartmentId) {
+    void saveDepartmentShiftBackend(effectiveDepartmentId, { code: normalizedCode, name: normalizedName, start_time: start, end_time: end, break_minutes: breakMinutes, break_included: breakIncluded });
+    void loadDepartmentShifts(effectiveDepartmentId, { force: true });
+  } else {
+    void saveShiftTemplateBackend({ code: normalizedCode, name: normalizedCode === 'R' ? 'Редовна' : normalizedName, start, end, hours, department_id: effectiveDepartmentId, break_minutes: breakMinutes, break_included: breakIncluded });
+  }
+
+  return { ok: true };
+}
+
 function attachShiftForm() {
   if (shiftListDepartmentFilter && !shiftListDepartmentFilter.dataset.bound) {
     shiftListDepartmentFilter.dataset.bound = '1';
@@ -1824,93 +1913,21 @@ function attachShiftForm() {
   shiftForm.addEventListener('submit', (event) => {
     event.preventDefault();
 
-    const code = shiftCodeInput.value.trim().toUpperCase();
-    const name = shiftNameInput.value.trim();
-    const departmentId = cleanStoredValue(shiftDepartmentInput?.value) || null;
-    const effectiveDepartmentId = code === 'R' ? null : departmentId;
-    const start = shiftStartInput.value;
-    const end = shiftEndInput.value;
-    const breakMinutes = Math.max(0, Number(shiftBreakMinutesInput?.value || 0));
-    const breakIncluded = Boolean(shiftBreakIncludedInput?.checked);
-
-    if (!code || !name || !start || !end) {
-      return;
-    }
-
-    const existingShiftIndex = state.shiftTemplates.findIndex((shift) => (
-      shift.code === code && cleanStoredValue(shift.departmentId) === (effectiveDepartmentId || '')
-    ));
-    const hours = calcShiftHours(start, end);
-    if (hours <= 0) {
-      setStatus('Невалиден интервал за смяна.', false);
-      return;
-    }
-
-    if (existingShiftIndex >= 0) {
-      if (code !== 'R') {
-        setStatus(`Смяна с код ${code} вече съществува.`, false);
-        return;
-      }
-
-      const existingShift = state.shiftTemplates[existingShiftIndex];
-      state.shiftTemplates[existingShiftIndex] = {
-        ...existingShift,
-        code: 'R',
-        label: toCyrillicShiftLabel('R'),
-        name: 'Редовна',
-        departmentId: null,
-        type: 'work',
-        start,
-        end,
-        hours,
-        locked: true,
-      };
-
-      saveShiftTemplates();
-      void saveShiftTemplateBackend({ code: 'R', name: 'Редовна', start, end, hours, department_id: null });
-      setStatus('Редовна смяна (Р) е обновена успешно.', true);
-      renderAll();
-      shiftForm.reset();
-      if (shiftDepartmentInput) {
-        shiftDepartmentInput.value = '';
-      }
-      if (shiftBreakMinutesInput) {
-        shiftBreakMinutesInput.value = '0';
-      }
-      if (shiftBreakIncludedInput) {
-        shiftBreakIncludedInput.checked = false;
-      }
-      return;
-    }
-
-
-    const nightHours = calcNightHours(start, end);
-    if (nightHours > 0 && hours > MAX_NIGHT_SHIFT_HOURS) {
-      setStatus('Нощна смяна при СИРВ може да е максимум 12 часа.', false);
-      return;
-    }
-
-    state.shiftTemplates.push({
-      code,
-      label: toCyrillicShiftLabel(code),
-      name,
-      departmentId: effectiveDepartmentId,
-      type: 'work',
-      start,
-      end,
-      hours,
-      locked: false,
-      break_minutes: breakMinutes,
-      break_included: breakIncluded
+    const result = upsertShiftTemplate({
+      code: shiftCodeInput.value,
+      name: shiftNameInput.value,
+      departmentId: cleanStoredValue(shiftDepartmentInput?.value) || null,
+      start: shiftStartInput.value,
+      end: shiftEndInput.value,
+      breakMinutes: Math.max(0, Number(shiftBreakMinutesInput?.value || 0)),
+      breakIncluded: Boolean(shiftBreakIncludedInput?.checked),
     });
 
-    saveShiftTemplates();
-    if (effectiveDepartmentId) {
-      void saveDepartmentShiftBackend(effectiveDepartmentId, { code, name, start_time: start, end_time: end, break_minutes: breakMinutes, break_included: breakIncluded });
-      void loadDepartmentShifts(effectiveDepartmentId, { force: true });
-    } else {
-      void saveShiftTemplateBackend({ code, name, start, end, hours, department_id: effectiveDepartmentId, break_minutes: breakMinutes, break_included: breakIncluded });
+    if (!result.ok) {
+      setStatus(result.message, false);
+      return;
     }
+
     shiftForm.reset();
     if (shiftDepartmentInput) {
       shiftDepartmentInput.value = '';
@@ -1921,6 +1938,7 @@ function attachShiftForm() {
     if (shiftBreakIncludedInput) {
       shiftBreakIncludedInput.checked = false;
     }
+    setStatus('Смяната е запазена успешно.', true);
     renderAll();
   });
 }
@@ -3099,6 +3117,37 @@ function renderLegend() {
   });
 }
 
+
+function getShiftHoursBreakdown(shift) {
+  if (!shift || shift.type !== 'work') {
+    return { attendanceHours: 0, workHours: 0, restHours: 0 };
+  }
+
+  const start = String(shift.start || '').trim();
+  const end = String(shift.end || '').trim();
+  const breakMinutes = Math.max(0, Number(shift.break_minutes ?? shift.breakMinutes ?? 0) || 0);
+  const hasTimes = Boolean(start && end);
+  const attendanceHours = hasTimes ? calcShiftHours(start, end, 0, true) : Number(shift.hours || 0);
+  const workHours = getStoredShiftHours(shift);
+  const restHours = Math.max(0, attendanceHours - workHours);
+  return { attendanceHours, workHours, restHours };
+}
+
+function renderShiftHoursCellContent(shift) {
+  if (!shift || shift.type !== 'work') {
+    return String(Number(shift?.hours || 0));
+  }
+
+  const { attendanceHours, workHours, restHours } = getShiftHoursBreakdown(shift);
+  return `
+    <div class="shift-hours-breakdown">
+      <div><span>присъствени</span><b>${attendanceHours.toFixed(2)}</b></div>
+      <div><span>работни</span><b>${workHours.toFixed(2)}</b></div>
+      <div><span>почивка</span><b>${restHours.toFixed(2)}</b></div>
+    </div>
+  `;
+}
+
 function renderShiftList() {
   shiftList.innerHTML = '';
   const table = document.createElement('table');
@@ -3115,12 +3164,24 @@ function renderShiftList() {
   visibleShifts.forEach((shift) => {
     const row = document.createElement('tr');
     const departmentLabel = shift.departmentId ? (departmentNameById.get(shift.departmentId) || 'Неизвестен отдел') : 'Global';
-    row.innerHTML = `<td>${shift.code}</td><td>${shift.name}</td><td>${departmentLabel}</td><td>${shift.start || '-'}</td><td>${shift.end || '-'}</td><td>${shift.hours}</td><td>${shift.type}</td>`;
+    const shiftHoursCell = renderShiftHoursCellContent(shift);
+    row.innerHTML = `<td>${shift.code}</td><td>${shift.name}</td><td>${departmentLabel}</td><td>${shift.start || '-'}</td><td>${shift.end || '-'}</td><td>${shiftHoursCell}</td><td>${shift.type}</td>`;
 
     const actionCell = document.createElement('td');
     if (shift.locked) {
       actionCell.textContent = 'Системна';
     } else {
+      const actionWrap = document.createElement('div');
+      actionWrap.className = 'shift-actions';
+
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.textContent = 'Редакция';
+      editBtn.className = 'btn-edit';
+      editBtn.addEventListener('click', () => {
+        openShiftEditModal(shift);
+      });
+
       const removeBtn = document.createElement('button');
       removeBtn.type = 'button';
       removeBtn.textContent = 'Изтрий';
@@ -3132,13 +3193,104 @@ function renderShiftList() {
         replaceDeletedShiftCodes(shift.code);
         renderAll();
       });
-      actionCell.appendChild(removeBtn);
+
+      actionWrap.appendChild(editBtn);
+      actionWrap.appendChild(removeBtn);
+      actionCell.appendChild(actionWrap);
     }
     row.appendChild(actionCell);
     table.appendChild(row);
   });
 
   shiftList.appendChild(table);
+}
+
+
+function openShiftEditModal(shift) {
+  if (!shiftEditModal || !shiftEditForm || !shift) {
+    return;
+  }
+
+  state.shiftEditContext = {
+    code: shift.code,
+    departmentId: cleanStoredValue(shift.departmentId) || null,
+  };
+
+  if (shiftEditCodeInput) {
+    shiftEditCodeInput.value = shift.code || '';
+  }
+  if (shiftEditNameInput) {
+    shiftEditNameInput.value = shift.name || '';
+  }
+  if (shiftEditStartInput) {
+    shiftEditStartInput.value = shift.start || '';
+  }
+  if (shiftEditEndInput) {
+    shiftEditEndInput.value = shift.end || '';
+  }
+  if (shiftEditBreakMinutesInput) {
+    shiftEditBreakMinutesInput.value = String(Math.max(0, Number(shift.break_minutes ?? shift.breakMinutes ?? 0)));
+  }
+  if (shiftEditBreakIncludedInput) {
+    shiftEditBreakIncludedInput.checked = Boolean(shift.break_included ?? shift.breakIncluded);
+  }
+  if (shiftEditInfo) {
+    shiftEditInfo.textContent = `Отдел: ${shift.departmentId ? 'Специфична смяна' : 'Global'} | Кодът е фиксиран за редакция.`;
+  }
+
+  shiftEditModal.classList.remove('hidden');
+}
+
+function closeShiftEditModal() {
+  if (!shiftEditModal || !shiftEditForm) {
+    return;
+  }
+  shiftEditForm.reset();
+  state.shiftEditContext = null;
+  shiftEditModal.classList.add('hidden');
+}
+
+function attachShiftEditModalControls() {
+  if (!shiftEditModal || !shiftEditForm) {
+    return;
+  }
+
+  shiftEditForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!state.shiftEditContext?.code) {
+      setStatus('Липсва контекст за редакция на смяна.', false);
+      return;
+    }
+
+    const result = upsertShiftTemplate({
+      code: state.shiftEditContext.code,
+      name: shiftEditNameInput?.value || '',
+      departmentId: state.shiftEditContext.departmentId,
+      start: shiftEditStartInput?.value || '',
+      end: shiftEditEndInput?.value || '',
+      breakMinutes: Math.max(0, Number(shiftEditBreakMinutesInput?.value || 0)),
+      breakIncluded: Boolean(shiftEditBreakIncludedInput?.checked),
+    });
+
+    if (!result.ok) {
+      setStatus(result.message, false);
+      return;
+    }
+
+    setStatus(`Смяна ${state.shiftEditContext.code} е обновена.`, true);
+    closeShiftEditModal();
+    renderAll();
+  });
+
+  cancelShiftEditBtn?.addEventListener('click', () => {
+    closeShiftEditModal();
+  });
+
+  shiftEditModal.addEventListener('click', (event) => {
+    if (event.target === shiftEditModal) {
+      closeShiftEditModal();
+    }
+  });
 }
 
 function replaceDeletedShiftCodes(deletedCode) {
@@ -5028,7 +5180,7 @@ function renderSchedule() {
     renderScheduleOverviewTotals(snapshotGrandTotals);
     scheduleTable.appendChild(totalsRow);
   } else {
-    renderScheduleOverviewTotals({ workMinutesTotal: 0, nightMinutes: 0, weekendMinutes: 0, holidayMinutes: 0, overtimeMinutes: 0 });
+    renderScheduleOverviewTotals({ workMinutesTotal: 0, attendanceMinutesTotal: 0, restMinutesTotal: 0, nightMinutes: 0, weekendMinutes: 0, holidayMinutes: 0, overtimeMinutes: 0 });
   }
 
   requestAnimationFrame(refreshScheduleZoomLayout);
@@ -6134,6 +6286,7 @@ async function refreshMonthlyView() {
       mappedEntrySnapshots[entryKey] = {
         workMinutes: Number(entry.workMinutes ?? 0),
         workMinutesTotal: Number(entry.workMinutesTotal ?? entry.workMinutes ?? 0),
+        breakMinutesApplied: Number(entry.breakMinutesApplied ?? 0),
         nightMinutes: Number(entry.nightMinutes ?? 0),
         holidayMinutes: Number(entry.holidayMinutes ?? 0),
         weekendMinutes: Number(entry.weekendMinutes ?? 0),
@@ -6349,6 +6502,7 @@ async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) 
       state.scheduleEntrySnapshotsById[`${scheduleId}|${employee.id}|${day}`] = {
         workMinutes: Number(responsePayload.entry.workMinutes ?? 0),
         workMinutesTotal: Number(responsePayload.entry.workMinutesTotal ?? responsePayload.entry.workMinutes ?? 0),
+        breakMinutesApplied: Number(responsePayload.entry.breakMinutesApplied ?? 0),
         nightMinutes: Number(responsePayload.entry.nightMinutes ?? 0),
         holidayMinutes: Number(responsePayload.entry.holidayMinutes ?? 0),
         weekendMinutes: Number(responsePayload.entry.weekendMinutes ?? 0),

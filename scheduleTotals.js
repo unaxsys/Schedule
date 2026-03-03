@@ -9,8 +9,12 @@
   }
 
   function normalizeEntrySnapshot(snapshot) {
+    const workMinutesTotal = safeNum(snapshot?.workMinutesTotal ?? snapshot?.workMinutes);
+    const restMinutesTotal = Math.max(0, safeNum(snapshot?.breakMinutesApplied));
     return {
-      workMinutesTotal: safeNum(snapshot?.workMinutesTotal ?? snapshot?.workMinutes),
+      workMinutesTotal,
+      attendanceMinutesTotal: workMinutesTotal + restMinutesTotal,
+      restMinutesTotal,
       nightMinutes: safeNum(snapshot?.nightMinutes),
       weekendMinutes: safeNum(snapshot?.weekendMinutes),
       holidayMinutes: safeNum(snapshot?.holidayMinutes),
@@ -21,6 +25,8 @@
   function zeroTotals() {
     return {
       workMinutesTotal: 0,
+      attendanceMinutesTotal: 0,
+      restMinutesTotal: 0,
       nightMinutes: 0,
       weekendMinutes: 0,
       holidayMinutes: 0,
@@ -34,6 +40,8 @@
     (entriesByDay || []).forEach((entry) => {
       const normalized = normalizeEntrySnapshot(entry);
       totals.workMinutesTotal += normalized.workMinutesTotal;
+      totals.attendanceMinutesTotal += normalized.attendanceMinutesTotal;
+      totals.restMinutesTotal += normalized.restMinutesTotal;
       totals.nightMinutes += normalized.nightMinutes;
       totals.weekendMinutes += normalized.weekendMinutes;
       totals.holidayMinutes += normalized.holidayMinutes;
@@ -47,6 +55,8 @@
     return (visibleEmployees || []).reduce(
       (acc, employee) => {
         acc.workMinutesTotal += safeNum(employee?.workMinutesTotal);
+        acc.attendanceMinutesTotal += safeNum(employee?.attendanceMinutesTotal);
+        acc.restMinutesTotal += safeNum(employee?.restMinutesTotal);
         acc.nightMinutes += safeNum(employee?.nightMinutes);
         acc.weekendMinutes += safeNum(employee?.weekendMinutes);
         acc.holidayMinutes += safeNum(employee?.holidayMinutes);

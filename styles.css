@@ -556,6 +556,39 @@ select.shift-select {
   margin-top: 0.7rem;
 }
 
+
+.shift-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.shift-hours-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  line-height: 1.15;
+  text-align: left;
+}
+
+.shift-hours-breakdown > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.shift-hours-breakdown span {
+  color: #334155;
+  text-transform: lowercase;
+}
+
+.shift-hours-breakdown b {
+  color: #0f172a;
+}
+
+
 .shift-import-row {
   margin: 10px 0;
   align-items: center;
