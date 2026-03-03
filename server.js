@@ -2583,21 +2583,8 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       }
       resolvedShiftCode = normalizeShiftCode(shiftByIdResult.rows[0].code);
       resolvedShiftId = shiftByIdResult.rows[0].id;
-    } else if (requestedShiftCode && !['P', 'O', 'B'].includes(requestedShiftCode)) {
-      const codeScope = buildShiftTemplateScopeCondition({
-        hasDepartmentId: hasShiftTemplatesDepartment,
-        departmentId: schedule.department_id || null,
-        tenantScoped: hasTenantId ? req.tenantId : null,
-      });
-      const shiftByCodeQuery = {
-        text: `SELECT id, code FROM shift_templates ${codeScope.whereSql}${codeScope.whereSql ? ' AND' : ' WHERE'} UPPER(code) = $${codeScope.values.length + 1} LIMIT 1`,
-        values: [...codeScope.values, requestedShiftCode],
-      };
-      const shiftByCodeResult = await pool.query(shiftByCodeQuery.text, shiftByCodeQuery.values);
-      if (shiftByCodeResult.rowCount > 0) {
-        resolvedShiftCode = normalizeShiftCode(shiftByCodeResult.rows[0].code);
-        resolvedShiftId = shiftByCodeResult.rows[0].id;
-      }
+    } else if (requestedShiftCode) {
+      resolvedShiftCode = normalizeShiftCode(requestedShiftCode);
     }
 
     if (!resolvedShiftCode) {
@@ -2622,7 +2609,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     const hasShiftTemplatesBreakMinutes = await tableHasColumn('shift_templates', 'break_minutes');
     const hasShiftTemplatesBreakIncluded = await tableHasColumn('shift_templates', 'break_included');
     const hasShiftTemplatesSirvShift = await tableHasColumn('shift_templates', 'is_sirv_shift');
-    const shiftTemplatesSelect = `SELECT id, code, name, start_time, end_time, hours${hasShiftTemplatesBreakMinutes ? ', COALESCE(break_minutes, 0) AS break_minutes' : ', 0::integer AS break_minutes'}${hasShiftTemplatesBreakIncluded ? ', COALESCE(break_included, FALSE) AS break_included' : ', FALSE::boolean AS break_included'}${hasShiftTemplatesSirvShift ? ', is_sirv_shift' : ', NULL::boolean AS is_sirv_shift'} FROM shift_templates`;
+    const shiftTemplatesSelect = `SELECT id, code, name, start_time, end_time, hours${hasShiftTemplatesBreakMinutes ? ', COALESCE(break_minutes, 0) AS break_minutes' : ', 0::integer AS break_minutes'}${hasShiftTemplatesBreakIncluded ? ', COALESCE(break_included, FALSE) AS break_included' : ', FALSE::boolean AS break_included'}${hasShiftTemplatesSirvShift ? ', is_sirv_shift' : ', NULL::boolean AS is_sirv_shift'}${hasShiftTemplatesDepartment ? ', department_id' : ', NULL::uuid AS department_id'} FROM shift_templates`;
 
     const leaveOnDayResult = await pool.query(
       `SELECT el.minutes_per_day, lt.counts_as_work
@@ -2650,14 +2637,42 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         code: normalizeShiftCode(row.code),
       }));
 
+    const shiftCandidatePriority = (row) => {
+      const departmentPriority = hasShiftTemplatesDepartment && schedule.department_id
+        ? (row.department_id && String(row.department_id) === String(schedule.department_id) ? 0 : (row.department_id ? 2 : 1))
+        : 0;
+      const sirvPriority = hasShiftTemplatesSirvShift
+        ? (row.is_sirv_shift === null || row.is_sirv_shift === undefined
+          ? 1
+          : (Boolean(row.is_sirv_shift) === Boolean(employee.isSirv) ? 0 : 2))
+        : 0;
+      return (departmentPriority * 10) + sirvPriority;
+    };
+
+    const resolveShiftByCode = (code) => {
+      const normalizedCode = normalizeShiftCode(code);
+      const candidates = shiftTemplatesForCalc
+        .filter((row) => normalizeShiftCode(row.code) === normalizedCode)
+        .sort((a, b) => shiftCandidatePriority(a) - shiftCandidatePriority(b));
+      return candidates[0] || null;
+    };
+
     const selectedShiftForSnapshot = snapshot
       ? null
       : (shiftTemplatesForCalc.find((row) => {
         if (resolvedShiftId) {
           return String(row.id) === String(resolvedShiftId);
         }
-        return normalizeShiftCode(row.code) === resolvedShiftCode;
-      }) || { code: resolvedShiftCode, start_time: '00:00', end_time: '00:00', hours: 0, break_minutes: 0, break_included: false });
+        return false;
+      }) || resolveShiftByCode(resolvedShiftCode) || { code: resolvedShiftCode, start_time: '00:00', end_time: '00:00', hours: 0, break_minutes: 0, break_included: false });
+
+    if (selectedShiftForSnapshot?.id && !resolvedShiftId) {
+      resolvedShiftId = selectedShiftForSnapshot.id;
+    }
+
+    if (!snapshot && !selectedShiftForSnapshot?.id && !['P', 'O', 'B'].includes(resolvedShiftCode)) {
+      return res.status(404).json({ message: 'Смяната не е намерена.' });
+    }
 
     if (!snapshot) {
       snapshot = await computeEntrySnapshot({
@@ -2712,7 +2727,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         const prevCode = normalizeShiftCode(prevEntryResult.rows[0].shift_code);
         const prevShiftId = cleanStr(prevEntryResult.rows[0].shift_id);
         const prevShift = shiftTemplatesForCalc.find((row) => prevShiftId && String(row.id) === String(prevShiftId))
-          || shiftTemplatesForCalc.find((row) => normalizeShiftCode(row.code) === prevCode);
+          || resolveShiftByCode(prevCode);
         if (prevShift) {
           const prevEnd = String(prevShift.end_time || prevShift.end || '00:00');
           const [h, m] = prevEnd.split(':').map(Number);

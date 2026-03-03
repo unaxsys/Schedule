@@ -1984,8 +1984,8 @@ function upsertShiftTemplate({ code, name, departmentId = null, start, end, brea
 
   const effectiveStart = hasSplitIntervals ? normalizedIntervals[0].start : start;
   const effectiveEnd = hasSplitIntervals ? normalizedIntervals[normalizedIntervals.length - 1].end : end;
-  const backendStart = hasSplitIntervals ? normalizedIntervals[0].start : effectiveStart;
-  const backendEnd = hasSplitIntervals ? normalizedIntervals[0].end : effectiveEnd;
+  const backendStart = effectiveStart;
+  const backendEnd = effectiveEnd;
   const effectiveBreakMinutes = hasSplitIntervals
     ? Math.max(0, Math.round((calcShiftHours(effectiveStart, effectiveEnd, 0, true) - normalizedIntervals.reduce((sum, interval) => sum + calcShiftHours(interval.start, interval.end, 0, true), 0)) * 60))
     : Math.max(0, Number(breakMinutes) || 0);
@@ -2056,7 +2056,7 @@ function upsertShiftTemplate({ code, name, departmentId = null, start, end, brea
       name: backendName,
       start_time: backendStart,
       end_time: backendEnd,
-      break_minutes: hasSplitIntervals ? 0 : effectiveBreakMinutes,
+      break_minutes: effectiveBreakMinutes,
       break_included: effectiveBreakIncluded,
     });
     void loadDepartmentShifts(effectiveDepartmentId, { force: true });
@@ -2068,7 +2068,7 @@ function upsertShiftTemplate({ code, name, departmentId = null, start, end, brea
       end: backendEnd,
       hours,
       department_id: effectiveDepartmentId,
-      break_minutes: hasSplitIntervals ? 0 : effectiveBreakMinutes,
+      break_minutes: effectiveBreakMinutes,
       break_included: effectiveBreakIncluded,
     });
   }
