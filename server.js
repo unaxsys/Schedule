@@ -4680,6 +4680,70 @@ app.get('/api/platform/super-admin/overview', requireSuperAdmin, async (req, res
   }
 });
 
+
+app.get('/api/platform/super-admin/public-holidays', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const year = Number(req.query?.year || new Date().getUTCFullYear());
+    const bounds = getYearBounds(year);
+    if (!bounds) {
+      return res.status(400).json({ message: 'Невалидна година.' });
+    }
+
+    const holidays = await holidayService.listPublicHolidays(bounds.from, bounds.to);
+    return res.json({ ok: true, holidays });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/platform/super-admin/public-holidays', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const date = normalizeDateOnly(req.body?.date);
+    const name = cleanStr(req.body?.name);
+    const source = cleanStr(req.body?.source || 'platform');
+
+    if (!date || !name) {
+      return res.status(400).json({ message: 'date и name са задължителни.' });
+    }
+
+    const holiday = await holidayService.upsertPublicHoliday({ date, name, source });
+
+    await insertAuditLog('public_holiday_upserted', 'public_holiday', {
+      actorUserId: req.user?.id || null,
+      entityId: date,
+      after: holiday,
+      ip: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return res.status(201).json({ ok: true, holiday });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.delete('/api/platform/super-admin/public-holidays/:date', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const date = normalizeDateOnly(req.params.date);
+    if (!date) {
+      return res.status(400).json({ message: 'Невалидна дата.' });
+    }
+
+    await holidayService.deletePublicHoliday(date);
+
+    await insertAuditLog('public_holiday_deleted', 'public_holiday', {
+      actorUserId: req.user?.id || null,
+      entityId: date,
+      ip: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return res.json({ ok: true });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.patch('/api/platform/super-admin/registrations/:id/status', requireSuperAdmin, async (req, res, next) => {
 
   const id = cleanStr(req.params.id);
