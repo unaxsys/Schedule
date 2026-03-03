@@ -868,8 +868,16 @@ select.shift-select {
 }
 
 .field-checkbox {
-  width: fit-content;
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 0.35rem;
   line-height: 1.25;
+}
+
+.field-checkbox input[type="checkbox"] {
+  margin-top: 0.2rem;
 }
 
 
