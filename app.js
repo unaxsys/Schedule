@@ -4994,7 +4994,7 @@ function monthBounds(monthKey) {
   return { from: `${year}-${String(month).padStart(2, '0')}-01`, to: `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}` };
 }
 
-async function loadHolidayRangeForMonth(monthKey) {
+async function loadHolidayRangeForMonth(monthKey, options = {}) {
   const bounds = monthBounds(monthKey);
   if (!bounds) {
     return;
@@ -5002,7 +5002,8 @@ async function loadHolidayRangeForMonth(monthKey) {
   if (!state.holidaysByMonthCache || typeof state.holidaysByMonthCache !== 'object') {
     state.holidaysByMonthCache = {};
   }
-  if (state.holidaysByMonthCache[monthKey]) {
+  const forceReload = Boolean(options.force);
+  if (!forceReload && state.holidaysByMonthCache[monthKey] instanceof Map) {
     return;
   }
   try {
@@ -5011,20 +5012,139 @@ async function loadHolidayRangeForMonth(monthKey) {
     const mapped = new Map((payload.holidays || []).map((row) => [row.date, row]));
     state.holidaysByMonthCache[monthKey] = mapped;
   } catch (_error) {
-    state.holidaysByMonthCache[monthKey] = new Map();
+    state.holidaysByMonthCache[monthKey] = null;
   }
 }
 
+const FALLBACK_BG_FIXED_HOLIDAYS = [
+  ['01-01', 'Нова година'],
+  ['03-03', 'Освобождение на България'],
+  ['05-01', 'Ден на труда'],
+  ['05-06', 'Гергьовден'],
+  ['05-24', 'Ден на българската просвета и култура'],
+  ['09-06', 'Съединението'],
+  ['09-22', 'Независимостта на България'],
+  ['12-24', 'Бъдни вечер'],
+  ['12-25', 'Рождество Христово'],
+  ['12-26', 'Рождество Христово'],
+];
+
+const FALLBACK_BG_SPECIAL_NON_WORKING_DAYS = {
+  2026: [
+    ['01-02', 'Почивен ден (Нова година)']
+  ]
+};
+
+const fallbackHolidayCache = new Map();
+
+function addFallbackObservedDays(rows) {
+  const occupiedDates = new Set(rows.map((row) => row.date));
+  const observedRows = [];
+
+  const weekendRows = rows
+    .filter((row) => {
+      if (String(row.source || '').includes('(easter)')) return false;
+      const date = new Date(`${row.date}T00:00:00.000Z`);
+      const weekday = date.getUTCDay();
+      return !Number.isNaN(date.valueOf()) && (weekday === 0 || weekday === 6);
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  for (const weekendHoliday of weekendRows) {
+    const cursor = new Date(`${weekendHoliday.date}T00:00:00.000Z`);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+
+    while (true) {
+      const candidate = cursor.toISOString().slice(0, 10);
+      const weekday = cursor.getUTCDay();
+      const isBusy = occupiedDates.has(candidate);
+      const isWeekend = weekday === 0 || weekday === 6;
+      if (!isBusy && !isWeekend) {
+        occupiedDates.add(candidate);
+        observedRows.push({
+          date: candidate,
+          name: `${weekendHoliday.name} (компенсация по КТ)`,
+          isHoliday: true,
+          type: 'official',
+          source: 'fallback observed'
+        });
+        break;
+      }
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+  }
+
+  return observedRows;
+}
+
+function getFallbackOfficialHolidayMap(year) {
+  const normalizedYear = Number(year);
+  if (!Number.isInteger(normalizedYear)) {
+    return new Map();
+  }
+  if (fallbackHolidayCache.has(normalizedYear)) {
+    return fallbackHolidayCache.get(normalizedYear);
+  }
+
+  const rows = FALLBACK_BG_FIXED_HOLIDAYS.map(([mmdd, name]) => ({
+    date: `${normalizedYear}-${mmdd}`,
+    name,
+    isHoliday: true,
+    type: 'official',
+    source: 'fallback official'
+  }));
+  const specialRows = (FALLBACK_BG_SPECIAL_NON_WORKING_DAYS[normalizedYear] || []).map(([mmdd, name]) => ({
+    date: `${normalizedYear}-${mmdd}`,
+    name,
+    isHoliday: true,
+    type: 'official',
+    source: 'fallback official (special)'
+  }));
+  rows.push(...specialRows);
+
+  const easter = orthodoxEaster(normalizedYear);
+  const easterRows = [
+    { offset: -2, name: 'Велики петък' },
+    { offset: -1, name: 'Велика събота' },
+    { offset: 0, name: 'Великден' },
+    { offset: 1, name: 'Великден' },
+  ].map(({ offset, name }) => {
+    const date = new Date(Date.UTC(
+      easter.getFullYear(),
+      easter.getMonth(),
+      easter.getDate() + offset
+    ));
+    return {
+      date: date.toISOString().slice(0, 10),
+      name,
+      isHoliday: true,
+      type: 'official',
+      source: 'fallback official (easter)'
+    };
+  });
+
+  const combinedRows = [...rows, ...easterRows];
+  combinedRows.push(...addFallbackObservedDays(combinedRows));
+
+  const map = new Map();
+  combinedRows.forEach((row) => {
+    map.set(row.date, row);
+  });
+  fallbackHolidayCache.set(normalizedYear, map);
+  return map;
+}
+
 function getHolidayMeta(dateISO) {
+  const normalizedDate = String(dateISO || '').slice(0, 10);
   const monthKey = String(dateISO || '').slice(0, 7);
   if (!state.holidaysByMonthCache || typeof state.holidaysByMonthCache !== 'object') {
-    return null;
+    return getFallbackOfficialHolidayMap(normalizedDate.slice(0, 4)).get(normalizedDate) || null;
   }
   const map = state.holidaysByMonthCache[monthKey];
-  if (!map) {
-    return null;
+  if (!(map instanceof Map)) {
+    return getFallbackOfficialHolidayMap(normalizedDate.slice(0, 4)).get(normalizedDate) || null;
   }
-  return map.get(String(dateISO).slice(0, 10)) || null;
+  return map.get(normalizedDate) || getFallbackOfficialHolidayMap(normalizedDate.slice(0, 4)).get(normalizedDate) || null;
 }
 
 async function loadHolidaysAdminYear(year) {
@@ -6141,7 +6261,7 @@ async function loadSchedulesForMonth() {
   }
 
   state.selectedScheduleIds = selectedScheduleIds;
-  await loadHolidayRangeForMonth(monthKey);
+  await loadHolidayRangeForMonth(monthKey, { force: true });
 
   if (!state.activeScheduleId || !validIds.has(state.activeScheduleId) || !state.selectedScheduleIds.includes(state.activeScheduleId)) {
     state.activeScheduleId = state.selectedScheduleIds[0] || null;
