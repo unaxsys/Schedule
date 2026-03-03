@@ -5529,6 +5529,7 @@ function buildMonthInfoMarkup({ year, monthIndex, monthStats }) {
     const holidayMeta = getHolidayMeta(dateISO);
     const weekday = date.getUTCDay();
     const isWeekendDay = weekday === 0 || weekday === 6;
+    const forcedNonWorking = isForcedNonWorkingDate(dateISO);
     const classes = [];
     if (isWeekendDay) {
       classes.push('is-weekend');
@@ -5536,7 +5537,12 @@ function buildMonthInfoMarkup({ year, monthIndex, monthStats }) {
     if (holidayMeta?.isHoliday) {
       classes.push('is-holiday');
     }
-    cells.push({ text: String(day), classes: classes.join(' '), title: holidayMeta?.name || '' });
+    if (forcedNonWorking && !isWeekendDay && !holidayMeta?.isHoliday) {
+      classes.push('is-nonworking');
+    }
+    const title = holidayMeta?.name
+      || (forcedNonWorking ? 'Неработен ден (корекция по календар)' : '');
+    cells.push({ text: String(day), classes: classes.join(' '), title });
   }
 
   while (cells.length % 7 !== 0) {

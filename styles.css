@@ -475,16 +475,10 @@ button:hover {
   background: #eff6ff;
   border-radius: 8px;
   padding: 0.7rem 0.8rem;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
 }
 
 .month-info__stats {
-  flex: 1;
-  min-width: 240px;
+  margin-bottom: 0.55rem;
 }
 
 .month-info__calendar {
@@ -527,7 +521,8 @@ button:hover {
 }
 
 .month-info__calendar-grid td.is-weekend,
-.month-info__calendar-grid td.is-holiday {
+.month-info__calendar-grid td.is-holiday,
+.month-info__calendar-grid td.is-nonworking {
   background: #f9b84b;
   color: #fff;
 }
