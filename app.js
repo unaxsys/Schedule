@@ -161,6 +161,7 @@ const superAdminPortalLink = document.getElementById('superAdminPortalLink');
 const tabButtons = document.querySelectorAll('.tab-btn');
 const tabPanels = document.querySelectorAll('.tab-panel');
 const monthInfo = document.getElementById('monthInfo');
+const sidebarMonthCalendar = document.getElementById('sidebarMonthCalendar');
 const scheduleOverviewPanel = document.getElementById('scheduleOverviewPanel');
 const scheduleFilterDepartmentSelect = document.getElementById('scheduleFilterDepartmentSelect');
 const scheduleDepartmentSelect = document.getElementById('scheduleDepartmentSelect');
@@ -5510,7 +5511,7 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-function buildMonthInfoMarkup({ year, monthIndex, monthStats }) {
+function buildMonthCalendarMarkup({ year, monthIndex, monthStats }) {
   const monthDate = new Date(Date.UTC(year, monthIndex - 1, 1));
   const monthLabel = new Intl.DateTimeFormat('bg-BG', { month: 'long' }).format(monthDate).toUpperCase();
   const weekdayLabels = ['П', 'В', 'С', 'Ч', 'П', 'С', 'Н'];
@@ -5558,12 +5559,6 @@ function buildMonthInfoMarkup({ year, monthIndex, monthStats }) {
   }
 
   return `
-    <div class="month-info__stats">
-      <b>Работни дни по календар:</b> ${monthStats.workingDays} ·
-      <b>Почивни дни:</b> ${monthStats.weekendDays} ·
-      <b>Официални празници:</b> ${monthStats.holidayDays} ·
-      <b>Норма:</b> ${monthStats.normHours} ч.
-    </div>
     <div class="month-info__calendar" aria-label="Календар за ${monthLabel}">
       <h4 class="month-info__calendar-title">${monthLabel}</h4>
       <table class="month-info__calendar-grid" aria-hidden="true">
@@ -5591,6 +5586,11 @@ function renderSchedule() {
   unlockScheduleBtn.disabled = !monthLocked || !canUnlockSchedule();
 
   monthInfo.innerHTML = buildMonthInfoMarkup({ year, monthIndex, monthStats });
+
+  const monthCalendarMarkup = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
+  if (sidebarMonthCalendar) {
+    sidebarMonthCalendar.innerHTML = monthCalendarMarkup;
+  }
 
   const visibleSummaryColumns = getVisibleSummaryColumns();
   const selectedSet = getSelectedDepartmentIdsSet();

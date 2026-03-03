@@ -180,6 +180,14 @@ header p {
   display: grid;
   gap: 0.5rem;
 }
+.sidebar-month-calendar {
+  margin-top: 0.75rem;
+}
+
+.sidebar-month-calendar .month-info__calendar {
+  width: 100%;
+}
+
 .tab-btn {
   text-align: left;
   background: #dbeafe;
