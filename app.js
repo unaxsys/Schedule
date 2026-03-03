@@ -1982,6 +1982,32 @@ function renderShiftDepartmentOptions() {
     const hasImportPrev = state.departments.some((department) => department.id === importPrev);
     shiftImportDepartmentInput.value = hasImportPrev ? importPrev : '';
   }
+
+  if (shiftListDepartmentFilter) {
+    const filterPrev = cleanStoredValue(shiftListDepartmentFilter.value) || 'all';
+    shiftListDepartmentFilter.innerHTML = '';
+
+    const allOption = document.createElement('option');
+    allOption.value = 'all';
+    allOption.textContent = 'Всички отдели';
+    shiftListDepartmentFilter.appendChild(allOption);
+
+    const globalFilterOption = document.createElement('option');
+    globalFilterOption.value = 'global';
+    globalFilterOption.textContent = 'Само Global';
+    shiftListDepartmentFilter.appendChild(globalFilterOption);
+
+    state.departments.forEach((department) => {
+      const option = document.createElement('option');
+      option.value = department.id;
+      option.textContent = department.name;
+      shiftListDepartmentFilter.appendChild(option);
+    });
+
+    const hasFilterPrev = ['all', 'global'].includes(filterPrev)
+      || state.departments.some((department) => department.id === filterPrev);
+    shiftListDepartmentFilter.value = hasFilterPrev ? filterPrev : 'all';
+  }
 }
 
 function renderShiftImportPreview(payload) {
