@@ -814,24 +814,20 @@ select.shift-select {
 }
 
 .employee-edit-checkboxes {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0.45rem;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  max-width: 380px;
 }
 
 .employee-edit-checkbox-item {
   width: 100%;
-  align-items: flex-start;
   font-size: 0.85rem;
 }
 
-.employee-edit-checkbox-item input[type="checkbox"] {
-  margin-top: 0.2rem;
-}
-
-.employee-edit-checkbox-item--sirv {
-  grid-column: auto;
+.employee-edit-checkbox-item .field-help {
+  margin-left: 1.35rem;
 }
 
 .employee-edit-form .modal-actions {
@@ -859,7 +855,7 @@ select.shift-select {
   }
 
   .employee-edit-checkboxes {
-    grid-template-columns: 1fr;
+    max-width: 100%;
   }
 }
 
