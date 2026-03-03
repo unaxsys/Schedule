@@ -4971,7 +4971,7 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
 
     row.appendChild(cell);
     collectSummary(summary, employee, effectiveShift, holiday, weekend, inEmployment, entrySnapshot);
-    if (inEmployment && !holiday && !weekend && !isNormExcludedDate(dateISO)) {
+    if (inEmployment && isNormWorkingDay({ dateISO, holiday, weekend })) {
       summary.monthNormHours += 8;
     }
   }
@@ -5029,15 +5029,29 @@ const FALLBACK_BG_FIXED_HOLIDAYS = [
   ['12-26', 'Рождество Христово'],
 ];
 
-const NORM_EXCLUDED_WORKDAYS_BY_MONTH = {
-  '2026-01': ['2026-01-02']
+const CALENDAR_WORKDAY_OVERRIDES = {
+  forceNonWorking: new Set([
+    '2026-01-02'
+  ]),
+  forceWorking: new Set([])
 };
 
-function isNormExcludedDate(dateISO) {
-  const normalizedDate = String(dateISO || '').slice(0, 10);
-  const monthKey = normalizedDate.slice(0, 7);
-  const excludedDates = NORM_EXCLUDED_WORKDAYS_BY_MONTH[monthKey] || [];
-  return excludedDates.includes(normalizedDate);
+function isForcedNonWorkingDate(dateISO) {
+  return CALENDAR_WORKDAY_OVERRIDES.forceNonWorking.has(String(dateISO || '').slice(0, 10));
+}
+
+function isForcedWorkingDate(dateISO) {
+  return CALENDAR_WORKDAY_OVERRIDES.forceWorking.has(String(dateISO || '').slice(0, 10));
+}
+
+function isNormWorkingDay({ dateISO, holiday, weekend }) {
+  if (isForcedNonWorkingDate(dateISO)) {
+    return false;
+  }
+  if (isForcedWorkingDate(dateISO)) {
+    return true;
+  }
+  return !holiday && !weekend;
 }
 
 const fallbackHolidayCache = new Map();
@@ -5611,7 +5625,7 @@ function getMonthStats(year, monthIndex, totalDays) {
     if (weekend) {
       weekendDays += 1;
     }
-    if (!holiday && !weekend && !isNormExcludedDate(dateISO)) {
+    if (isNormWorkingDay({ dateISO, holiday, weekend })) {
       workingDays += 1;
     }
   }
@@ -5693,7 +5707,7 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
 
       const date = new Date(year, monthIndex - 1, day);
       const dateISO = `${year}-${String(monthIndex).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      if (!isOfficialHoliday(date) && !isWeekend(date) && !isNormExcludedDate(dateISO)) {
+      if (isNormWorkingDay({ dateISO, holiday: isOfficialHoliday(date), weekend: isWeekend(date) })) {
         totals.normHours += 8;
       }
 
