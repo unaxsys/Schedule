@@ -313,6 +313,12 @@ const safeNum = window.ScheduleTotals?.safeNum || ((value, fallback = 0) => {
 const minutesToHoursDecimal = window.ScheduleTotals?.minutesToHoursDecimal || ((minutes) => (safeNum(minutes, 0) / 60).toFixed(2));
 const sumEmployeeTotals = window.ScheduleTotals?.sumEmployeeTotals || ((entriesByDay) => ({
   workMinutesTotal: (entriesByDay || []).reduce((acc, entry) => acc + safeNum(entry?.workMinutesTotal ?? entry?.workMinutes), 0),
+  attendanceMinutesTotal: (entriesByDay || []).reduce((acc, entry) => {
+    const worked = safeNum(entry?.workMinutesTotal ?? entry?.workMinutes);
+    const rest = Math.max(0, safeNum(entry?.breakMinutesApplied));
+    return acc + worked + rest;
+  }, 0),
+  restMinutesTotal: (entriesByDay || []).reduce((acc, entry) => acc + Math.max(0, safeNum(entry?.breakMinutesApplied)), 0),
   nightMinutes: (entriesByDay || []).reduce((acc, entry) => acc + safeNum(entry?.nightMinutes), 0),
   weekendMinutes: (entriesByDay || []).reduce((acc, entry) => acc + safeNum(entry?.weekendMinutes), 0),
   holidayMinutes: (entriesByDay || []).reduce((acc, entry) => acc + safeNum(entry?.holidayMinutes), 0),
@@ -320,11 +326,13 @@ const sumEmployeeTotals = window.ScheduleTotals?.sumEmployeeTotals || ((entriesB
 }));
 const sumGridTotals = window.ScheduleTotals?.sumGridTotals || ((visibleEmployees) => (visibleEmployees || []).reduce((acc, employee) => ({
   workMinutesTotal: acc.workMinutesTotal + safeNum(employee?.workMinutesTotal),
+  attendanceMinutesTotal: acc.attendanceMinutesTotal + safeNum(employee?.attendanceMinutesTotal),
+  restMinutesTotal: acc.restMinutesTotal + safeNum(employee?.restMinutesTotal),
   nightMinutes: acc.nightMinutes + safeNum(employee?.nightMinutes),
   weekendMinutes: acc.weekendMinutes + safeNum(employee?.weekendMinutes),
   holidayMinutes: acc.holidayMinutes + safeNum(employee?.holidayMinutes),
   overtimeMinutes: acc.overtimeMinutes + safeNum(employee?.overtimeMinutes),
-}), { workMinutesTotal: 0, nightMinutes: 0, weekendMinutes: 0, holidayMinutes: 0, overtimeMinutes: 0 }));
+}), { workMinutesTotal: 0, attendanceMinutesTotal: 0, restMinutesTotal: 0, nightMinutes: 0, weekendMinutes: 0, holidayMinutes: 0, overtimeMinutes: 0 }));
 
 function truncateMessages(messages, maxItems = 2) {
   const source = Array.isArray(messages) ? messages.filter(Boolean) : [];
@@ -339,7 +347,9 @@ function renderScheduleOverviewTotals(totals) {
     return;
   }
   const items = [
-    ['Общо часове', totals.workMinutesTotal],
+    ['Присъствени часове', totals.attendanceMinutesTotal],
+    ['Работни часове', totals.workMinutesTotal],
+    ['Часове почивка', totals.restMinutesTotal],
     ['Нощни', totals.nightMinutes],
     ['Уикенд', totals.weekendMinutes],
     ['Празнични', totals.holidayMinutes],
@@ -5028,7 +5038,7 @@ function renderSchedule() {
     renderScheduleOverviewTotals(snapshotGrandTotals);
     scheduleTable.appendChild(totalsRow);
   } else {
-    renderScheduleOverviewTotals({ workMinutesTotal: 0, nightMinutes: 0, weekendMinutes: 0, holidayMinutes: 0, overtimeMinutes: 0 });
+    renderScheduleOverviewTotals({ workMinutesTotal: 0, attendanceMinutesTotal: 0, restMinutesTotal: 0, nightMinutes: 0, weekendMinutes: 0, holidayMinutes: 0, overtimeMinutes: 0 });
   }
 
   requestAnimationFrame(refreshScheduleZoomLayout);
@@ -6134,6 +6144,7 @@ async function refreshMonthlyView() {
       mappedEntrySnapshots[entryKey] = {
         workMinutes: Number(entry.workMinutes ?? 0),
         workMinutesTotal: Number(entry.workMinutesTotal ?? entry.workMinutes ?? 0),
+        breakMinutesApplied: Number(entry.breakMinutesApplied ?? 0),
         nightMinutes: Number(entry.nightMinutes ?? 0),
         holidayMinutes: Number(entry.holidayMinutes ?? 0),
         weekendMinutes: Number(entry.weekendMinutes ?? 0),
@@ -6349,6 +6360,7 @@ async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) 
       state.scheduleEntrySnapshotsById[`${scheduleId}|${employee.id}|${day}`] = {
         workMinutes: Number(responsePayload.entry.workMinutes ?? 0),
         workMinutesTotal: Number(responsePayload.entry.workMinutesTotal ?? responsePayload.entry.workMinutes ?? 0),
+        breakMinutesApplied: Number(responsePayload.entry.breakMinutesApplied ?? 0),
         nightMinutes: Number(responsePayload.entry.nightMinutes ?? 0),
         holidayMinutes: Number(responsePayload.entry.holidayMinutes ?? 0),
         weekendMinutes: Number(responsePayload.entry.weekendMinutes ?? 0),
