@@ -5501,16 +5501,19 @@ function incrementLeaveSummaryByShiftCode(summary, shiftCode) {
 }
 
 function getStoredShiftHours(shift) {
-  const configuredHours = Number(shift.hours);
-  if (Number.isFinite(configuredHours) && configuredHours > 0) {
-    return configuredHours;
+  const start = String(shift?.start || '').trim();
+  const end = String(shift?.end || '').trim();
+  if (start && end) {
+    return calcShiftHours(
+      start,
+      end,
+      Number(shift.break_minutes ?? shift.breakMinutes ?? 0),
+      Boolean(shift.break_included ?? shift.breakIncluded)
+    );
   }
-  return calcShiftHours(
-    String(shift.start || ''),
-    String(shift.end || ''),
-    Number(shift.break_minutes ?? shift.breakMinutes ?? 0),
-    Boolean(shift.break_included ?? shift.breakIncluded)
-  );
+
+  const configuredHours = Number(shift?.hours);
+  return Number.isFinite(configuredHours) && configuredHours > 0 ? configuredHours : 0;
 }
 
 function getWorkShiftHours(shift) {
@@ -5520,7 +5523,7 @@ function getWorkShiftHours(shift) {
   return getStoredShiftHours(shift);
 }
 
-function calculateHolidayAndWeekendHoursByShift(shift, dateISO) {
+function calculateHolidayAndWeekendHoursByShift(shift, dateISO, workedMinutesOverride = null) {
   if (!shift || shift.type !== 'work' || !dateISO) {
     return { holidayHours: 0, weekendHours: 0 };
   }
@@ -5546,9 +5549,12 @@ function calculateHolidayAndWeekendHoursByShift(shift, dateISO) {
 
   const durationMinutes = Math.max(0, endMinutes - startMinutes);
   const breakMinutes = Math.max(0, Number(shift.break_minutes ?? shift.breakMinutes ?? 0) || 0);
-  const workedMinutes = Boolean(shift.break_included ?? shift.breakIncluded)
+  const calculatedWorkedMinutes = Boolean(shift.break_included ?? shift.breakIncluded)
     ? durationMinutes
     : Math.max(durationMinutes - breakMinutes, 0);
+  const workedMinutes = Number.isFinite(Number(workedMinutesOverride))
+    ? Math.max(0, Number(workedMinutesOverride))
+    : calculatedWorkedMinutes;
 
   if (workedMinutes <= 0 || durationMinutes <= 0) {
     return { holidayHours: 0, weekendHours: 0 };
@@ -5607,7 +5613,7 @@ function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmploy
     const snapshotWeekendHours = Number(snapshot.weekendMinutes || 0) / 60;
     const shouldRecalculateSpecialHours = shift?.type === 'work' && Boolean(dateISO);
     const splitHours = shouldRecalculateSpecialHours
-      ? calculateHolidayAndWeekendHoursByShift(shift, dateISO)
+      ? calculateHolidayAndWeekendHoursByShift(shift, dateISO, snapshotWorkMinutes)
       : { holidayHours: snapshotHolidayHours, weekendHours: snapshotWeekendHours };
     const holidayHours = splitHours.holidayHours;
     const weekendHours = splitHours.weekendHours;
@@ -5634,7 +5640,7 @@ function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmploy
   if (shift.type === 'work') {
     const shiftHours = getWorkShiftHours(shift);
     const nightHours = calcNightHours(shift.start, shift.end, { isYoungWorker: Boolean(employee?.youngWorker) });
-    const specialHours = calculateHolidayAndWeekendHoursByShift(shift, dateISO);
+    const specialHours = calculateHolidayAndWeekendHoursByShift(shift, dateISO, shiftHours * 60);
 
     summary.workedDays += 1;
     summary.workedHours += shiftHours;
