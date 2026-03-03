@@ -815,8 +815,8 @@ select.shift-select {
 
 .employee-edit-checkboxes {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.45rem 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.45rem;
   align-items: start;
 }
 
@@ -831,7 +831,7 @@ select.shift-select {
 }
 
 .employee-edit-checkbox-item--sirv {
-  grid-column: 1 / -1;
+  grid-column: auto;
 }
 
 .employee-edit-form .modal-actions {
@@ -872,8 +872,16 @@ select.shift-select {
 }
 
 .field-checkbox {
-  width: fit-content;
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 0.35rem;
   line-height: 1.25;
+}
+
+.field-checkbox input[type="checkbox"] {
+  margin-top: 0.2rem;
 }
 
 
