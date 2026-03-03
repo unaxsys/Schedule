@@ -56,6 +56,32 @@
         align-items: center;
       }
 
+      .sa-nav {
+        display: flex;
+        gap: 0.5rem;
+        border-bottom: 1px solid #dbeafe;
+        padding-bottom: 0.6rem;
+      }
+
+      .sa-nav-btn {
+        border: 1px solid #bfdbfe;
+        border-radius: 999px;
+        padding: 0.35rem 0.8rem;
+        background: #eff6ff;
+        color: #1e3a8a;
+        font-weight: 600;
+      }
+
+      .sa-nav-btn.is-active {
+        background: #1d4ed8;
+        border-color: #1d4ed8;
+        color: #fff;
+      }
+
+      .sa-tab-panel[hidden] {
+        display: none;
+      }
+
       .sa-stats {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -242,6 +268,47 @@
         font-weight: 600;
       }
 
+      .sa-logic-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 1rem;
+      }
+
+      .sa-logic-card {
+        border: 1px solid #dbeafe;
+        border-radius: 12px;
+        background: #fff;
+        padding: 0.9rem;
+        display: grid;
+        gap: 0.6rem;
+      }
+
+      .sa-logic-card h4 {
+        margin: 0;
+      }
+
+      .sa-logic-form {
+        display: grid;
+        gap: 0.5rem;
+      }
+
+      .sa-logic-form label {
+        font-size: 0.9rem;
+      }
+
+      .sa-logic-form input,
+      .sa-logic-form select {
+        width: 100%;
+      }
+
+      .sa-logic-result {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        border-radius: 10px;
+        padding: 0.6rem;
+        color: #1e3a8a;
+      }
+
       @media (max-width: 950px) {
         .sa-grid-2 {
           grid-template-columns: 1fr;
@@ -251,6 +318,14 @@
   </head>
   <body>
     <main class="sa-shell">
+      <section class="panel">
+        <nav class="sa-nav" aria-label="Навигация">
+          <button id="saTabStatsBtn" class="sa-nav-btn is-active" type="button" data-tab="stats">Статистика</button>
+          <button id="saTabLogicBtn" class="sa-nav-btn" type="button" data-tab="logic">Логика за изчисление</button>
+        </nav>
+      </section>
+
+      <section id="saStatsTab" class="sa-tab-panel">
       <section class="panel">
         <div class="sa-header">
           <div>
@@ -308,6 +383,41 @@
           <div id="saLogs" class="sa-card-list"><p class="sa-empty">Няма данни.</p></div>
         </div>
       </section>
+      </section>
+
+      <section id="saLogicTab" class="sa-tab-panel" hidden>
+        <section class="panel">
+          <h3>Логика за изчисление (СИРВ / нормално)</h3>
+          <p>Тук се визуализира как се образува платимото време и извънредния труд. Полетата са за бърза редакция на параметрите.</p>
+
+          <div class="sa-logic-grid">
+            <article class="sa-logic-card">
+              <h4>Параметри</h4>
+              <form id="saLogicForm" class="sa-logic-form">
+                <label>
+                  Режим
+                  <select id="saLogicMode">
+                    <option value="normal">Нормално отчитане</option>
+                    <option value="sirv">СИРВ</option>
+                  </select>
+                </label>
+                <label>Изработени часове<input id="saWorkedHours" type="number" min="0" step="0.25" value="168" /></label>
+                <label>Норма за периода (часове)<input id="saNormHours" type="number" min="0" step="0.25" value="160" /></label>
+                <label>Празнични часове<input id="saHolidayHours" type="number" min="0" step="0.25" value="8" /></label>
+                <label>Уикенд часове<input id="saWeekendHours" type="number" min="0" step="0.25" value="16" /></label>
+                <label>Нощни часове (премия)<input id="saNightPremiumHours" type="number" min="0" step="0.25" value="2" /></label>
+                <label>Коефициент празник<input id="saHolidayRate" type="number" min="1" step="0.01" value="2" /></label>
+                <label>Коефициент уикенд<input id="saWeekendRate" type="number" min="1" step="0.01" value="1.75" /></label>
+              </form>
+            </article>
+            <article class="sa-logic-card">
+              <h4>Резултат</h4>
+              <div id="saLogicSummary" class="sa-logic-result"></div>
+              <div id="saLogicFormula" class="sa-bubbles"></div>
+            </article>
+          </div>
+        </section>
+      </section>
     </main>
 
     <script>
@@ -321,6 +431,14 @@
       const tableNameInput = document.getElementById('saTableName');
       const tableOutput = document.getElementById('saTableOutput');
       const statusEl = document.getElementById('saStatus');
+      const tabStatsBtn = document.getElementById('saTabStatsBtn');
+      const tabLogicBtn = document.getElementById('saTabLogicBtn');
+      const statsTab = document.getElementById('saStatsTab');
+      const logicTab = document.getElementById('saLogicTab');
+      const logicForm = document.getElementById('saLogicForm');
+      const logicModeInput = document.getElementById('saLogicMode');
+      const logicSummaryEl = document.getElementById('saLogicSummary');
+      const logicFormulaEl = document.getElementById('saLogicFormula');
 
       const REFRESH_EVERY_MS = 5000;
       let refreshTimer = null;
@@ -344,6 +462,58 @@
           return String(value);
         }
       }
+      function switchTab(targetTab) {
+        const statsActive = targetTab === 'stats';
+        statsTab.hidden = !statsActive;
+        logicTab.hidden = statsActive;
+        tabStatsBtn.classList.toggle('is-active', statsActive);
+        tabLogicBtn.classList.toggle('is-active', !statsActive);
+      }
+
+      function toPositiveNumber(value, fallback = 0) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) {
+          return fallback;
+        }
+        return Math.max(parsed, 0);
+      }
+
+      function renderCalculationLogic() {
+        const mode = logicModeInput.value === 'sirv' ? 'sirv' : 'normal';
+        const workedHours = toPositiveNumber(document.getElementById('saWorkedHours').value);
+        const normHours = toPositiveNumber(document.getElementById('saNormHours').value);
+        const holidayHours = toPositiveNumber(document.getElementById('saHolidayHours').value);
+        const weekendHours = toPositiveNumber(document.getElementById('saWeekendHours').value);
+        const nightPremiumHours = toPositiveNumber(document.getElementById('saNightPremiumHours').value);
+        const holidayRate = Math.max(1, toPositiveNumber(document.getElementById('saHolidayRate').value, 2));
+        const weekendRate = Math.max(1, toPositiveNumber(document.getElementById('saWeekendRate').value, 1.75));
+
+        const normalizedHolidayHours = holidayHours * holidayRate;
+        const normalizedWeekendHours = mode === 'sirv' ? weekendHours : weekendHours * weekendRate;
+        const payableHours = workedHours - holidayHours - weekendHours + normalizedHolidayHours + normalizedWeekendHours + nightPremiumHours;
+        const overtimeHours = mode === 'sirv' ? Math.max(0, workedHours + nightPremiumHours - normHours) : Math.max(0, workedHours - normHours);
+
+        logicSummaryEl.innerHTML = `
+          <strong>${mode === 'sirv' ? 'СИРВ режим' : 'Нормален режим'}</strong><br />
+          Платими часове: <strong>${payableHours.toFixed(2)}</strong><br />
+          Извънреден труд: <strong>${overtimeHours.toFixed(2)}</strong><br />
+          Норма за сравнение: <strong>${normHours.toFixed(2)}</strong>
+        `;
+
+        logicFormulaEl.innerHTML = [
+          `Празнични: ${holidayHours.toFixed(2)} × ${holidayRate.toFixed(2)} = ${normalizedHolidayHours.toFixed(2)}`,
+          mode === 'sirv'
+            ? `Уикенд (СИРВ): ${weekendHours.toFixed(2)} × 1.00 = ${normalizedWeekendHours.toFixed(2)}`
+            : `Уикенд (нормално): ${weekendHours.toFixed(2)} × ${weekendRate.toFixed(2)} = ${normalizedWeekendHours.toFixed(2)}`,
+          `Платими = ${workedHours.toFixed(2)} - ${holidayHours.toFixed(2)} - ${weekendHours.toFixed(2)} + ${normalizedHolidayHours.toFixed(2)} + ${normalizedWeekendHours.toFixed(2)} + ${nightPremiumHours.toFixed(2)}`,
+          mode === 'sirv'
+            ? `Извънреден (СИРВ) = max(0, ${workedHours.toFixed(2)} + ${nightPremiumHours.toFixed(2)} - ${normHours.toFixed(2)})`
+            : `Извънреден (нормално) = max(0, ${workedHours.toFixed(2)} - ${normHours.toFixed(2)})`,
+        ]
+          .map((line) => `<span class="sa-bubble">${escapeHtml(line)}</span>`)
+          .join('');
+      }
+
 
       function escapeHtml(value) {
         return String(value ?? '')
@@ -650,6 +820,10 @@
         await refreshOverview();
       });
 
+      tabStatsBtn.addEventListener('click', () => switchTab('stats'));
+      tabLogicBtn.addEventListener('click', () => switchTab('logic'));
+      logicForm.addEventListener('input', () => renderCalculationLogic());
+
       tableForm.addEventListener('submit', async (event) => {
         event.preventDefault();
         try {
@@ -664,6 +838,7 @@
 
       refreshOverview();
       startLiveRefresh();
+      renderCalculationLogic();
     </script>
   </body>
 </html>
