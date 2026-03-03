@@ -1,7 +1,7 @@
 const { calcDayType, DEFAULT_WORKDAY_MINUTES } = require('./labor_rules');
+const { computeShiftSnapshot } = require('./lib/shift-engine');
 
 const MINUTES_PER_DAY = 24 * 60;
-const MIN_NIGHT_MINUTES_FOR_ELIGIBILITY = 3 * 60;
 
 function parseTimeToMinutes(value) {
   const text = String(value || '').trim();
@@ -72,69 +72,35 @@ function computeEntryMetrics({
   dateISO,
   shift = {},
   isHoliday = () => false,
-  dailyNormMinutes = DEFAULT_WORKDAY_MINUTES,
-  sirvEnabled = false,
-  isYoungWorker = false,
-  minNightMinutes = MIN_NIGHT_MINUTES_FOR_ELIGIBILITY,
 }) {
-  const segments = shiftSegmentsByDay({ dateISO, startTime: shift.start_time || shift.start, endTime: shift.end_time || shift.end });
-  const durationMinutes = segments.reduce((acc, segment) => acc + segment.duration, 0);
-  const breakMinutes = Math.max(0, Number(shift.break_minutes || 0));
-  const breakIncluded = Boolean(shift.break_included);
-  const breakMinutesApplied = breakIncluded ? 0 : Math.min(durationMinutes, breakMinutes);
-  const workedMinutes = Math.max(0, durationMinutes - breakMinutesApplied);
-
-  let nightMinutes = 0;
-  let weekendMinutes = 0;
-  let holidayMinutes = 0;
-
-  for (const segment of segments) {
-    const nightWindowStart = isYoungWorker ? 20 * 60 : 22 * 60;
-    nightMinutes += overlapMinutes(segment.startMinute, segment.endMinute, nightWindowStart, 24 * 60);
-    nightMinutes += overlapMinutes(segment.startMinute, segment.endMinute, 0, 6 * 60);
-
-    const dayType = calcDayType(segment.dateISO);
-    const isWeekend = dayType.isWeekend;
-    const isHolidayDay = resolveHolidayFlag(isHoliday(segment.dateISO));
-    if (segment.duration > 0 && workedMinutes > 0) {
-      const proportionalWorked = Math.floor((workedMinutes * segment.duration) / durationMinutes);
-      if (isWeekend) {
-        weekendMinutes += proportionalWorked;
-      }
-      if (isHolidayDay) {
-        holidayMinutes += proportionalWorked;
-      }
-    }
-  }
-
-  // distribute minute remainders deterministically to the last segment
-  const distributed = segments.reduce((acc, segment) => acc + Math.floor((workedMinutes * segment.duration) / (durationMinutes || 1)), 0);
-  const remainder = Math.max(0, workedMinutes - distributed);
-  if (remainder > 0 && segments.length) {
-    const lastSegment = segments[segments.length - 1];
-    const dayType = calcDayType(lastSegment.dateISO);
-    const isHolidayDay = resolveHolidayFlag(isHoliday(lastSegment.dateISO));
-    if (dayType.isWeekend) {
-      weekendMinutes += remainder;
-    }
-    if (isHolidayDay) {
-      holidayMinutes += remainder;
-    }
-  }
-
-  if (nightMinutes < minNightMinutes) {
-    nightMinutes = 0;
-  }
+  const snapshot = computeShiftSnapshot({
+    dateISO,
+    startTime: shift.start_time || shift.start,
+    endTime: shift.end_time || shift.end,
+    breakMinutes: shift.break_minutes,
+    breakIncluded: shift.break_included,
+    holidayResolver: isHoliday,
+  });
 
   return {
-    duration_minutes: durationMinutes,
-    break_minutes_applied: breakMinutesApplied,
-    work_minutes_total: workedMinutes,
-    night_minutes: nightMinutes,
-    weekend_minutes: Math.min(weekendMinutes, workedMinutes),
-    holiday_minutes: Math.min(holidayMinutes, workedMinutes),
-    overtime_minutes: sirvEnabled ? 0 : Math.max(0, workedMinutes - dailyNormMinutes),
+    duration_minutes: snapshot.duration_minutes,
+    break_minutes_applied: snapshot.break_minutes_applied,
+    work_minutes_total: snapshot.work_minutes_total,
+    night_minutes: snapshot.night_minutes,
+    weekend_minutes: snapshot.weekend_minutes,
+    holiday_minutes: snapshot.holiday_minutes,
+    overtime_minutes: 0,
   };
+}
+
+function computeOvertimeMinutes({ mode = 'normal', workedMinutes = 0, normMinutes = 0 }) {
+  const normalizedMode = String(mode || 'normal').toLowerCase();
+  const worked = Math.max(0, Number(workedMinutes) || 0);
+  const norm = Math.max(0, Number(normMinutes) || 0);
+  if (!['normal', 'sirv'].includes(normalizedMode)) {
+    return 0;
+  }
+  return Math.max(0, worked - norm);
 }
 
 function validateScheduleEntry({ prevShiftEndAt = null, shift = {} }) {
@@ -283,6 +249,7 @@ module.exports = {
   parseTimeToMinutes,
   shiftSegmentsByDay,
   computeEntryMetrics,
+  computeOvertimeMinutes,
   validateScheduleEntry,
   holidayResolverFactory,
   countBusinessDays,

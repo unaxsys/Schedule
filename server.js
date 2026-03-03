@@ -40,6 +40,7 @@ const {
   countBusinessDays,
   dateAdd,
   finalizeSirvOvertimeAllocations,
+  computeOvertimeMinutes,
 } = require('./schedule_calculations');
 const { computeShiftSnapshot, parseTimeToMinutes, normalizeShiftInterval, calcWorkMinutes } = require('./lib/shift-engine');
 const {
@@ -405,14 +406,13 @@ function getSirvPeriodBounds(monthKey, periodMonths = 1) {
   return { periodStart, periodEnd: periodEndDate.toISOString().slice(0, 10) };
 }
 
-async function computeEntrySnapshot({ date, shift, isHoliday, sirvEnabled = false, dailyNormMinutes = 480, isYoungWorker = false }) {
+async function computeEntrySnapshot({ date, shift, isHoliday }) {
   const snapshot = computeShiftSnapshot({
     dateISO: date,
     startTime: shift.start_time || shift.start,
     endTime: shift.end_time || shift.end,
     breakMinutes: shift.break_minutes,
     breakIncluded: shift.break_included,
-    plannedMinutes: sirvEnabled ? 0 : dailyNormMinutes,
     holidayResolver: isHoliday,
   });
 
@@ -422,7 +422,7 @@ async function computeEntrySnapshot({ date, shift, isHoliday, sirvEnabled = fals
     night_minutes: snapshot.night_minutes,
     holiday_minutes: snapshot.holiday_minutes,
     weekend_minutes: snapshot.weekend_minutes,
-    overtime_minutes: sirvEnabled ? 0 : snapshot.overtime_minutes,
+    overtime_minutes: 0,
     break_minutes_applied: snapshot.break_minutes_applied,
     break_minutes: snapshot.break_minutes,
     break_included: snapshot.break_included,
@@ -2628,9 +2628,6 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         date: entryDate,
         shift: selectedShiftForSnapshot,
         isHoliday: holidayResolver,
-        sirvEnabled: Boolean(schedule.sirv_enabled),
-        dailyNormMinutes: Number(employee.workdayMinutes || 480),
-        isYoungWorker: Boolean(employee.youngWorker),
       });
     }
 
@@ -3143,7 +3140,7 @@ app.post('/api/schedules/:id/generate', requireAuth, requireTenantContext, async
         }
 
         const snapshot = shiftTemplate
-          ? await computeEntrySnapshot({ date: dateISO, shift: shiftTemplate, isHoliday: null, sirvEnabled: false, dailyNormMinutes: 480 })
+          ? await computeEntrySnapshot({ date: dateISO, shift: shiftTemplate, isHoliday: null })
           : {
               work_minutes: 0,
               work_minutes_total: 0,
@@ -5011,7 +5008,7 @@ app.get('/api/schedules/:id/totals', requireAuth, requireTenantContext, async (r
     const businessDays = countBusinessDays(bounds.periodStart, bounds.periodEnd, holidayResolver);
     const periodNorm = businessDays * 480;
     const adjustedNorm = computeAdjustedNormMinutes(periodNorm, periodLeavesResult.rows, 480);
-    const overtimePeriod = Math.max(0, Number(periodWorkedResult.rows[0].worked || 0) - adjustedNorm);
+    const overtimePeriod = computeOvertimeMinutes({ mode: 'sirv', workedMinutes: Number(periodWorkedResult.rows[0].worked || 0), normMinutes: adjustedNorm });
 
     return res.json({
       ok: true,
