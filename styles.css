@@ -203,6 +203,42 @@ header p {
   align-items: flex-start;
 }
 
+
+.shift-form-layout {
+  align-items: center;
+}
+
+.shift-single-fields {
+  display: contents;
+}
+
+.shift-options-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 260px;
+}
+
+.shift-options-stack label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.shift-intervals-section {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shift-intervals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .employee-form {
   display: grid;
   grid-template-columns: repeat(9, minmax(0, 1fr));

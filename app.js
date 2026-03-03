@@ -204,6 +204,12 @@ const shiftForm = document.getElementById('shiftForm');
 const shiftCodeInput = document.getElementById('shiftCodeInput');
 const shiftNameInput = document.getElementById('shiftNameInput');
 const shiftDepartmentInput = document.getElementById('shiftDepartmentInput');
+const shiftSplitInput = document.getElementById('shiftSplitInput');
+const shiftSingleFields = document.getElementById('shiftSingleFields');
+const shiftIntervalsSection = document.getElementById('shiftIntervalsSection');
+const shiftIntervalsList = document.getElementById('shiftIntervalsList');
+const addShiftIntervalBtn = document.getElementById('addShiftIntervalBtn');
+const shiftBreakIncludedWrap = document.getElementById('shiftBreakIncludedWrap');
 const shiftStartInput = document.getElementById('shiftStartInput');
 const shiftEndInput = document.getElementById('shiftEndInput');
 const shiftBreakMinutesInput = document.getElementById('shiftBreakMinutesInput');
@@ -1931,13 +1937,148 @@ function upsertShiftTemplate({ code, name, departmentId = null, start, end, brea
   return { ok: true };
 }
 
+
+function renderShiftIntervalsFields() {
+  if (!shiftIntervalsList) {
+    return;
+  }
+
+  const rows = shiftIntervalsList.querySelectorAll('.shift-interval-row');
+  rows.forEach((row, index) => {
+    const label = row.querySelector('.shift-interval-label');
+    if (label) {
+      label.textContent = `Интервал ${index + 1}:`;
+    }
+    const removeBtn = row.querySelector('.shift-interval-remove-btn');
+    if (removeBtn) {
+      removeBtn.disabled = rows.length <= 2;
+    }
+  });
+}
+
+function addShiftIntervalRow(startValue = '', endValue = '') {
+  if (!shiftIntervalsList) {
+    return;
+  }
+
+  const row = document.createElement('div');
+  row.className = 'shift-interval-row';
+  row.style.display = 'flex';
+  row.style.alignItems = 'center';
+  row.style.gap = '8px';
+
+  const label = document.createElement('span');
+  label.className = 'shift-interval-label';
+
+  const startInput = document.createElement('input');
+  startInput.type = 'time';
+  startInput.className = 'shift-interval-start';
+  startInput.value = startValue;
+
+  const dash = document.createElement('span');
+  dash.textContent = '–';
+
+  const endInput = document.createElement('input');
+  endInput.type = 'time';
+  endInput.className = 'shift-interval-end';
+  endInput.value = endValue;
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'shift-interval-remove-btn';
+  removeBtn.textContent = '🗑';
+  removeBtn.addEventListener('click', () => {
+    row.remove();
+    renderShiftIntervalsFields();
+  });
+
+  row.append(label, startInput, dash, endInput, removeBtn);
+  shiftIntervalsList.appendChild(row);
+  renderShiftIntervalsFields();
+}
+
+function resetShiftIntervalsRows() {
+  if (!shiftIntervalsList) {
+    return;
+  }
+  shiftIntervalsList.innerHTML = '';
+  addShiftIntervalRow('07:00', '11:00');
+  addShiftIntervalRow('18:00', '22:00');
+}
+
+function setShiftFormMode(isSplit) {
+  if (!shiftSplitInput || !shiftStartInput || !shiftEndInput || !shiftSingleFields || !shiftIntervalsSection) {
+    return;
+  }
+
+  if (isSplit) {
+    shiftSingleFields.classList.add('hidden');
+    shiftBreakIncludedWrap?.classList.add('hidden');
+    shiftIntervalsSection.classList.remove('hidden');
+    shiftStartInput.required = false;
+    shiftEndInput.required = false;
+    if (!shiftIntervalsList?.children.length) {
+      resetShiftIntervalsRows();
+    }
+  } else {
+    shiftSingleFields.classList.remove('hidden');
+    shiftBreakIncludedWrap?.classList.remove('hidden');
+    shiftIntervalsSection.classList.add('hidden');
+    shiftStartInput.required = true;
+    shiftEndInput.required = true;
+  }
+}
+
+function collectSplitIntervals() {
+  if (!shiftIntervalsList) {
+    return [];
+  }
+
+  return Array.from(shiftIntervalsList.querySelectorAll('.shift-interval-row'))
+    .map((row) => ({
+      start: row.querySelector('.shift-interval-start')?.value || '',
+      end: row.querySelector('.shift-interval-end')?.value || '',
+    }))
+    .filter((interval) => interval.start || interval.end);
+}
+
 function attachShiftForm() {
   if (shiftListDepartmentFilter && !shiftListDepartmentFilter.dataset.bound) {
     shiftListDepartmentFilter.dataset.bound = '1';
     shiftListDepartmentFilter.addEventListener('change', () => renderShiftList());
   }
+
+  if (shiftSplitInput && !shiftSplitInput.dataset.bound) {
+    shiftSplitInput.dataset.bound = '1';
+    shiftSplitInput.addEventListener('change', () => {
+      setShiftFormMode(Boolean(shiftSplitInput.checked));
+    });
+  }
+
+  if (addShiftIntervalBtn && !addShiftIntervalBtn.dataset.bound) {
+    addShiftIntervalBtn.dataset.bound = '1';
+    addShiftIntervalBtn.addEventListener('click', () => addShiftIntervalRow());
+  }
+
+  setShiftFormMode(Boolean(shiftSplitInput?.checked));
+
   shiftForm.addEventListener('submit', (event) => {
     event.preventDefault();
+
+    if (shiftSplitInput?.checked) {
+      const intervals = collectSplitIntervals();
+      if (intervals.length < 2) {
+        setStatus('Добавете поне 2 интервала за прекъсната смяна.', false);
+        return;
+      }
+      const hasInvalidInterval = intervals.some((interval) => !interval.start || !interval.end || calcShiftHours(interval.start, interval.end) <= 0);
+      if (hasInvalidInterval) {
+        setStatus('Попълнете валидни начало и край за всеки интервал.', false);
+        return;
+      }
+      setStatus('Прекъснатите смени (2+ интервала) са само UI визуализация на този етап.', false);
+      return;
+    }
 
     const result = upsertShiftTemplate({
       code: shiftCodeInput.value,
@@ -1964,6 +2105,8 @@ function attachShiftForm() {
     if (shiftBreakIncludedInput) {
       shiftBreakIncludedInput.checked = false;
     }
+    resetShiftIntervalsRows();
+    setShiftFormMode(false);
     setStatus('Смяната е запазена успешно.', true);
     renderAll();
   });
