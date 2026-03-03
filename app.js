@@ -5591,21 +5591,23 @@ function renderSchedule() {
 
   monthInfo.innerHTML = buildMonthInfoMarkup({ year, monthIndex, monthStats });
 
-  const monthCalendarMarkup = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
+const monthCalendarMarkup = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
   if (sidebarMonthCalendar) {
-    sidebarMonthCalendar.innerHTML = monthCalendarMarkup;
-  }
 
-  const monthCalendarMarkup = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
-  if (sidebarMonthCalendar) {
     sidebarMonthCalendar.innerHTML = monthCalendarMarkup;
   }
 
   if (sidebarMonthCalendar) {
+
+  }
+
+  if (sidebarMonthCalendar) {
+
     sidebarMonthCalendar.innerHTML = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
   }
 
   if (sidebarMonthCalendar) {
+
     sidebarMonthCalendar.innerHTML = buildMonthCalendarMarkup({ year, monthIndex, monthStats });
   }
 
