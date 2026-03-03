@@ -5002,7 +5002,7 @@ async function loadHolidayRangeForMonth(monthKey) {
   if (!state.holidaysByMonthCache || typeof state.holidaysByMonthCache !== 'object') {
     state.holidaysByMonthCache = {};
   }
-  if (state.holidaysByMonthCache[monthKey]) {
+  if (state.holidaysByMonthCache[monthKey] instanceof Map) {
     return;
   }
   try {
@@ -5011,7 +5011,7 @@ async function loadHolidayRangeForMonth(monthKey) {
     const mapped = new Map((payload.holidays || []).map((row) => [row.date, row]));
     state.holidaysByMonthCache[monthKey] = mapped;
   } catch (_error) {
-    state.holidaysByMonthCache[monthKey] = new Map();
+    state.holidaysByMonthCache[monthKey] = null;
   }
 }
 
@@ -5126,7 +5126,7 @@ function getHolidayMeta(dateISO) {
     return getFallbackOfficialHolidayMap(normalizedDate.slice(0, 4)).get(normalizedDate) || null;
   }
   const map = state.holidaysByMonthCache[monthKey];
-  if (!map) {
+  if (!(map instanceof Map)) {
     return getFallbackOfficialHolidayMap(normalizedDate.slice(0, 4)).get(normalizedDate) || null;
   }
   return map.get(normalizedDate) || getFallbackOfficialHolidayMap(normalizedDate.slice(0, 4)).get(normalizedDate) || null;
