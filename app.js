@@ -1983,6 +1983,8 @@ function upsertShiftTemplate({ code, name, departmentId = null, start, end, brea
 
   const effectiveStart = hasSplitIntervals ? normalizedIntervals[0].start : start;
   const effectiveEnd = hasSplitIntervals ? normalizedIntervals[normalizedIntervals.length - 1].end : end;
+  const backendStart = hasSplitIntervals ? normalizedIntervals[0].start : effectiveStart;
+  const backendEnd = hasSplitIntervals ? normalizedIntervals[0].end : effectiveEnd;
   const effectiveBreakMinutes = hasSplitIntervals
     ? Math.max(0, Math.round((calcShiftHours(effectiveStart, effectiveEnd, 0, true) - normalizedIntervals.reduce((sum, interval) => sum + calcShiftHours(interval.start, interval.end, 0, true), 0)) * 60))
     : Math.max(0, Number(breakMinutes) || 0);
@@ -2051,9 +2053,9 @@ function upsertShiftTemplate({ code, name, departmentId = null, start, end, brea
     void saveDepartmentShiftBackend(effectiveDepartmentId, {
       code: normalizedCode,
       name: backendName,
-      start_time: effectiveStart,
-      end_time: effectiveEnd,
-      break_minutes: effectiveBreakMinutes,
+      start_time: backendStart,
+      end_time: backendEnd,
+      break_minutes: hasSplitIntervals ? 0 : effectiveBreakMinutes,
       break_included: effectiveBreakIncluded,
     });
     void loadDepartmentShifts(effectiveDepartmentId, { force: true });
@@ -2061,11 +2063,11 @@ function upsertShiftTemplate({ code, name, departmentId = null, start, end, brea
     void saveShiftTemplateBackend({
       code: normalizedCode,
       name: backendName,
-      start: effectiveStart,
-      end: effectiveEnd,
+      start: backendStart,
+      end: backendEnd,
       hours,
       department_id: effectiveDepartmentId,
-      break_minutes: effectiveBreakMinutes,
+      break_minutes: hasSplitIntervals ? 0 : effectiveBreakMinutes,
       break_included: effectiveBreakIncluded,
     });
   }
@@ -7506,8 +7508,10 @@ function mergeShiftTemplates(backendShiftTemplates) {
 
     const decodedName = decodeShiftNameWithIntervals(String(shift.name || code));
     const parsedIntervals = normalizeSplitIntervals(shift.intervals || decodedName.intervals);
-    const parsedStart = String(shift.start || shift.start_time || '');
-    const parsedEnd = String(shift.end || shift.end_time || '');
+    const rawStart = String(shift.start || shift.start_time || '');
+    const rawEnd = String(shift.end || shift.end_time || '');
+    const parsedStart = parsedIntervals.length >= 2 ? parsedIntervals[0].start : rawStart;
+    const parsedEnd = parsedIntervals.length >= 2 ? parsedIntervals[parsedIntervals.length - 1].end : rawEnd;
 
     merged.push({
       id: shift.id || null,
