@@ -5099,14 +5099,44 @@ function getEmployeeScheduleId(employee) {
   const employeeDepartmentId = cleanStoredValue(employee?.departmentId || employee?.department_id) || null;
   const employeeDepartment = String(employee?.department || '').trim();
 
+  const scheduleMatchesEmployeeDepartment = (schedule) => {
+    if (!schedule) {
+      return false;
+    }
+
+    const scheduleDepartmentId = cleanStoredValue(schedule.departmentId || schedule.department_id) || null;
+    if (employeeDepartmentId && scheduleDepartmentId && scheduleDepartmentId === employeeDepartmentId) {
+      return true;
+    }
+
+    const employeeDepartmentName = employeeDepartmentId
+      ? String(state.departments.find((item) => cleanStoredValue(item.id) === employeeDepartmentId)?.name || '').trim()
+      : employeeDepartment;
+
+    if (!employeeDepartmentName) {
+      return false;
+    }
+
+    return String(schedule.department || '').trim() === employeeDepartmentName;
+  };
+
+  const selectedSchedules = state.schedules.filter((schedule) => state.selectedScheduleIds.includes(schedule.id));
+
+  if (employeeDepartmentId || employeeDepartment) {
+    const scopedPool = selectedSchedules.length ? selectedSchedules : state.schedules;
+    const matchingSchedule = scopedPool.find((schedule) => scheduleMatchesEmployeeDepartment(schedule));
+    if (matchingSchedule) {
+      return matchingSchedule.id;
+    }
+  }
+
   if (state.activeScheduleId) {
     const active = state.schedules.find((schedule) => schedule.id === state.activeScheduleId);
-    if (active) {
+    if (active && (!employeeDepartmentId && !employeeDepartment || scheduleMatchesEmployeeDepartment(active))) {
       return active.id;
     }
   }
 
-  const selectedSchedules = state.schedules.filter((schedule) => state.selectedScheduleIds.includes(schedule.id));
   if (!selectedSchedules.length) {
     return null;
   }
@@ -5818,7 +5848,7 @@ function calculateEmployeeTotals({ employee, summary, year, month, monthNormHour
     normHours: monthNormHours,
     deviation,
     sirvNormHours: sirvTotals.normHours,
-    sirvWorkedHours: sirvTotals.convertedWorkedHours,
+    sirvWorkedHours: sirvTotals.workedHours,
     overtimeHours,
     holidayWorkedHours: summary.holidayWorkedHours,
     weekendWorkedHours: reportedWeekendWorkedHours,
@@ -6200,6 +6230,7 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
   const months = getPeriodMonths(endMonth, periodMonths);
   const totals = {
     normHours: 0,
+    workedHours: 0,
     convertedWorkedHours: 0,
     overtimeHours: 0
   };
@@ -6229,6 +6260,7 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
       }
       const workedHours = getWorkShiftHours(shift);
       const nightHours = getShiftNightHours(shift, { isYoungWorker: Boolean(employee?.youngWorker) });
+      totals.workedHours += workedHours;
       totals.convertedWorkedHours += workedHours + nightHours * (NIGHT_HOURS_COEFFICIENT - 1);
     }
   });
