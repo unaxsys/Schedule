@@ -3475,6 +3475,7 @@ function renderShiftList() {
 
   visibleShifts.forEach((shift) => {
     const row = document.createElement('tr');
+    row.dataset.shiftId = cleanStoredValue(shift.id) || '';
     const departmentLabel = shift.departmentId ? (departmentNameById.get(shift.departmentId) || 'Неизвестен отдел') : 'Global';
     const shiftHoursCell = renderShiftHoursCellContent(shift);
     row.innerHTML = `<td>${shift.code}</td><td>${shift.name}</td><td>${departmentLabel}</td><td>${shift.start || '-'}</td><td>${shift.end || '-'}</td><td>${shiftHoursCell}</td><td>${shift.type}</td>`;
@@ -3499,7 +3500,7 @@ function renderShiftList() {
       removeBtn.textContent = 'Изтрий';
       removeBtn.className = 'btn-delete';
       removeBtn.addEventListener('click', async () => {
-        state.shiftTemplates = state.shiftTemplates.filter((entry) => !(entry.code === shift.code && cleanStoredValue(entry.departmentId) === cleanStoredValue(shift.departmentId)));
+        state.shiftTemplates = state.shiftTemplates.filter((entry) => cleanStoredValue(entry.id) !== cleanStoredValue(shift.id));
         saveShiftTemplates();
         await deleteShiftTemplateBackend(shift.code, shift.departmentId || null);
         replaceDeletedShiftCodes(shift.code);
@@ -3524,6 +3525,7 @@ function openShiftEditModal(shift) {
   }
 
   state.shiftEditContext = {
+    id: cleanStoredValue(shift.id) || null,
     code: shift.code,
     departmentId: cleanStoredValue(shift.departmentId) || null,
   };
@@ -7622,7 +7624,7 @@ function mergeShiftTemplates(backendShiftTemplates) {
   backendShiftTemplates.forEach((shift) => {
     const code = String(shift.code || '').trim().toUpperCase();
     const departmentId = cleanStoredValue(shift.departmentId || shift.department_id) || null;
-    if (!code || merged.some((existing) => existing.code === code && cleanStoredValue(existing.departmentId) === (departmentId || ''))) {
+    if (!code) {
       return;
     }
 
