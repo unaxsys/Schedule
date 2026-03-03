@@ -232,6 +232,77 @@ function createHolidayService(pool) {
     return pool.query('DELETE FROM tenant_holidays WHERE tenant_id = $1 AND date = $2::date', [tenantId, date]);
   }
 
+
+  async function listPublicHolidays(fromISO, toISO) {
+    const from = normalizeDateOnly(fromISO);
+    const to = normalizeDateOnly(toISO);
+    if (!from || !to || from > to) return [];
+
+    const byDate = new Map();
+    const fallbackOfficial = getBgOfficialHolidayMapForRange(from, to);
+    for (const [date, row] of fallbackOfficial.entries()) {
+      byDate.set(date, { date, name: row.name, isOfficial: true, source: row.source || 'BG official' });
+    }
+
+    const table = await publicTableName();
+    if (table) {
+      const rows = await pool.query(
+        `SELECT date::text AS date, name, COALESCE(is_official, TRUE) AS is_official, source
+         FROM ${table}
+         WHERE date BETWEEN $1::date AND $2::date
+         ORDER BY date`,
+        [from, to]
+      );
+      for (const row of rows.rows) {
+        byDate.set(row.date, {
+          date: row.date,
+          name: row.name,
+          isOfficial: Boolean(row.is_official ?? true),
+          source: row.source || 'BG official',
+        });
+      }
+    }
+
+    return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  async function upsertPublicHoliday({ date, name, source = 'platform' }) {
+    const normalizedDate = normalizeDateOnly(date);
+    if (!normalizedDate || !String(name || '').trim()) {
+      throw new Error('date and name are required');
+    }
+    const table = await publicTableName();
+    if (!table) {
+      throw new Error('public holidays table is missing');
+    }
+
+    const result = await pool.query(
+      `INSERT INTO ${table}(date, name, is_official, source)
+       VALUES ($1::date, $2, TRUE, $3)
+       ON CONFLICT (date) DO UPDATE
+       SET name = EXCLUDED.name,
+           is_official = EXCLUDED.is_official,
+           source = COALESCE(EXCLUDED.source, ${table}.source)
+       RETURNING date::text AS date, name, COALESCE(is_official, TRUE) AS "isOfficial", source`,
+      [normalizedDate, String(name).trim(), String(source || '').trim() || 'platform']
+    );
+
+    return result.rows[0] || null;
+  }
+
+  async function deletePublicHoliday(date) {
+    const normalizedDate = normalizeDateOnly(date);
+    if (!normalizedDate) {
+      throw new Error('invalid date');
+    }
+    const table = await publicTableName();
+    if (!table) {
+      return { rowCount: 0 };
+    }
+
+    return pool.query(`DELETE FROM ${table} WHERE date = $1::date`, [normalizedDate]);
+  }
+
   async function seedYear(year) {
     const table = await publicTableName();
     if (!table) return 0;
@@ -250,7 +321,7 @@ function createHolidayService(pool) {
     return rows.length;
   }
 
-  return { isHoliday, listCombined, upsertTenantHoliday, deleteTenantHoliday, seedYear };
+  return { isHoliday, listCombined, upsertTenantHoliday, deleteTenantHoliday, listPublicHolidays, upsertPublicHoliday, deletePublicHoliday, seedYear };
 }
 
 module.exports = { createHolidayService, getBgHolidaySeedRows };
