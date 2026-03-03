@@ -4994,7 +4994,7 @@ function monthBounds(monthKey) {
   return { from: `${year}-${String(month).padStart(2, '0')}-01`, to: `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}` };
 }
 
-async function loadHolidayRangeForMonth(monthKey) {
+async function loadHolidayRangeForMonth(monthKey, options = {}) {
   const bounds = monthBounds(monthKey);
   if (!bounds) {
     return;
@@ -5002,7 +5002,8 @@ async function loadHolidayRangeForMonth(monthKey) {
   if (!state.holidaysByMonthCache || typeof state.holidaysByMonthCache !== 'object') {
     state.holidaysByMonthCache = {};
   }
-  if (state.holidaysByMonthCache[monthKey] instanceof Map) {
+  const forceReload = Boolean(options.force);
+  if (!forceReload && state.holidaysByMonthCache[monthKey] instanceof Map) {
     return;
   }
   try {
@@ -6246,7 +6247,7 @@ async function loadSchedulesForMonth() {
   }
 
   state.selectedScheduleIds = selectedScheduleIds;
-  await loadHolidayRangeForMonth(monthKey);
+  await loadHolidayRangeForMonth(monthKey, { force: true });
 
   if (!state.activeScheduleId || !validIds.has(state.activeScheduleId) || !state.selectedScheduleIds.includes(state.activeScheduleId)) {
     state.activeScheduleId = state.selectedScheduleIds[0] || null;
