@@ -561,6 +561,7 @@
       let apiBaseUrl = localStorage.getItem('apiBaseUrl') || `${window.location.protocol}//${window.location.hostname}:4000`;
       let previousTenantSnapshot = new Map();
       let tenantNameById = new Map();
+      let selectedHolidayTenantId = '';
       apiUrlInput.value = apiBaseUrl;
 
       function setStatus(text, ok = true) {
@@ -817,6 +818,153 @@
           .join('');
 
         previousTenantSnapshot = nextSnapshot;
+        renderHolidayTenantOptions();
+      }
+
+      function renderHolidayTenantOptions() {
+        if (!holidaysTenantInput) {
+          return;
+        }
+        const options = Array.from(tenantNameById.entries())
+          .map(([id, name]) => `<option value="${escapeHtml(id)}">${escapeHtml(name)} (${escapeHtml(id)})</option>`)
+          .join('');
+        holidaysTenantInput.innerHTML = `<option value="">Избери фирма…</option>${options}`;
+        if (selectedHolidayTenantId && tenantNameById.has(selectedHolidayTenantId)) {
+          holidaysTenantInput.value = selectedHolidayTenantId;
+        }
+      }
+
+      function holidayTypeLabel(type) {
+        const map = {
+          official: 'Официален празник',
+          company: 'Фирмен почивен ден',
+          override_working: 'Работен override',
+        };
+        return map[type] || type || '—';
+      }
+
+      function renderHolidayRows(rows = []) {
+        if (!holidaysRowsEl) {
+          return;
+        }
+        if (!rows.length) {
+          holidaysRowsEl.innerHTML = '<tr><td colspan="4">Няма дни за тази година.</td></tr>';
+          return;
+        }
+
+        holidaysRowsEl.innerHTML = rows
+          .map((row) => {
+            const rowType = String(row.type || 'none');
+            const canDelete = rowType !== 'official';
+            return `
+              <tr>
+                <td>${escapeHtml(row.date || '—')}</td>
+                <td>${escapeHtml(row.name || '—')}</td>
+                <td><span class="sa-holiday-type sa-holiday-type--${escapeHtml(rowType)}">${escapeHtml(holidayTypeLabel(rowType))}</span></td>
+                <td>${canDelete ? `<button type="button" onclick="window.__saDeleteHoliday('${escapeHtml(row.date)}')">Изтрий</button>` : '🔒'}</td>
+              </tr>
+            `;
+          })
+          .join('');
+      }
+
+      async function loadTenantHolidays() {
+        if (!selectedHolidayTenantId) {
+          renderHolidayRows([]);
+          return;
+        }
+        const year = Number(holidaysYearInput?.value || new Date().getFullYear());
+        if (!Number.isInteger(year) || year < 2020 || year > 2100) {
+          setStatus('Невалидна година за празници.', false);
+          return;
+        }
+        const path = tenantScopedPath(`/api/holidays?year=${encodeURIComponent(String(year))}`, selectedHolidayTenantId);
+        const payload = await apiRequest(path);
+        renderHolidayRows(payload.holidays || []);
+      }
+
+      function holidayTypeLabel(type) {
+        const map = {
+          official: 'Официален празник',
+        };
+        return map[type] || 'Официален празник';
+      }
+
+      function renderHolidayRows(rows = []) {
+        if (!holidaysRowsEl) {
+          return;
+        }
+        if (!rows.length) {
+          holidaysRowsEl.innerHTML = '<tr><td colspan="5">Няма дни за тази година.</td></tr>';
+          return;
+        }
+
+        holidaysRowsEl.innerHTML = rows
+          .map((row) => {
+            const rowType = String(row.isOfficial ? 'official' : 'official');
+            return `
+              <tr>
+                <td>${escapeHtml(row.date || '—')}</td>
+                <td>${escapeHtml(row.name || '—')}</td>
+                <td><span class="sa-holiday-type sa-holiday-type--official">${escapeHtml(holidayTypeLabel(rowType))}</span></td>
+                <td>${escapeHtml(row.source || '—')}</td>
+                <td><button type="button" onclick="window.__saDeleteHoliday('${escapeHtml(row.date)}')">Изтрий</button></td>
+              </tr>
+            `;
+          })
+          .join('');
+      }
+
+      async function loadPublicHolidays() {
+        const year = Number(holidaysYearInput?.value || new Date().getFullYear());
+        if (!Number.isInteger(year) || year < 2020 || year > 2100) {
+          setStatus('Невалидна година за празници.', false);
+          return;
+        }
+        const payload = await apiRequest(`/api/platform/super-admin/public-holidays?year=${encodeURIComponent(String(year))}`);
+        renderHolidayRows(payload.holidays || []);
+      }
+
+      function holidayTypeLabel(type) {
+        const map = {
+          official: 'Официален празник',
+        };
+        return map[type] || 'Официален празник';
+      }
+
+      function renderHolidayRows(rows = []) {
+        if (!holidaysRowsEl) {
+          return;
+        }
+        if (!rows.length) {
+          holidaysRowsEl.innerHTML = '<tr><td colspan="5">Няма дни за тази година.</td></tr>';
+          return;
+        }
+
+        holidaysRowsEl.innerHTML = rows
+          .map((row) => {
+            const rowType = String(row.isOfficial ? 'official' : 'official');
+            return `
+              <tr>
+                <td>${escapeHtml(row.date || '—')}</td>
+                <td>${escapeHtml(row.name || '—')}</td>
+                <td><span class="sa-holiday-type sa-holiday-type--official">${escapeHtml(holidayTypeLabel(rowType))}</span></td>
+                <td>${escapeHtml(row.source || '—')}</td>
+                <td><button type="button" onclick="window.__saDeleteHoliday('${escapeHtml(row.date)}')">Изтрий</button></td>
+              </tr>
+            `;
+          })
+          .join('');
+      }
+
+      async function loadPublicHolidays() {
+        const year = Number(holidaysYearInput?.value || new Date().getFullYear());
+        if (!Number.isInteger(year) || year < 2020 || year > 2100) {
+          setStatus('Невалидна година за празници.', false);
+          return;
+        }
+        const payload = await apiRequest(`/api/platform/super-admin/public-holidays?year=${encodeURIComponent(String(year))}`);
+        renderHolidayRows(payload.holidays || []);
       }
 
       function holidayTypeLabel(type) {
