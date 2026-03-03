@@ -4996,7 +4996,7 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
     snapshotEntriesByDay.push(entrySnapshot || {});
 
     row.appendChild(cell);
-    collectSummary(summary, employee, effectiveShift, holiday, weekend, inEmployment, entrySnapshot);
+    collectSummary(summary, employee, effectiveShift, holiday, weekend, inEmployment, entrySnapshot, dateISO);
     if (inEmployment && isNormWorkingDay({ dateISO, holiday, weekend })) {
       summary.monthNormHours += 8;
     }
@@ -5520,7 +5520,78 @@ function getWorkShiftHours(shift) {
   return getStoredShiftHours(shift);
 }
 
-function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmployment = true, snapshot = null) {
+function calculateHolidayAndWeekendHoursByShift(shift, dateISO) {
+  if (!shift || shift.type !== 'work' || !dateISO) {
+    return { holidayHours: 0, weekendHours: 0 };
+  }
+
+  const parseMinutes = (timeValue) => {
+    const [hours, minutes] = String(timeValue || '').split(':').map(Number);
+    if ([hours, minutes].some((value) => Number.isNaN(value))) {
+      return NaN;
+    }
+    return (hours * 60) + minutes;
+  };
+
+  const startMinutes = parseMinutes(shift.start);
+  const endRawMinutes = parseMinutes(shift.end);
+  if (!Number.isFinite(startMinutes) || !Number.isFinite(endRawMinutes)) {
+    return { holidayHours: 0, weekendHours: 0 };
+  }
+
+  let endMinutes = endRawMinutes;
+  if (endMinutes <= startMinutes) {
+    endMinutes += 24 * 60;
+  }
+
+  const durationMinutes = Math.max(0, endMinutes - startMinutes);
+  const breakMinutes = Math.max(0, Number(shift.break_minutes ?? shift.breakMinutes ?? 0) || 0);
+  const workedMinutes = Boolean(shift.break_included ?? shift.breakIncluded)
+    ? durationMinutes
+    : Math.max(durationMinutes - breakMinutes, 0);
+
+  if (workedMinutes <= 0 || durationMinutes <= 0) {
+    return { holidayHours: 0, weekendHours: 0 };
+  }
+
+  const firstDayMinutes = Math.min(endMinutes, 24 * 60) - startMinutes;
+  const secondDayMinutes = Math.max(0, endMinutes - (24 * 60));
+  const segments = [
+    { dateISO, durationMinutes: firstDayMinutes },
+    ...(secondDayMinutes > 0 ? [{ dateISO: addDaysToDateKey(dateISO, 1), durationMinutes: secondDayMinutes }] : [])
+  ].filter((segment) => segment.durationMinutes > 0);
+
+  let distributedWorkedMinutes = 0;
+  const weightedSegments = segments.map((segment) => {
+    const workedShare = Math.floor((workedMinutes * segment.durationMinutes) / durationMinutes);
+    distributedWorkedMinutes += workedShare;
+    return { ...segment, workedShare };
+  });
+
+  if (weightedSegments.length && distributedWorkedMinutes < workedMinutes) {
+    weightedSegments[weightedSegments.length - 1].workedShare += (workedMinutes - distributedWorkedMinutes);
+  }
+
+  let holidayMinutes = 0;
+  let weekendMinutes = 0;
+  weightedSegments.forEach((segment) => {
+    const date = new Date(`${segment.dateISO}T00:00:00`);
+    const isHolidaySegment = Boolean(getHolidayMeta(segment.dateISO)?.isHoliday);
+    if (isHolidaySegment) {
+      holidayMinutes += segment.workedShare;
+    }
+    if (isWeekend(date)) {
+      weekendMinutes += segment.workedShare;
+    }
+  });
+
+  return {
+    holidayHours: holidayMinutes / 60,
+    weekendHours: weekendMinutes / 60
+  };
+}
+
+function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmployment = true, snapshot = null, dateISO = '') {
   if (!inEmployment) {
     return;
   }
@@ -5557,17 +5628,15 @@ function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmploy
   if (shift.type === 'work') {
     const shiftHours = getWorkShiftHours(shift);
     const nightHours = calcNightHours(shift.start, shift.end, { isYoungWorker: Boolean(employee?.youngWorker) });
+    const specialHours = calculateHolidayAndWeekendHoursByShift(shift, dateISO);
 
     summary.workedDays += 1;
     summary.workedHours += shiftHours;
     summary.nightWorkedHours += nightHours;
     summary.nightConvertedHours += nightHours * NIGHT_HOURS_COEFFICIENT;
+    summary.holidayWorkedHours += specialHours.holidayHours;
+    summary.weekendWorkedHours += specialHours.weekendHours;
 
-    if (holiday) {
-      summary.holidayWorkedHours += shiftHours;
-    } else if (weekend) {
-      summary.weekendWorkedHours += shiftHours;
-    }
   }
 
   if (shift.type === 'vacation') {
