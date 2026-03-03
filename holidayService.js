@@ -141,6 +141,10 @@ function createHolidayService(pool) {
     return String(error?.code || '') === '42703' || String(error?.message || '').toLowerCase().includes('column');
   }
 
+  function isOnConflictTargetError(error) {
+    return String(error?.code || '') === '42P10';
+  }
+
   async function isHoliday(tenantId, dateISO) {
     const date = normalizeDateOnly(dateISO);
     if (!date) return { isHoliday: false, type: 'none' };
@@ -287,7 +291,10 @@ function createHolidayService(pool) {
 
   async function upsertPublicHoliday({ date, name, source = 'platform' }) {
     const normalizedDate = normalizeDateOnly(date);
-    if (!normalizedDate || !String(name || '').trim()) {
+    const normalizedName = String(name || '').trim();
+    const normalizedSource = String(source || '').trim() || 'platform';
+
+    if (!normalizedDate || !normalizedName) {
       throw new Error('date and name are required');
     }
     const table = await publicTableName();
@@ -295,37 +302,96 @@ function createHolidayService(pool) {
       throw new Error('public holidays table is missing');
     }
 
-    let result;
-    try {
-      result = await pool.query(
+    const upsertWithConflict = async () => pool.query(
+      `INSERT INTO ${table}(date, name, is_official, source)
+       VALUES ($1::date, $2, TRUE, $3)
+       ON CONFLICT (date) DO UPDATE
+       SET name = EXCLUDED.name,
+           is_official = EXCLUDED.is_official,
+           source = COALESCE(EXCLUDED.source, ${table}.source)
+       RETURNING date::text AS date, name, COALESCE(is_official, TRUE) AS "isOfficial", source`,
+      [normalizedDate, normalizedName, normalizedSource]
+    );
+
+    const upsertLegacyWithConflict = async () => pool.query(
+      `INSERT INTO ${table}(date, name)
+       VALUES ($1::date, $2)
+       ON CONFLICT (date) DO UPDATE
+       SET name = EXCLUDED.name
+       RETURNING date::text AS date, name`,
+      [normalizedDate, normalizedName]
+    );
+
+    const updateThenInsertModern = async () => {
+      const updated = await pool.query(
+        `UPDATE ${table}
+         SET name = $2,
+             is_official = TRUE,
+             source = COALESCE($3, source)
+         WHERE date = $1::date
+         RETURNING date::text AS date, name, COALESCE(is_official, TRUE) AS "isOfficial", source`,
+        [normalizedDate, normalizedName, normalizedSource]
+      );
+      if (updated.rowCount) return updated;
+      return pool.query(
         `INSERT INTO ${table}(date, name, is_official, source)
          VALUES ($1::date, $2, TRUE, $3)
-         ON CONFLICT (date) DO UPDATE
-         SET name = EXCLUDED.name,
-             is_official = EXCLUDED.is_official,
-             source = COALESCE(EXCLUDED.source, ${table}.source)
          RETURNING date::text AS date, name, COALESCE(is_official, TRUE) AS "isOfficial", source`,
-        [normalizedDate, String(name).trim(), String(source || '').trim() || 'platform']
+        [normalizedDate, normalizedName, normalizedSource]
       );
-    } catch (error) {
-      if (!isMissingColumnError(error)) {
-        throw error;
-      }
-      result = await pool.query(
+    };
+
+    const updateThenInsertLegacy = async () => {
+      const updated = await pool.query(
+        `UPDATE ${table}
+         SET name = $2
+         WHERE date = $1::date
+         RETURNING date::text AS date, name`,
+        [normalizedDate, normalizedName]
+      );
+      if (updated.rowCount) return updated;
+      return pool.query(
         `INSERT INTO ${table}(date, name)
          VALUES ($1::date, $2)
-         ON CONFLICT (date) DO UPDATE
-         SET name = EXCLUDED.name
          RETURNING date::text AS date, name`,
-        [normalizedDate, String(name).trim()]
+        [normalizedDate, normalizedName]
       );
+    };
+
+    let result;
+    try {
+      result = await upsertWithConflict();
+    } catch (error) {
+      if (isMissingColumnError(error)) {
+        try {
+          result = await upsertLegacyWithConflict();
+        } catch (legacyError) {
+          if (isOnConflictTargetError(legacyError)) {
+            result = await updateThenInsertLegacy();
+          } else {
+            throw legacyError;
+          }
+        }
+      } else if (isOnConflictTargetError(error)) {
+        try {
+          result = await updateThenInsertModern();
+        } catch (updateError) {
+          if (isMissingColumnError(updateError)) {
+            result = await updateThenInsertLegacy();
+          } else {
+            throw updateError;
+          }
+        }
+      } else {
+        throw error;
+      }
     }
 
     return {
       date: result.rows[0]?.date || normalizedDate,
-      name: result.rows[0]?.name || String(name).trim(),
+      name: result.rows[0]?.name || normalizedName,
       isOfficial: true,
-      source: result.rows[0]?.source || String(source || '').trim() || 'platform',
+      source: result.rows[0]?.source || normalizedSource,
     };
   }
 
