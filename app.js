@@ -2023,70 +2023,23 @@ async function upsertShiftTemplate({ code, name, departmentId = null, start, end
 
   const payloadName = normalizedCode === 'R' ? 'Редовна' : normalizedName;
   const backendName = encodeShiftNameWithIntervals(payloadName, normalizedIntervals);
-
-  if (effectiveDepartmentId) {
-    const backendResult = await saveDepartmentShiftBackend(effectiveDepartmentId, {
-      code: normalizedCode,
-      name: backendName,
-      start_time: backendStart,
-      end_time: backendEnd,
-      break_minutes: effectiveBreakMinutes,
-      break_included: effectiveBreakIncluded,
-    });
-    if (!backendResult.ok) {
-      return backendResult;
-    }
-  } else {
-    const backendResult = await saveShiftTemplateBackend({
-      code: normalizedCode,
-      name: backendName,
-      start: backendStart,
-      end: backendEnd,
-      hours,
-      department_id: effectiveDepartmentId,
-      break_minutes: effectiveBreakMinutes,
-      break_included: effectiveBreakIncluded,
-    });
-    if (!backendResult.ok) {
-      return backendResult;
-    }
-  }
-
-  const existingShiftIndex = state.shiftTemplates.findIndex((shift) => (
-    shift.code === normalizedCode && cleanStoredValue(shift.departmentId) === (effectiveDepartmentId || '')
-  ));
-
-  const nextShift = {
+  const backendResult = await saveDepartmentShiftBackend(effectiveDepartmentId, {
     code: normalizedCode,
-    label: toCyrillicShiftLabel(normalizedCode),
-    name: payloadName,
-    departmentId: effectiveDepartmentId,
-    type: 'work',
-    start: effectiveStart,
-    end: effectiveEnd,
-    hours,
-    locked: normalizedCode === 'R',
+    name: backendName,
+    start_time: backendStart,
+    end_time: backendEnd,
     break_minutes: effectiveBreakMinutes,
     break_included: effectiveBreakIncluded,
-    intervals: normalizedIntervals,
-  };
+    break_paid: effectiveBreakIncluded,
+    is_split: hasSplitIntervals,
+  });
 
-  if (existingShiftIndex >= 0) {
-    const existingShift = state.shiftTemplates[existingShiftIndex];
-    state.shiftTemplates[existingShiftIndex] = {
-      ...existingShift,
-      ...nextShift,
-      locked: normalizedCode === 'R' ? true : Boolean(existingShift.locked),
-    };
-  } else {
-    state.shiftTemplates.push(nextShift);
+  if (!backendResult.ok) {
+    return backendResult;
   }
 
-  saveShiftTemplates();
-  if (effectiveDepartmentId) {
-    await loadDepartmentShifts(effectiveDepartmentId, { force: true });
-  }
-
+  await loadFromBackend({ silentStatus: true, skipReconnectSchedule: true });
+  await loadDepartmentShifts(state.lastSelectedDepartment || DEFAULT_DEPARTMENT, { force: true, silent: true });
   return { ok: true };
 }
 
@@ -7839,11 +7792,16 @@ function orthodoxEaster(year) {
 
 async function saveDepartmentShiftBackend(departmentId, payload) {
   if (!state.backendAvailable) return { ok: true, localOnly: true };
+  const normalizedDepartmentId = cleanStoredValue(departmentId) || null;
+  const routeDepartmentId = normalizedDepartmentId || 'global';
   try {
-    const response = await apiFetch(`/api/departments/${encodeURIComponent(departmentId)}/shifts`, {
+    const response = await apiFetch(`/api/departments/${encodeURIComponent(routeDepartmentId)}/shifts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        ...payload,
+        department_id: normalizedDepartmentId,
+      })
     });
     const responsePayload = await response.json().catch(() => ({}));
     if (!response.ok) {
