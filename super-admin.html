@@ -309,8 +309,41 @@
         color: #1e3a8a;
       }
 
+      .sa-holiday-grid {
+        display: grid;
+        grid-template-columns: minmax(260px, 360px) 1fr;
+        gap: 1rem;
+      }
+
+      .sa-holiday-type {
+        font-size: 0.8rem;
+        font-weight: 700;
+        border-radius: 999px;
+        padding: 0.2rem 0.55rem;
+        display: inline-block;
+      }
+
+      .sa-holiday-type--official {
+        background: #dbeafe;
+        color: #1e40af;
+      }
+
+      .sa-holiday-type--company {
+        background: #dcfce7;
+        color: #166534;
+      }
+
+      .sa-holiday-type--override_working {
+        background: #fef3c7;
+        color: #92400e;
+      }
+
       @media (max-width: 950px) {
         .sa-grid-2 {
+          grid-template-columns: 1fr;
+        }
+
+        .sa-holiday-grid {
           grid-template-columns: 1fr;
         }
       }
@@ -322,6 +355,7 @@
         <nav class="sa-nav" aria-label="Навигация">
           <button id="saTabStatsBtn" class="sa-nav-btn is-active" type="button" data-tab="stats">Статистика</button>
           <button id="saTabLogicBtn" class="sa-nav-btn" type="button" data-tab="logic">Логика за изчисление</button>
+          <button id="saTabHolidaysBtn" class="sa-nav-btn" type="button" data-tab="holidays">Празници и почивни дни</button>
         </nav>
       </section>
 
@@ -428,6 +462,56 @@
           </div>
         </section>
       </section>
+
+      <section id="saHolidaysTab" class="sa-tab-panel" hidden>
+        <section class="panel">
+          <h3>Празници и почивни дни по фирма</h3>
+          <p>Избери фирма и управлявай фирмените празници/почивни дни. Промените се отразяват в графиците автоматично чрез holiday API.</p>
+          <div class="sa-holiday-grid">
+            <form id="saHolidayForm" class="employee-form">
+              <label>
+                Фирма
+                <select id="saHolidayTenant" required>
+                  <option value="">Избери фирма…</option>
+                </select>
+              </label>
+              <label>Година<input id="saHolidayYear" type="number" min="2020" max="2100" value="2026" /></label>
+              <button id="saHolidayLoadBtn" type="button">Зареди за годината</button>
+              <hr />
+              <label>Дата<input id="saHolidayDate" type="date" required /></label>
+              <label>Име<input id="saHolidayName" type="text" placeholder="напр. Фирмен празник" required /></label>
+              <label>
+                Тип
+                <select id="saHolidayType">
+                  <option value="company">Почивен ден (фирмен)</option>
+                  <option value="override_working">Работен ден (override)</option>
+                </select>
+              </label>
+              <label>Бележка (по избор)<input id="saHolidayNote" type="text" placeholder="Бележка" /></label>
+              <button type="submit">Запази деня</button>
+            </form>
+
+            <div>
+              <h4>Списък за избраната година</h4>
+              <div class="sa-table-wrap">
+                <table class="sa-table">
+                  <thead>
+                    <tr>
+                      <th>Дата</th>
+                      <th>Име</th>
+                      <th>Тип</th>
+                      <th>Действия</th>
+                    </tr>
+                  </thead>
+                  <tbody id="saHolidayRows">
+                    <tr><td colspan="4">Няма заредени данни.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
     </main>
 
     <script>
@@ -443,8 +527,10 @@
       const statusEl = document.getElementById('saStatus');
       const tabStatsBtn = document.getElementById('saTabStatsBtn');
       const tabLogicBtn = document.getElementById('saTabLogicBtn');
+      const tabHolidaysBtn = document.getElementById('saTabHolidaysBtn');
       const statsTab = document.getElementById('saStatsTab');
       const logicTab = document.getElementById('saLogicTab');
+      const holidaysTab = document.getElementById('saHolidaysTab');
       const logicForm = document.getElementById('saLogicForm');
       const logicModeInput = document.getElementById('saLogicMode');
       const fixedWeeklyPatternInput = document.getElementById('saFixedWeeklyPattern');
@@ -455,12 +541,18 @@
       const longShiftRotationsInput = document.getElementById('saLongShiftRotations');
       const logicSummaryEl = document.getElementById('saLogicSummary');
       const logicFormulaEl = document.getElementById('saLogicFormula');
+      const holidaysTenantInput = document.getElementById('saHolidayTenant');
+      const holidaysYearInput = document.getElementById('saHolidayYear');
+      const holidaysLoadBtn = document.getElementById('saHolidayLoadBtn');
+      const holidaysForm = document.getElementById('saHolidayForm');
+      const holidaysRowsEl = document.getElementById('saHolidayRows');
 
       const REFRESH_EVERY_MS = 5000;
       let refreshTimer = null;
       let apiBaseUrl = localStorage.getItem('apiBaseUrl') || `${window.location.protocol}//${window.location.hostname}:4000`;
       let previousTenantSnapshot = new Map();
       let tenantNameById = new Map();
+      let selectedHolidayTenantId = '';
       apiUrlInput.value = apiBaseUrl;
 
       function setStatus(text, ok = true) {
@@ -480,10 +572,21 @@
       }
       function switchTab(targetTab) {
         const statsActive = targetTab === 'stats';
+        const logicActive = targetTab === 'logic';
+        const holidaysActive = targetTab === 'holidays';
         statsTab.hidden = !statsActive;
-        logicTab.hidden = statsActive;
+        logicTab.hidden = !logicActive;
+        holidaysTab.hidden = !holidaysActive;
         tabStatsBtn.classList.toggle('is-active', statsActive);
-        tabLogicBtn.classList.toggle('is-active', !statsActive);
+        tabLogicBtn.classList.toggle('is-active', logicActive);
+        tabHolidaysBtn.classList.toggle('is-active', holidaysActive);
+      }
+
+      function tenantScopedPath(path, tenantId) {
+        const cleanPath = String(path || '');
+        if (!tenantId) return cleanPath;
+        const separator = cleanPath.includes('?') ? '&' : '?';
+        return `${cleanPath}${separator}tenantId=${encodeURIComponent(tenantId)}`;
       }
 
       function toPositiveNumber(value, fallback = 0) {
@@ -713,6 +816,69 @@
           .join('');
 
         previousTenantSnapshot = nextSnapshot;
+        renderHolidayTenantOptions();
+      }
+
+      function renderHolidayTenantOptions() {
+        if (!holidaysTenantInput) {
+          return;
+        }
+        const options = Array.from(tenantNameById.entries())
+          .map(([id, name]) => `<option value="${escapeHtml(id)}">${escapeHtml(name)} (${escapeHtml(id)})</option>`)
+          .join('');
+        holidaysTenantInput.innerHTML = `<option value="">Избери фирма…</option>${options}`;
+        if (selectedHolidayTenantId && tenantNameById.has(selectedHolidayTenantId)) {
+          holidaysTenantInput.value = selectedHolidayTenantId;
+        }
+      }
+
+      function holidayTypeLabel(type) {
+        const map = {
+          official: 'Официален празник',
+          company: 'Фирмен почивен ден',
+          override_working: 'Работен override',
+        };
+        return map[type] || type || '—';
+      }
+
+      function renderHolidayRows(rows = []) {
+        if (!holidaysRowsEl) {
+          return;
+        }
+        if (!rows.length) {
+          holidaysRowsEl.innerHTML = '<tr><td colspan="4">Няма дни за тази година.</td></tr>';
+          return;
+        }
+
+        holidaysRowsEl.innerHTML = rows
+          .map((row) => {
+            const rowType = String(row.type || 'none');
+            const canDelete = rowType !== 'official';
+            return `
+              <tr>
+                <td>${escapeHtml(row.date || '—')}</td>
+                <td>${escapeHtml(row.name || '—')}</td>
+                <td><span class="sa-holiday-type sa-holiday-type--${escapeHtml(rowType)}">${escapeHtml(holidayTypeLabel(rowType))}</span></td>
+                <td>${canDelete ? `<button type="button" onclick="window.__saDeleteHoliday('${escapeHtml(row.date)}')">Изтрий</button>` : '🔒'}</td>
+              </tr>
+            `;
+          })
+          .join('');
+      }
+
+      async function loadTenantHolidays() {
+        if (!selectedHolidayTenantId) {
+          renderHolidayRows([]);
+          return;
+        }
+        const year = Number(holidaysYearInput?.value || new Date().getFullYear());
+        if (!Number.isInteger(year) || year < 2020 || year > 2100) {
+          setStatus('Невалидна година за празници.', false);
+          return;
+        }
+        const path = tenantScopedPath(`/api/holidays?year=${encodeURIComponent(String(year))}`, selectedHolidayTenantId);
+        const payload = await apiRequest(path);
+        renderHolidayRows(payload.holidays || []);
       }
 
       function renderBubbles(row, hiddenKeys = new Set()) {
@@ -860,6 +1026,21 @@
         }
       };
 
+      window.__saDeleteHoliday = async (date) => {
+        try {
+          if (!selectedHolidayTenantId || !date) {
+            return;
+          }
+          await apiRequest(tenantScopedPath(`/api/holidays/${encodeURIComponent(date)}`, selectedHolidayTenantId), {
+            method: 'DELETE',
+          });
+          await loadTenantHolidays();
+          setStatus('Денят е изтрит успешно.');
+        } catch (error) {
+          setStatus(error.message, false);
+        }
+      };
+
       connectBtn.addEventListener('click', async () => {
         apiBaseUrl = apiUrlInput.value.trim().replace(/\/$/, '');
         localStorage.setItem('apiBaseUrl', apiBaseUrl);
@@ -873,7 +1054,50 @@
 
       tabStatsBtn.addEventListener('click', () => switchTab('stats'));
       tabLogicBtn.addEventListener('click', () => switchTab('logic'));
+      tabHolidaysBtn.addEventListener('click', () => switchTab('holidays'));
       logicForm.addEventListener('input', () => renderCalculationLogic());
+
+      holidaysTenantInput.addEventListener('change', async () => {
+        selectedHolidayTenantId = holidaysTenantInput.value;
+        await loadTenantHolidays();
+      });
+
+      holidaysLoadBtn.addEventListener('click', async () => {
+        try {
+          await loadTenantHolidays();
+          setStatus('Празниците са заредени.');
+        } catch (error) {
+          setStatus(error.message, false);
+        }
+      });
+
+      holidaysForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        try {
+          if (!selectedHolidayTenantId) {
+            throw new Error('Избери фирма.');
+          }
+          const date = document.getElementById('saHolidayDate').value;
+          const name = document.getElementById('saHolidayName').value.trim();
+          const type = document.getElementById('saHolidayType').value;
+          const note = document.getElementById('saHolidayNote').value.trim();
+          await apiRequest('/api/holidays', {
+            method: 'POST',
+            body: JSON.stringify({
+              tenantId: selectedHolidayTenantId,
+              date,
+              name,
+              note,
+              isCompanyDayOff: type === 'company',
+              isWorkingDayOverride: type === 'override_working',
+            }),
+          });
+          await loadTenantHolidays();
+          setStatus('Празничният/почивният ден е запазен.');
+        } catch (error) {
+          setStatus(error.message, false);
+        }
+      });
 
       tableForm.addEventListener('submit', async (event) => {
         event.preventDefault();
