@@ -3554,7 +3554,8 @@ app.get('/api/departments/:departmentId/shifts', requireAuth, requireTenantConte
         end_time,
         COALESCE(break_minutes, 0) AS break_minutes,
         COALESCE(break_included, FALSE) AS break_included,
-        hours
+        hours,
+        department_id
       FROM shift_templates
       WHERE (department_id = $1 OR department_id IS NULL)
       ${hasTenantId ? 'AND tenant_id = $2' : ''}
@@ -3568,7 +3569,7 @@ app.get('/api/departments/:departmentId/shifts', requireAuth, requireTenantConte
       values,
     });
     const result = await pool.query(queryText, values);
-    const visibleRows = filterVisibleShiftTemplates(result.rows);
+    const visibleRows = filterVisibleShiftTemplates(appendSystemShiftTemplates(result.rows));
     console.log('[GET /api/departments/:departmentId/shifts] codes:', visibleRows.map((row) => row.code));
     return res.json({ shifts: visibleRows });
   } catch (error) {
