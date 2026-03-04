@@ -66,7 +66,7 @@ const state = {
   scheduleEntrySnapshotsById: {},
   scheduleEntryValidationsById: {},
   scheduleShiftTemplatesById: {},
-  departmentShiftsCache: {},
+  shiftsByDept: {},
   schedules: [],
   selectedScheduleIds: [],
   activeScheduleId: null,
@@ -119,6 +119,12 @@ const DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS = 'all_by_departments';
 const API_FALLBACK_COOLDOWN_MS = 60 * 1000;
 const apiFallbackBlockedUntilByBase = new Map();
 const departmentShiftLoadPromises = new Map();
+
+function getDepartmentShiftCacheKey(departmentId) {
+  const tenantId = cleanStoredValue(state.selectedTenantId || state.currentUser?.active_tenant_id || state.currentUser?.tenant_id) || 'default';
+  const normalizedDepartmentId = cleanStoredValue(departmentId) || 'global';
+  return `${tenantId}::${normalizedDepartmentId}`;
+}
 
 // UI state: избрана смяна (код) за интерфейса / масово прилагане
 let selectedShiftCodeForUI = '';
@@ -963,7 +969,7 @@ function resetTenantScopedState({ clearLocalStorage = false } = {}) {
   state.scheduleEntriesById = {};
   state.scheduleEntrySnapshotsById = {};
   state.scheduleEntryValidationsById = {};
-  state.departmentShiftsCache = {};
+  state.shiftsByDept = {};
   state.schedules = [];
   state.selectedScheduleIds = [];
   state.activeScheduleId = null;
@@ -5193,9 +5199,9 @@ function renderEmployeeScheduleRow({ employee, year, monthIndex, month, totalDay
 
   const scheduleId = getEmployeeScheduleId(employee);
   const employeeDepartmentId = cleanStoredValue(employee.departmentId || employee.department_id) || null;
-  const hasDepartmentShiftCache = employeeDepartmentId && Array.isArray(state.departmentShiftsCache[employeeDepartmentId]);
+  const hasDepartmentShiftCache = employeeDepartmentId && Array.isArray(state.shiftsByDept[employeeDepartmentId]);
   const rawShiftTemplates = hasDepartmentShiftCache
-    ? state.departmentShiftsCache[employeeDepartmentId]
+    ? state.shiftsByDept[employeeDepartmentId]
     : (scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
       ? state.scheduleShiftTemplatesById[scheduleId]
       : state.shiftTemplates);
@@ -6123,9 +6129,9 @@ function getShiftByCode(code, options = {}) {
   if (employee) {
     const employeeDepartmentId = cleanStoredValue(employee.departmentId || employee.department_id) || null;
     const scheduleId = options?.scheduleId || getEmployeeScheduleId(employee);
-    const hasDepartmentShiftCache = employeeDepartmentId && Array.isArray(state.departmentShiftsCache[employeeDepartmentId]);
+    const hasDepartmentShiftCache = employeeDepartmentId && Array.isArray(state.shiftsByDept[employeeDepartmentId]);
     const rawShiftTemplates = hasDepartmentShiftCache
-      ? state.departmentShiftsCache[employeeDepartmentId]
+      ? state.shiftsByDept[employeeDepartmentId]
       : (scheduleId && Array.isArray(state.scheduleShiftTemplatesById[scheduleId])
         ? state.scheduleShiftTemplatesById[scheduleId]
         : state.shiftTemplates);
@@ -7826,12 +7832,13 @@ async function saveDepartmentShiftBackend(departmentId, payload) {
 
 async function loadDepartmentShifts(departmentId, options = {}) {
   if (!departmentId || !state.backendAvailable) return [];
-  if (!options.force && Array.isArray(state.departmentShiftsCache[departmentId])) {
-    return state.departmentShiftsCache[departmentId];
+  const cacheKey = getDepartmentShiftCacheKey(departmentId);
+  if (!options.force && Array.isArray(state.shiftsByDept[departmentId])) {
+    return state.shiftsByDept[departmentId];
   }
 
-  if (!options.force && departmentShiftLoadPromises.has(departmentId)) {
-    return departmentShiftLoadPromises.get(departmentId);
+  if (!options.force && departmentShiftLoadPromises.has(cacheKey)) {
+    return departmentShiftLoadPromises.get(cacheKey);
   }
 
   const loadPromise = (async () => {
@@ -7854,20 +7861,20 @@ async function loadDepartmentShifts(departmentId, options = {}) {
         break_included: Boolean(shift.break_included),
         locked: ['P', 'O', 'B', 'N', 'S', 'M', 'R'].includes(String(shift.code || '').toUpperCase())
       })) : [];
-      state.departmentShiftsCache[departmentId] = mergeShiftTemplates(mapped);
-      return state.departmentShiftsCache[departmentId];
+      state.shiftsByDept[departmentId] = mergeShiftTemplates(mapped);
+      return state.shiftsByDept[departmentId];
     } catch (error) {
       if (!options.silent) {
         setStatus(error.message || 'Неуспешно зареждане на departmental смени. Ползва се fallback.', false);
       }
       const fallbackShifts = state.shiftTemplates.filter((shift) => !cleanStoredValue(shift.departmentId) || cleanStoredValue(shift.departmentId) === cleanStoredValue(departmentId));
-      state.departmentShiftsCache[departmentId] = fallbackShifts;
+      state.shiftsByDept[departmentId] = fallbackShifts;
       return fallbackShifts;
     } finally {
-      departmentShiftLoadPromises.delete(departmentId);
+      departmentShiftLoadPromises.delete(cacheKey);
     }
   })();
 
-  departmentShiftLoadPromises.set(departmentId, loadPromise);
+  departmentShiftLoadPromises.set(cacheKey, loadPromise);
   return loadPromise;
 }
