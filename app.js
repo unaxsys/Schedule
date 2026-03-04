@@ -5810,14 +5810,18 @@ function calculateEmployeeTotals({ employee, summary, year, month, monthNormHour
     : Math.max(0, summary.workedHours - monthNormHours);
 
   const reportedWeekendWorkedHours = isSirvEmployee ? 0 : summary.weekendWorkedHours;
+  const reportedWorkedHours = isSirvEmployee ? 0 : summary.workedHours;
+  const reportedNormHours = isSirvEmployee ? 0 : monthNormHours;
+  const reportedSirvNormHours = isSirvEmployee ? sirvTotals.normHours : 0;
+  const reportedSirvWorkedHours = isSirvEmployee ? sirvTotals.workedHours : 0;
 
   return {
     workedDays: summary.workedDays,
-    workedHours: summary.workedHours,
-    normHours: monthNormHours,
+    workedHours: reportedWorkedHours,
+    normHours: reportedNormHours,
     deviation,
-    sirvNormHours: sirvTotals.normHours,
-    sirvWorkedHours: sirvTotals.workedHours,
+    sirvNormHours: reportedSirvNormHours,
+    sirvWorkedHours: reportedSirvWorkedHours,
     overtimeHours,
     holidayWorkedHours: summary.holidayWorkedHours,
     weekendWorkedHours: reportedWeekendWorkedHours,
