@@ -9,6 +9,16 @@ const MAX_SIRV_WEEKLY_HOURS = 56;
 const MAX_CONSECUTIVE_WORK_DAYS = 5;
 const DEFAULT_WORKDAY_MINUTES = 8 * 60;
 
+const NON_WORKING_ENTRY_CODES = new Set(['', 'P', 'O', 'B', 'R', 'OFF', 'REST', 'LEAVE']);
+
+function isRealWorkingEntryCode(shiftCode) {
+  const normalized = String(shiftCode || '').trim().toUpperCase();
+  if (!normalized) {
+    return false;
+  }
+  return !NON_WORKING_ENTRY_CODES.has(normalized);
+}
+
 function round2(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
@@ -350,7 +360,7 @@ function computeMonthlySummary({
         }
       }
 
-      if (shiftMinutes <= 0) {
+      if (shiftMinutes <= 0 || !isRealWorkingEntryCode(shiftCode)) {
         continue;
       }
 

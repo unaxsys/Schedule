@@ -42,7 +42,13 @@ const {
   finalizeSirvOvertimeAllocations,
   computeOvertimeMinutes,
 } = require('./schedule_calculations');
-const { computeShiftSnapshot, parseTimeToMinutes, normalizeShiftInterval, calcWorkMinutes } = require('./lib/shift-engine');
+const {
+  computeShiftSnapshot,
+  parseTimeToMinutes,
+  normalizeShiftInterval,
+  calcWorkMinutes,
+  isRealWorkingShiftCode,
+} = require('./lib/shift-engine');
 const {
   enumerateDates: enumerateLeaveDates,
   computeAdjustedNormMinutes,
@@ -184,7 +190,7 @@ function normalizeShiftCode(input) {
 function computeSystemShiftSnapshot(shiftCode, date, isHoliday = () => ({ isHoliday: false })) {
   const normalized = normalizeShiftCode(shiftCode);
 
-  if (['P', 'O', 'B'].includes(normalized)) {
+  if (['P', 'O', 'B', 'R'].includes(normalized)) {
     return {
       work_minutes: 0,
       work_minutes_total: 0,
@@ -417,9 +423,12 @@ function getSirvPeriodBounds(monthKey, periodMonths = 1) {
   return { periodStart, periodEnd: periodEndDate.toISOString().slice(0, 10) };
 }
 
-async function computeEntrySnapshot({ date, shift, isHoliday }) {
+async function computeEntrySnapshot({ date, shift, isHoliday, shiftCode = '' }) {
+  const resolvedShiftCode = normalizeShiftCode(shiftCode || shift?.code || '');
   const snapshot = computeShiftSnapshot({
     dateISO: date,
+    shiftCode: resolvedShiftCode,
+    isRealWorkingShift: isRealWorkingShiftCode(resolvedShiftCode),
     startTime: shift.start_time || shift.start,
     endTime: shift.end_time || shift.end,
     intervals: shift.intervals,
@@ -531,6 +540,7 @@ async function recomputeSnapshotsForExistingEntries({ tenantId, shiftTemplate })
     const snapshot = await computeEntrySnapshot({
       date: dateISO,
       shift: shiftTemplate,
+      shiftCode: shiftTemplate.code,
       isHoliday: holidayResolver,
     });
 
@@ -2912,6 +2922,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       snapshot = await computeEntrySnapshot({
         date: entryDate,
         shift: selectedShiftForSnapshot,
+        shiftCode: resolvedShiftCode,
         isHoliday: holidayResolver,
       });
     }
@@ -3428,7 +3439,7 @@ app.post('/api/schedules/:id/generate', requireAuth, requireTenantContext, async
         }
 
         const snapshot = shiftTemplate
-          ? await computeEntrySnapshot({ date: dateISO, shift: shiftTemplate, isHoliday: null })
+          ? await computeEntrySnapshot({ date: dateISO, shift: shiftTemplate, shiftCode: shiftTemplate.code, isHoliday: null })
           : {
               work_minutes: 0,
               work_minutes_total: 0,

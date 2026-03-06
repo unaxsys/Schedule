@@ -106,3 +106,18 @@ console.assert(sirvPeriod.adjustedNormMinutes === 960, 'adjusted norm should ded
 console.assert(sirvPeriod.overtimeMinutes > 0, 'converted overtime should be positive');
 
 console.log('labor_rules.selftest: OK');
+
+const nonWorkingSnapshotSummary = computeMonthlySummary({
+  monthKey: '2026-06',
+  employees: [{ id: 'e4', start_date: '2026-01-01', end_date: null, is_sirv: false, workday_minutes: 480 }],
+  schedules: [{ id: 's4' }],
+  selectedScheduleIds: ['s4'],
+  shiftTemplates: [],
+  scheduleEntries: [
+    { schedule_id: 's4', employee_id: 'e4', day: 1, shift_code: 'O', work_minutes: 480, holiday_minutes: 480 },
+    { schedule_id: 's4', employee_id: 'e4', day: 2, shift_code: 'R', work_minutes: 240 },
+  ],
+});
+const e4 = nonWorkingSnapshotSummary.get('e4');
+console.assert(e4 && e4.workedDays === 0, 'non-working codes must not count as worked days');
+console.assert(e4 && e4.workedMinutes === 0, 'non-working codes must not count as worked minutes');
