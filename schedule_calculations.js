@@ -75,6 +75,8 @@ function computeEntryMetrics({
 }) {
   const snapshot = computeShiftSnapshot({
     dateISO,
+    shiftCode: shift.code,
+    isRealWorkingShift: true,
     startTime: shift.start_time || shift.start,
     endTime: shift.end_time || shift.end,
     intervals: shift.intervals,
