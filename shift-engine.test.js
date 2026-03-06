@@ -51,3 +51,53 @@ test('weekend and holiday split across midnight', () => {
   assert.equal(snapshot.weekend_minutes, 480);
   assert.equal(snapshot.holiday_minutes, 360);
 });
+
+test('split shift on holiday sums all interval minutes', () => {
+  const holidays = new Set(['2026-05-01']);
+  const snapshot = computeShiftSnapshot({
+    dateISO: '2026-05-01',
+    intervals: [
+      { start: '08:00', end: '12:00' },
+      { start: '14:00', end: '18:00' },
+    ],
+    breakMinutes: 0,
+    breakIncluded: false,
+    holidayResolver: (dateISO) => ({ isHoliday: holidays.has(dateISO) }),
+  });
+
+  assert.equal(snapshot.work_minutes, 480);
+  assert.equal(snapshot.holiday_minutes, 480);
+});
+
+test('split shift on non-holiday has zero holiday minutes', () => {
+  const snapshot = computeShiftSnapshot({
+    dateISO: '2026-05-02',
+    intervals: [
+      { start: '08:00', end: '12:00' },
+      { start: '14:00', end: '18:00' },
+    ],
+    breakMinutes: 0,
+    breakIncluded: false,
+    holidayResolver: () => ({ isHoliday: false }),
+  });
+
+  assert.equal(snapshot.work_minutes, 480);
+  assert.equal(snapshot.holiday_minutes, 0);
+});
+
+test('split shift across midnight calculates holiday by date per segment', () => {
+  const holidays = new Set(['2026-05-02']);
+  const snapshot = computeShiftSnapshot({
+    dateISO: '2026-05-01',
+    intervals: [
+      { start: '20:00', end: '22:00' },
+      { start: '23:00', end: '04:00' },
+    ],
+    breakMinutes: 0,
+    breakIncluded: false,
+    holidayResolver: (dateISO) => ({ isHoliday: holidays.has(dateISO) }),
+  });
+
+  assert.equal(snapshot.work_minutes, 420);
+  assert.equal(snapshot.holiday_minutes, 240);
+});

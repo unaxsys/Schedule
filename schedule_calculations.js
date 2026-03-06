@@ -77,6 +77,7 @@ function computeEntryMetrics({
     dateISO,
     startTime: shift.start_time || shift.start,
     endTime: shift.end_time || shift.end,
+    intervals: shift.intervals,
     breakMinutes: shift.break_minutes,
     breakIncluded: shift.break_included,
     holidayResolver: isHoliday,
