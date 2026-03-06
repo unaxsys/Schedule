@@ -3443,7 +3443,7 @@ function renderLegend() {
 
   legendShifts.forEach((shift) => {
     const span = document.createElement('span');
-    if (shift.type === 'work') {
+    if (shift.type === 'work' && !explicitlyNonWorkingCode) {
       span.innerHTML = `<b>${getShiftDisplayLabel(shift)}</b> - ${shift.name} (${shift.start}-${shift.end}, ${shift.hours}ч)`;
     } else {
       span.innerHTML = `<b>${getShiftDisplayLabel(shift)}</b> - ${shift.name}`;
@@ -4986,7 +4986,7 @@ async function setShiftForCell({ employee, day, month, shiftCode, shiftId = null
   const scheduleId = getEmployeeScheduleId(employee);
   if (scheduleId) {
     state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = shiftCode;
-    state.scheduleEntryShiftIdsById[`${scheduleId}|${employee.id}|${day}`] = cleanStoredValue(shiftId) || null;
+    state.scheduleEntryShiftIdsById[`${scheduleId}|${employee.id}|${day}`] = isNonWorkingShiftCode(shiftCode) ? null : (cleanStoredValue(shiftId) || null);
     await saveScheduleEntryBackend({ ...employee, scheduleId }, day, shiftCode, { monthKey, scheduleId, shiftId });
   }
 
@@ -6046,18 +6046,24 @@ function calculateHolidayAndWeekendHoursByShift(shift, dateISO, workedMinutesOve
   };
 }
 
+function isNonWorkingShiftCode(code) {
+  const normalized = normalizeShiftCodeForApi(code);
+  return ['P', 'O', 'B', 'N', 'S', 'M'].includes(normalized);
+}
+
 function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmployment = true, snapshot = null, dateISO = '', shiftId = null) {
   if (!inEmployment) {
     return;
   }
 
   const shift = getShiftByCode(shiftCode, { employee, shiftId }) || getShiftByCode('P', { employee });
+  const explicitlyNonWorkingCode = isNonWorkingShiftCode(shiftCode);
 
   const snapshotWorkMinutes = Number(snapshot?.workMinutesTotal ?? snapshot?.workMinutes);
   const hasSnapshotMinutes = Number.isFinite(snapshotWorkMinutes);
   if (hasSnapshotMinutes) {
     const workHours = snapshotWorkMinutes / 60;
-    const isWorkShift = shift?.type === 'work';
+    const isWorkShift = shift?.type === 'work' && !explicitlyNonWorkingCode;
     const nightHours = isWorkShift ? (Number(snapshot.nightMinutes || 0) / 60) : 0;
     const snapshotHolidayHours = isWorkShift ? (Number(snapshot.holidayMinutes || 0) / 60) : 0;
     const snapshotWeekendHours = isWorkShift ? (Number(snapshot.weekendMinutes || 0) / 60) : 0;
@@ -6309,6 +6315,9 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
       const sirvCached = state.sirvSchedule[key] || null;
       const rawShiftCode = state.schedule[key] || sirvCached?.shiftCode || sirvCached || 'P';
       const shiftCode = normalizeShiftCodeForApi(rawShiftCode);
+      if (isNonWorkingShiftCode(shiftCode)) {
+        continue;
+      }
       const shiftId = cleanStoredValue(state.scheduleEntryShiftIdsById[key]) || cleanStoredValue(sirvCached?.shiftId) || null;
       const shift = getShiftByCode(shiftCode, { employee, shiftId }) || getShiftByCode('P', { employee });
       if (shift.type !== 'work') {
@@ -6935,7 +6944,7 @@ async function buildSirvScheduleCache(referenceMonth, employees) {
         }
         cache[scheduleKey(entry.employeeId, detailMonth, entry.day)] = {
           shiftCode: normalizeShiftCodeForApi(entry.shiftCode),
-          shiftId: cleanStoredValue(entry.shiftId) || null,
+          shiftId: isNonWorkingShiftCode(entry.shiftCode) ? null : (cleanStoredValue(entry.shiftId) || null),
         };
       });
     });
@@ -7046,7 +7055,7 @@ async function refreshMonthlyView() {
       }
       const entryKey = `${schedule.id}|${entry.employeeId}|${entry.day}`;
       mappedEntries[entryKey] = normalizeShiftCodeForApi(entry.shiftCode);
-      mappedEntryShiftIds[entryKey] = cleanStoredValue(entry.shiftId) || null;
+      mappedEntryShiftIds[entryKey] = isNonWorkingShiftCode(entry.shiftCode) ? null : (cleanStoredValue(entry.shiftId) || null);
       mappedEntrySnapshots[entryKey] = {
         workMinutes: Number(entry.workMinutes ?? 0),
         workMinutesTotal: Number(entry.workMinutesTotal ?? entry.workMinutes ?? 0),
@@ -7264,7 +7273,9 @@ async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) 
     if (responsePayload?.entry) {
       state.schedule[scheduleKey(employee.id, options.monthKey || state.month, day)] = responsePayload.entry.shiftCode || shiftCode;
       state.scheduleEntriesById[`${scheduleId}|${employee.id}|${day}`] = responsePayload.entry.shiftCode || shiftCode;
-      state.scheduleEntryShiftIdsById[`${scheduleId}|${employee.id}|${day}`] = cleanStoredValue(responsePayload.entry.shiftId) || cleanStoredValue(options.shiftId) || null;
+      state.scheduleEntryShiftIdsById[`${scheduleId}|${employee.id}|${day}`] = isNonWorkingShiftCode(responsePayload.entry.shiftCode || shiftCode)
+        ? null
+        : (cleanStoredValue(responsePayload.entry.shiftId) || cleanStoredValue(options.shiftId) || null);
       state.scheduleEntrySnapshotsById[`${scheduleId}|${employee.id}|${day}`] = {
         workMinutes: Number(responsePayload.entry.workMinutes ?? 0),
         workMinutesTotal: Number(responsePayload.entry.workMinutesTotal ?? responsePayload.entry.workMinutes ?? 0),
