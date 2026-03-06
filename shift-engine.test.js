@@ -101,3 +101,24 @@ test('split shift across midnight calculates holiday by date per segment', () =>
   assert.equal(snapshot.work_minutes, 420);
   assert.equal(snapshot.holiday_minutes, 240);
 });
+
+test('non-working system code returns zero snapshot even with intervals', () => {
+  const snapshot = computeShiftSnapshot({
+    dateISO: '2026-05-01',
+    shiftCode: 'O',
+    intervals: [
+      { start: '08:00', end: '12:00' },
+      { start: '14:00', end: '18:00' },
+    ],
+    breakMinutes: 0,
+    breakIncluded: false,
+    holidayResolver: () => ({ isHoliday: true }),
+  });
+
+  assert.equal(snapshot.work_minutes, 0);
+  assert.equal(snapshot.night_minutes, 0);
+  assert.equal(snapshot.weekend_minutes, 0);
+  assert.equal(snapshot.holiday_minutes, 0);
+  assert.equal(snapshot.overtime_minutes, 0);
+  assert.equal(snapshot.work_minutes_total, 0);
+});
