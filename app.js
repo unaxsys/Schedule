@@ -6057,17 +6057,18 @@ function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmploy
   const hasSnapshotMinutes = Number.isFinite(snapshotWorkMinutes);
   if (hasSnapshotMinutes) {
     const workHours = snapshotWorkMinutes / 60;
-    const nightHours = Number(snapshot.nightMinutes || 0) / 60;
-    const snapshotHolidayHours = Number(snapshot.holidayMinutes || 0) / 60;
-    const snapshotWeekendHours = Number(snapshot.weekendMinutes || 0) / 60;
-    const shouldRecalculateSpecialHours = shift?.type === 'work' && Boolean(dateISO);
+    const isWorkShift = shift?.type === 'work';
+    const nightHours = isWorkShift ? (Number(snapshot.nightMinutes || 0) / 60) : 0;
+    const snapshotHolidayHours = isWorkShift ? (Number(snapshot.holidayMinutes || 0) / 60) : 0;
+    const snapshotWeekendHours = isWorkShift ? (Number(snapshot.weekendMinutes || 0) / 60) : 0;
+    const shouldRecalculateSpecialHours = isWorkShift && Boolean(dateISO);
     const splitHours = shouldRecalculateSpecialHours
       ? calculateHolidayAndWeekendHoursByShift(shift, dateISO, snapshotWorkMinutes)
       : { holidayHours: snapshotHolidayHours, weekendHours: snapshotWeekendHours };
     const holidayHours = splitHours.holidayHours;
     const weekendHours = splitHours.weekendHours;
 
-    if (workHours > 0) {
+    if (isWorkShift && workHours > 0) {
       summary.workedDays += 1;
       summary.workedHours += workHours;
     }
@@ -6305,9 +6306,11 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
       const key = scheduleKey(employeeId, monthKey, day);
       // Prefer the currently loaded schedule cells for the active view;
       // fallback to cross-month SIRV cache for months not loaded in-grid.
-      const rawShiftCode = state.schedule[key] || state.sirvSchedule[key] || 'P';
+      const sirvCached = state.sirvSchedule[key] || null;
+      const rawShiftCode = state.schedule[key] || sirvCached?.shiftCode || sirvCached || 'P';
       const shiftCode = normalizeShiftCodeForApi(rawShiftCode);
-      const shift = getShiftByCode(shiftCode, { employee }) || getShiftByCode('P', { employee });
+      const shiftId = cleanStoredValue(state.scheduleEntryShiftIdsById[key]) || cleanStoredValue(sirvCached?.shiftId) || null;
+      const shift = getShiftByCode(shiftCode, { employee, shiftId }) || getShiftByCode('P', { employee });
       if (shift.type !== 'work') {
         continue;
       }
@@ -6930,7 +6933,10 @@ async function buildSirvScheduleCache(referenceMonth, employees) {
         if (!sirvEmployeeIds.has(entry.employeeId)) {
           return;
         }
-        cache[scheduleKey(entry.employeeId, detailMonth, entry.day)] = normalizeShiftCodeForApi(entry.shiftCode);
+        cache[scheduleKey(entry.employeeId, detailMonth, entry.day)] = {
+          shiftCode: normalizeShiftCodeForApi(entry.shiftCode),
+          shiftId: cleanStoredValue(entry.shiftId) || null,
+        };
       });
     });
   }
