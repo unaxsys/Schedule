@@ -5848,16 +5848,18 @@ function calculateEmployeeTotals({ employee, summary, year, month, monthNormHour
   const nightPremiumHours = Math.max(0, summary.nightConvertedHours - summary.nightWorkedHours);
   const payableHours =
     summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + nightPremiumHours;
-  const deviation = summary.workedHours + nightPremiumHours - monthNormHours;
   const employeeSirvPeriod = Number(employee?.sirvPeriodMonths || 1) || 1;
   const sirvTotals = getSirvTotalsForEmployee(employee, month, isSirvEmployee ? employeeSirvPeriod : 1);
+  const deviation = isSirvEmployee
+    ? (sirvTotals.convertedWorkedHours - sirvTotals.normHours)
+    : (summary.workedHours + nightPremiumHours - monthNormHours);
   const overtimeHours = isSirvEmployee
     ? sirvTotals.overtimeHours
     : Math.max(0, summary.workedHours - monthNormHours);
 
-  const reportedWeekendWorkedHours = isSirvEmployee ? 0 : summary.weekendWorkedHours;
-  const reportedWorkedHours = isSirvEmployee ? 0 : summary.workedHours;
-  const reportedNormHours = isSirvEmployee ? 0 : monthNormHours;
+  const reportedWeekendWorkedHours = summary.weekendWorkedHours;
+  const reportedWorkedHours = summary.workedHours;
+  const reportedNormHours = monthNormHours;
   const reportedSirvNormHours = isSirvEmployee ? sirvTotals.normHours : 0;
   const reportedSirvWorkedHours = isSirvEmployee ? sirvTotals.workedHours : 0;
 
@@ -6093,7 +6095,7 @@ function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmploy
     return;
   }
 
-  if (shift.type === 'work') {
+  if (shift.type === 'work' && !explicitlyNonWorkingCode) {
     const shiftHours = getWorkShiftHours(shift);
     const nightHours = getShiftNightHours(shift, { isYoungWorker: Boolean(employee?.youngWorker) });
     const specialHours = calculateHolidayAndWeekendHoursByShift(shift, dateISO, shiftHours * 60);
