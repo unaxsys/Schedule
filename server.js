@@ -634,6 +634,32 @@ function mapShiftTemplateRow(row) {
   };
 }
 
+
+async function findReservedGlobalRConflict({ tenantId, currentShiftId = null }) {
+  const hasTenantId = await hasShiftTemplatesTenantId();
+  const hasDepartmentId = await hasShiftTemplatesDepartmentId();
+  const params = ['R'];
+  const where = ['UPPER(code) = UPPER($1)'];
+
+  if (hasTenantId) {
+    params.push(tenantId);
+    where.push(`tenant_id = $${params.length}`);
+  }
+  if (hasDepartmentId) {
+    where.push('department_id IS NULL');
+  }
+  if (currentShiftId) {
+    params.push(currentShiftId);
+    where.push(`id <> $${params.length}`);
+  }
+
+  const result = await pool.query(
+    `SELECT id FROM shift_templates WHERE ${where.join(' AND ')} LIMIT 1`,
+    params
+  );
+  return result.rowCount ? result.rows[0] : null;
+}
+
 async function getDepartmentScopedShifts({ tenantId, departmentId, includeGlobal = true }) {
   const hasTenantId = await hasShiftTemplatesTenantId();
   const hasDepartmentId = await hasShiftTemplatesDepartmentId();
@@ -2641,7 +2667,7 @@ app.get('/api/schedules/:id', requireAuth, requireTenantContext, async (req, res
          se.overtime_minutes AS "overtimeMinutes"${hasBreakMinutesApplied ? ', se.break_minutes_applied AS "breakMinutesApplied"' : ', NULL::integer AS "breakMinutesApplied"'}`
       : '';
     const entriesResult = await pool.query(
-      `SELECT se.employee_id AS "employeeId", se.day, se.shift_code AS "shiftCode"${entriesSelectExtras}
+      `SELECT se.employee_id AS "employeeId", se.day, se.shift_code AS "shiftCode", se.shift_id AS "shiftId"${entriesSelectExtras}
        FROM schedule_entries se
        JOIN schedules s ON s.id = se.schedule_id
        WHERE se.schedule_id = $1 AND s.tenant_id = $2
@@ -2855,23 +2881,23 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         code: normalizeShiftCode(row.code),
       }));
 
-    const shiftCandidatePriority = (row) => {
-      const departmentPriority = hasShiftTemplatesDepartment && schedule.department_id
-        ? (row.department_id && String(row.department_id) === String(schedule.department_id) ? 0 : (row.department_id ? 2 : 1))
-        : 0;
-      const sirvPriority = hasShiftTemplatesSirvShift
-        ? (row.is_sirv_shift === null || row.is_sirv_shift === undefined
-          ? 1
-          : (Boolean(row.is_sirv_shift) === Boolean(employee.isSirv) ? 0 : 2))
-        : 0;
-      return (departmentPriority * 10) + sirvPriority;
-    };
-
     const resolveShiftByCode = (code) => {
       const normalizedCode = normalizeShiftCode(code);
       const candidates = shiftTemplatesForCalc
-        .filter((row) => normalizeShiftCode(row.code) === normalizedCode)
-        .sort((a, b) => shiftCandidatePriority(a) - shiftCandidatePriority(b));
+        .filter((row) => normalizeShiftCode(row.code) === normalizedCode);
+
+      if (hasShiftTemplatesDepartment && schedule.department_id) {
+        const departmentLocal = candidates.find((row) => row.department_id && String(row.department_id) === String(schedule.department_id));
+        if (departmentLocal) {
+          return departmentLocal;
+        }
+      }
+
+      const globalFallback = candidates.find((row) => !row.department_id);
+      if (globalFallback) {
+        return globalFallback;
+      }
+
       return candidates[0] || null;
     };
 
@@ -3518,6 +3544,16 @@ app.post('/api/departments/:departmentId/shifts', requireAuth, requireTenantCont
     }
 
     const { name, startTime, endTime, breakMinutes, breakIncluded, hours } = validation.value;
+
+    if (code === 'R' && departmentId) {
+      const globalConflict = await findReservedGlobalRConflict({ tenantId: req.tenantId });
+      if (globalConflict) {
+        return res.status(409).json({
+          message: 'Код "Р" вече се използва като глобална смяна. Използвайте друг код, например "Рд".',
+        });
+      }
+    }
+
     const scopeParams = hasTenantId ? [req.tenantId] : [];
     const existsResult = await pool.query(
       `SELECT id
@@ -3663,30 +3699,14 @@ app.post('/api/shift-template', requireAuth, requireTenantContext, async (req, r
     }
 
     if (normalizedCode === 'R') {
-      // R is tenant-global. If UI sends a department context, coerce to global.
-      departmentId = null;
-
-      const existingR = await pool.query(
-        `SELECT COALESCE(break_minutes, 60) AS break_minutes,
-                COALESCE(break_included, FALSE) AS break_included,
-                is_sirv_shift
-         FROM shift_templates
-         WHERE UPPER(code) = 'R'
-           ${hasTenantId ? 'AND tenant_id = $1' : ''}
-           ${hasDepartmentId ? 'AND department_id IS NULL' : ''}
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        hasTenantId ? [req.tenantId] : []
-      );
-
-      const lockedBreakMinutes = existingR.rowCount ? Number(existingR.rows[0].break_minutes || 60) : 60;
-      const lockedBreakIncluded = existingR.rowCount ? Boolean(existingR.rows[0].break_included) : false;
-      const lockedSirv = existingR.rowCount ? (existingR.rows[0].is_sirv_shift === null ? null : Boolean(existingR.rows[0].is_sirv_shift)) : null;
+      const globalConflict = await findReservedGlobalRConflict({ tenantId: req.tenantId });
+      if (departmentId && globalConflict) {
+        return res.status(409).json({
+          message: 'Код "Р" вече се използва като глобална смяна. Използвайте друг код, например "Рд".',
+        });
+      }
 
       name = 'Редовна';
-      breakMinutes = lockedBreakMinutes;
-      breakIncluded = lockedBreakIncluded;
-      isSirvShift = lockedSirv;
       hours = deriveWorkHours({
         startTime: start,
         endTime: end,
