@@ -7614,6 +7614,35 @@ function saveShiftTemplates() {
   localStorage.setItem('shiftTemplates', JSON.stringify(state.shiftTemplates));
 }
 
+function buildShiftTemplateDedupKey(shiftTemplate = {}) {
+  const id = cleanStoredValue(shiftTemplate.id);
+  if (id) {
+    return `id:${id}`;
+  }
+
+  const departmentId = cleanStoredValue(shiftTemplate.departmentId || shiftTemplate.department_id) || 'global';
+  const code = String(shiftTemplate.code || '').trim().toUpperCase();
+  const start = String(shiftTemplate.start || shiftTemplate.start_time || '').trim();
+  const end = String(shiftTemplate.end || shiftTemplate.end_time || '').trim();
+  return `scope:${departmentId}|${code}|${start}|${end}`;
+}
+
+function dedupeShiftTemplates(shiftTemplates = []) {
+  const deduped = [];
+  const seen = new Set();
+
+  (Array.isArray(shiftTemplates) ? shiftTemplates : []).forEach((shiftTemplate) => {
+    const key = buildShiftTemplateDedupKey(shiftTemplate);
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    deduped.push(shiftTemplate);
+  });
+
+  return deduped;
+}
+
 function mergeShiftTemplates(backendShiftTemplates) {
   function getBreakMinutes(obj) {
     const v = obj && (obj.break_minutes ?? obj.breakMinutes ?? 0);
@@ -7662,7 +7691,7 @@ function mergeShiftTemplates(backendShiftTemplates) {
     });
   });
 
-  return merged;
+  return dedupeShiftTemplates(merged);
 }
 
 
@@ -7832,6 +7861,7 @@ async function saveDepartmentShiftBackend(departmentId, payload) {
 
 async function loadDepartmentShifts(departmentId, options = {}) {
   if (!departmentId || !state.backendAvailable) return [];
+  const normalizedDepartmentId = cleanStoredValue(departmentId) || null;
   const cacheKey = getDepartmentShiftCacheKey(departmentId);
   if (!options.force && Array.isArray(state.shiftsByDept[departmentId])) {
     return state.shiftsByDept[departmentId];
@@ -7861,13 +7891,21 @@ async function loadDepartmentShifts(departmentId, options = {}) {
         break_included: Boolean(shift.break_included),
         locked: ['P', 'O', 'B', 'N', 'S', 'M', 'R'].includes(String(shift.code || '').toUpperCase())
       })) : [];
-      state.shiftsByDept[departmentId] = mergeShiftTemplates(mapped);
+      const hasGlobalShiftsInResponse = mapped.some((shift) => !cleanStoredValue(shift.departmentId || shift.department_id));
+      const globalShifts = hasGlobalShiftsInResponse
+        ? []
+        : state.shiftTemplates.filter((shift) => !cleanStoredValue(shift.departmentId || shift.department_id));
+      const departmentAndGlobalShifts = dedupeShiftTemplates([...globalShifts, ...mapped]);
+      state.shiftsByDept[departmentId] = departmentAndGlobalShifts;
       return state.shiftsByDept[departmentId];
     } catch (error) {
       if (!options.silent) {
         setStatus(error.message || 'Неуспешно зареждане на departmental смени. Ползва се fallback.', false);
       }
-      const fallbackShifts = state.shiftTemplates.filter((shift) => !cleanStoredValue(shift.departmentId) || cleanStoredValue(shift.departmentId) === cleanStoredValue(departmentId));
+      const fallbackShifts = dedupeShiftTemplates(state.shiftTemplates.filter((shift) => {
+        const shiftDepartmentId = cleanStoredValue(shift.departmentId || shift.department_id) || null;
+        return !shiftDepartmentId || shiftDepartmentId === normalizedDepartmentId;
+      }));
       state.shiftsByDept[departmentId] = fallbackShifts;
       return fallbackShifts;
     } finally {

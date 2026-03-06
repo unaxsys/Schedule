@@ -719,6 +719,29 @@ function appendSystemShiftTemplates(shiftTemplates = []) {
   return Array.from(byScopeAndCode.values());
 }
 
+
+function dedupeShiftTemplatesForResponse(shiftTemplates = []) {
+  const seen = new Set();
+  const deduped = [];
+
+  for (const shift of (Array.isArray(shiftTemplates) ? shiftTemplates : [])) {
+    const id = cleanStr(shift?.id);
+    const departmentId = cleanStr(shift?.department_id ?? shift?.departmentId) || 'global';
+    const code = normalizeShiftCode(shift?.code);
+    const startTime = cleanStr(shift?.start_time || shift?.start) || '';
+    const endTime = cleanStr(shift?.end_time || shift?.end) || '';
+    const key = id || `${departmentId}|${code}|${startTime}|${endTime}`;
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(shift);
+  }
+
+  return deduped;
+}
+
+
 function signAccessToken({ user, tenantId = null, role = null }) {
   if (!JWT_SECRET) {
     throw createHttpError(500, 'JWT secret is not configured.');
@@ -1944,7 +1967,7 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
       employees: employees.rows,
       schedules: schedules.rows,
       schedule,
-      shiftTemplates: filterVisibleShiftTemplates(appendSystemShiftTemplates(shiftTemplates.rows)),
+      shiftTemplates: dedupeShiftTemplatesForResponse(filterVisibleShiftTemplates(appendSystemShiftTemplates(shiftTemplates.rows))),
       departments: departments.rows,
     });
   } catch (error) {
@@ -3569,7 +3592,7 @@ app.get('/api/departments/:departmentId/shifts', requireAuth, requireTenantConte
       values,
     });
     const result = await pool.query(queryText, values);
-    const visibleRows = filterVisibleShiftTemplates(appendSystemShiftTemplates(result.rows));
+    const visibleRows = dedupeShiftTemplatesForResponse(filterVisibleShiftTemplates(appendSystemShiftTemplates(result.rows)));
     console.log('[GET /api/departments/:departmentId/shifts] codes:', visibleRows.map((row) => row.code));
     return res.json({ shifts: visibleRows });
   } catch (error) {
