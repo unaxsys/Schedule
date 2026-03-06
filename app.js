@@ -5851,15 +5851,15 @@ function calculateEmployeeTotals({ employee, summary, year, month, monthNormHour
   const employeeSirvPeriod = Number(employee?.sirvPeriodMonths || 1) || 1;
   const sirvTotals = getSirvTotalsForEmployee(employee, month, isSirvEmployee ? employeeSirvPeriod : 1);
   const deviation = isSirvEmployee
-    ? (sirvTotals.convertedWorkedHours - sirvTotals.normHours)
+    ? (sirvTotals.workedHours - sirvTotals.normHours)
     : (summary.workedHours + nightPremiumHours - monthNormHours);
   const overtimeHours = isSirvEmployee
-    ? sirvTotals.overtimeHours
+    ? Math.max(0, sirvTotals.workedHours - sirvTotals.normHours)
     : Math.max(0, summary.workedHours - monthNormHours);
 
   const reportedWeekendWorkedHours = summary.weekendWorkedHours;
-  const reportedWorkedHours = summary.workedHours;
-  const reportedNormHours = monthNormHours;
+  const reportedWorkedHours = isSirvEmployee ? 0 : summary.workedHours;
+  const reportedNormHours = isSirvEmployee ? 0 : monthNormHours;
   const reportedSirvNormHours = isSirvEmployee ? sirvTotals.normHours : 0;
   const reportedSirvWorkedHours = isSirvEmployee ? sirvTotals.workedHours : 0;
 
@@ -6069,12 +6069,8 @@ function collectSummary(summary, employee, shiftCode, holiday, weekend, inEmploy
     const nightHours = isWorkShift ? (Number(snapshot.nightMinutes || 0) / 60) : 0;
     const snapshotHolidayHours = isWorkShift ? (Number(snapshot.holidayMinutes || 0) / 60) : 0;
     const snapshotWeekendHours = isWorkShift ? (Number(snapshot.weekendMinutes || 0) / 60) : 0;
-    const shouldRecalculateSpecialHours = isWorkShift && Boolean(dateISO);
-    const splitHours = shouldRecalculateSpecialHours
-      ? calculateHolidayAndWeekendHoursByShift(shift, dateISO, snapshotWorkMinutes)
-      : { holidayHours: snapshotHolidayHours, weekendHours: snapshotWeekendHours };
-    const holidayHours = splitHours.holidayHours;
-    const weekendHours = splitHours.weekendHours;
+    const holidayHours = snapshotHolidayHours;
+    const weekendHours = snapshotWeekendHours;
 
     if (isWorkShift && workHours > 0) {
       summary.workedDays += 1;
@@ -6332,7 +6328,7 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
     }
   });
 
-  totals.overtimeHours = Math.max(0, totals.convertedWorkedHours - totals.normHours);
+  totals.overtimeHours = Math.max(0, totals.workedHours - totals.normHours);
   return totals;
 }
 
