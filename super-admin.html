@@ -663,6 +663,41 @@
             currentCalculationSettingsForSimulator = settingsPayload || currentCalculationSettingsForSimulator;
             calculationSettingsSource = 'UI-preview';
           },
+          onPublish: async (settingsPayload) => {
+            if (!settingsPayload?.id) return { ok: false, message: 'Първо запазете настройката.' };
+            try {
+              const payload = await apiRequest(`/api/platform/super-admin/calculation-settings/${encodeURIComponent(String(settingsPayload.id))}/publish`, { method: 'POST' });
+              const saved = payload.setting || settingsPayload;
+              saveSuperAdminCalculationSettingsLocal(saved);
+              currentCalculationSettingsForSimulator = saved;
+              await renderCalculationLogic();
+              return { ok: true, message: 'Черновата е публикувана.' };
+            } catch (error) {
+              return { ok: false, message: String(error?.message || 'Грешка при publish.') };
+            }
+          },
+          onRevert: async (settingsPayload) => {
+            if (!settingsPayload?.id) return { ok: false, message: 'Няма запис за връщане.' };
+            try {
+              const payload = await apiRequest(`/api/platform/super-admin/calculation-settings/${encodeURIComponent(String(settingsPayload.id))}/revert`, { method: 'POST' });
+              const saved = payload.setting || settingsPayload;
+              saveSuperAdminCalculationSettingsLocal(saved);
+              currentCalculationSettingsForSimulator = saved;
+              await renderCalculationLogic();
+              return { ok: true, message: 'Черновата е върната към публикуваната версия.' };
+            } catch (error) {
+              return { ok: false, message: String(error?.message || 'Грешка при revert.') };
+            }
+          },
+          onHistory: async (settingsPayload) => {
+            if (!settingsPayload?.id) return { ok: true, history: [] };
+            try {
+              const payload = await apiRequest(`/api/platform/super-admin/calculation-settings/${encodeURIComponent(String(settingsPayload.id))}/history`, { method: 'GET' });
+              return { ok: true, history: payload.history || [] };
+            } catch {
+              return { ok: false, history: [] };
+            }
+          },
         });
       }
 
