@@ -49,19 +49,69 @@
 .calc-grid-2-1 { grid-template-columns: 1fr; }
 .calc-field { display: flex; flex-direction: column; gap: 8px; }
 .calc-field-full { grid-column: 1 / -1; }
-.calc-field label { font-size: 14px; font-weight: 700; color: #24324a; }
+
+.calc-field-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #24324a;
+}
+
+.calc-help {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.calc-help-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: help;
+  flex: 0 0 auto;
+}
+
+.calc-help-icon:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
 
 .calc-field input,
 .calc-field select,
 .calc-field textarea {
-  width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid #cad5e3; background: #fff; font-size: 14px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #cad5e3;
+  background: #fff;
+  font-size: 14px;
 }
+
 .calc-field textarea { resize: vertical; min-height: 120px; }
 
 .calc-checkbox {
-  display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid #d9e2ef; border-radius: 12px; padding: 12px 14px;
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid #d9e2ef;
+  border-radius: 12px;
+  padding: 12px 14px;
 }
 .calc-checkbox input { width: 16px; height: 16px; margin: 0; }
+
+.calc-checkbox input { width: 16px; height: 16px; margin-top: 2px; }
+.calc-checkbox > span { font-weight: 600; color: #24324a; }
+.calc-checkbox .calc-help { width: 100%; margin-left: 24px; }
 
 .calc-preview-box { border: 1px dashed #bfd0e8; border-radius: 14px; background: #fff; padding: 16px; }
 .calc-preview-list { margin: 0; padding-left: 18px; color: #223047; }
