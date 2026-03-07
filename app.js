@@ -24,6 +24,22 @@ const SYSTEM_SHIFTS = [
 
 const DEFAULT_WORK_SHIFT = { code: 'R', label: 'Р', name: 'Редовна', type: 'work', start: '08:00', end: '17:00', hours: 8, locked: true };
 
+const DB_ONLY_PERSISTENCE = true;
+
+if (DB_ONLY_PERSISTENCE && typeof window !== 'undefined' && window.localStorage) {
+  try {
+    const storageProto = Object.getPrototypeOf(window.localStorage);
+    if (storageProto) {
+      storageProto.setItem = function setItemNoop() {};
+      storageProto.removeItem = function removeItemNoop() {};
+      storageProto.clear = function clearNoop() {};
+      storageProto.getItem = function getItemNoop() { return null; };
+    }
+  } catch {
+    // Ignore override failures; DB-only persistence still enforced by API flow checks.
+  }
+}
+
 const LEAVE_SUMMARY_COLUMNS = SYSTEM_SHIFTS
   .filter((shift) => shift.type === 'leave')
   .map((shift) => ({
@@ -2071,6 +2087,7 @@ async function upsertShiftTemplate({ id = null, code, name, departmentId = null,
   const payloadName = normalizedCode === 'R' ? 'Редовна' : normalizedName;
   const backendName = encodeShiftNameWithIntervals(payloadName, normalizedIntervals);
   const backendResult = await saveDepartmentShiftBackend(effectiveDepartmentId, {
+    id: cleanStoredValue(id) || null,
     code: normalizedCode,
     name: backendName,
     start_time: backendStart,
@@ -2086,7 +2103,9 @@ async function upsertShiftTemplate({ id = null, code, name, departmentId = null,
   }
 
   await loadFromBackend({ silentStatus: true, skipReconnectSchedule: true });
-  await loadDepartmentShifts(state.lastSelectedDepartment || DEFAULT_DEPARTMENT, { force: true, silent: true });
+  if (effectiveDepartmentId) {
+    await loadDepartmentShifts(effectiveDepartmentId, { force: true, silent: true });
+  }
   return { ok: true };
 }
 
@@ -3461,6 +3480,7 @@ function renderLegend() {
 
   legendShifts.forEach((shift) => {
     const span = document.createElement('span');
+    const explicitlyNonWorkingCode = isNonWorkingShiftCode(shift?.code);
     if (shift.type === 'work' && !explicitlyNonWorkingCode) {
       span.innerHTML = `<b>${getShiftDisplayLabel(shift)}</b> - ${shift.name} (${shift.start}-${shift.end}, ${shift.hours}ч)`;
     } else {
@@ -5858,32 +5878,20 @@ function getVisibleSummaryColumns() {
 
 function calculateEmployeeTotals({ employee, summary, year, month, monthNormHours }) {
   const runtimeCalcSettings = state.calculationSettings || {};
-  const includePremiumsInPayable = runtimeCalcSettings.includePremiumsInPayable !== false;
-  const holidayRateSetting = Number(runtimeCalcSettings.holidayPremiumCoefficient || state.rates.holiday || 2);
-  const weekendRateSetting = Number(runtimeCalcSettings.weekendPremiumCoefficient || state.rates.weekend || 1.75);
-  const overtimeMode = String(runtimeCalcSettings.overtimeMode || 'worked-vs-norm');
   const remainingVacation = getVacationAllowanceForYear(employee, year) - getVacationUsedForYear(employee.id, year);
-  const normalizedHolidayHours = summary.holidayWorkedHours * Math.max(1, holidayRateSetting);
   const isSirvEmployee = Boolean(employee?.isSirv);
-  const normalizedWeekendHours = isSirvEmployee
-    ? summary.weekendWorkedHours
-    : summary.weekendWorkedHours * Math.max(1, weekendRateSetting);
   const nightPremiumHours = Math.max(0, summary.nightConvertedHours - summary.nightWorkedHours);
-  const payableHours = includePremiumsInPayable
-    ? summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + nightPremiumHours
-    : summary.workedHours;
+  const payableHours = summary.workedHours;
   const employeeSirvPeriod = Number(employee?.sirvPeriodMonths || 1) || 1;
   const sirvTotals = getSirvTotalsForEmployee(employee, month, isSirvEmployee ? employeeSirvPeriod : 1);
   const deviation = isSirvEmployee
     ? (sirvTotals.workedHours - sirvTotals.normHours)
     : (summary.workedHours + nightPremiumHours - monthNormHours);
-  const overtimeHours = overtimeMode === 'payable-vs-norm'
-    ? Math.max(0, payableHours - monthNormHours)
-    : (isSirvEmployee
-      ? Math.max(0, sirvTotals.workedHours - sirvTotals.normHours)
-      : Math.max(0, summary.workedHours - monthNormHours));
+  const overtimeHours = isSirvEmployee
+    ? Math.max(0, sirvTotals.workedHours - sirvTotals.normHours)
+    : Math.max(0, summary.workedHours - monthNormHours);
 
-  const reportedWeekendWorkedHours = summary.weekendWorkedHours;
+  const reportedWeekendWorkedHours = isSirvEmployee ? 0 : summary.weekendWorkedHours;
   const reportedWorkedHours = isSirvEmployee ? 0 : summary.workedHours;
   const reportedNormHours = isSirvEmployee ? 0 : monthNormHours;
   const reportedSirvNormHours = isSirvEmployee ? sirvTotals.normHours : 0;
@@ -6311,6 +6319,7 @@ function getPeriodMonths(endMonth, periodMonths) {
 
 function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
   const employeeId = employee?.id;
+  const employeeWorkdayHours = Math.max(1, Number(employee?.workdayMinutes ?? employee?.workday_minutes ?? 480) / 60);
   const months = getPeriodMonths(endMonth, periodMonths);
   const totals = {
     normHours: 0,
@@ -6325,12 +6334,6 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
     for (let day = 1; day <= totalDays; day += 1) {
       if (!isEmployeeActiveOnDate(employee, year, monthIndex, day)) {
         continue;
-      }
-
-      const date = new Date(year, monthIndex - 1, day);
-      const dateISO = `${year}-${String(monthIndex).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      if (isNormWorkingDay({ dateISO, holiday: isOfficialHoliday(date), weekend: isWeekend(date) })) {
-        totals.normHours += 8;
       }
 
       const key = scheduleKey(employeeId, monthKey, day);
@@ -6351,6 +6354,7 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
       const nightHours = getShiftNightHours(shift, { isYoungWorker: Boolean(employee?.youngWorker) });
       totals.workedHours += workedHours;
       totals.convertedWorkedHours += workedHours + nightHours * (NIGHT_HOURS_COEFFICIENT - 1);
+      totals.normHours += employeeWorkdayHours;
     }
   });
 
@@ -7328,7 +7332,9 @@ async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) 
 
 async function saveShiftTemplateBackend(shift) {
   if (!state.backendAvailable) {
-    return { ok: true, localOnly: true };
+    const message = 'Бекендът не е достъпен. Промяната не е записана (няма локално записване).';
+    setStatus(message, false);
+    return { ok: false, message };
   }
 
   try {
@@ -7355,6 +7361,7 @@ async function saveShiftTemplateBackend(shift) {
 
 async function deleteShiftTemplateBackend(code, departmentId = null) {
   if (!state.backendAvailable) {
+    setStatus('Бекендът не е достъпен. Промяната не е записана (няма локално записване).', false);
     return;
   }
 
@@ -7369,8 +7376,7 @@ async function deleteShiftTemplateBackend(code, departmentId = null) {
       throw new Error('Delete shift template failed');
     }
   } catch {
-    setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
-    // keep backend mode active; surface error via status
+    setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Промяната не е записана (няма локално записване).`, false);
   }
 }
 
@@ -7843,7 +7849,7 @@ function loadRates() {
 }
 
 function saveShiftTemplates() {
-  localStorage.setItem('shiftTemplates', JSON.stringify(state.shiftTemplates));
+  // DB-only режим: не съхраняваме шаблони за смени в localStorage.
 }
 
 function buildShiftTemplateIdentityKey(shiftTemplate = {}) {
@@ -7931,12 +7937,8 @@ function mergeShiftTemplates(backendShiftTemplates) {
 
 
 function loadShiftTemplates() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem('shiftTemplates') || '[]');
-    return mergeShiftTemplates(parsed);
-  } catch {
-    return [...SYSTEM_SHIFTS, DEFAULT_WORK_SHIFT];
-  }
+  // DB-only режим: шаблоните за смени идват от backend.
+  return [...SYSTEM_SHIFTS, DEFAULT_WORK_SHIFT];
 }
 
 function saveLockedMonths() {
@@ -8067,7 +8069,11 @@ function orthodoxEaster(year) {
 
 
 async function saveDepartmentShiftBackend(departmentId, payload) {
-  if (!state.backendAvailable) return { ok: true, localOnly: true };
+  if (!state.backendAvailable) {
+    const message = 'Бекендът не е достъпен. Промяната не е записана (няма локално записване).';
+    setStatus(message, false);
+    return { ok: false, message };
+  }
   const normalizedDepartmentId = cleanStoredValue(departmentId) || null;
   const routeDepartmentId = normalizedDepartmentId || 'global';
   try {
