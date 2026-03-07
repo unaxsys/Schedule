@@ -92,6 +92,85 @@ function cleanStr(v) {
   return String(v ?? '').trim();
 }
 
+const CALCULATION_SETTINGS_DEFAULTS = {
+  name: 'Основни правила',
+  scope: 'global',
+  departmentId: null,
+  scheduleId: null,
+  isActive: true,
+  calculationMode: 'worked-hours',
+  workedDayRule: 'working-shift-and-minutes',
+  holidayMode: 'segments-only',
+  weekendMode: 'segments-only',
+  nightMode: 'range-22-06',
+  includeBreakInWorkedHours: false,
+  sumSplitIntervals: true,
+  holidayOnlyWorkedSegments: true,
+  weekendOnlyWorkedSegments: true,
+  excludeNonWorkingCodesFromWorkedDay: true,
+  useShiftIdPriority: true,
+  scopeAwareFallback: true,
+  nonWorkingCodes: 'O,B,OFF,REST,LEAVE,SICK',
+  workingCodes: 'Р,1СМ,2СМ,3СМ,4СМ,5СМ,6СМ,7СМ,Рд',
+  formulaText: 'worked_day = is_working_shift && work_minutes > 0'
+};
+
+function normalizeCommaCodes(rawValue) {
+  return String(rawValue || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .join(',');
+}
+
+function normalizeCalculationSettingsPayload(input = {}, { partial = false } = {}) {
+  const allowedScopes = new Set(['global', 'department', 'schedule']);
+  const normalized = {
+    name: cleanStr(input.name || CALCULATION_SETTINGS_DEFAULTS.name),
+    scope: cleanStr(input.scope || CALCULATION_SETTINGS_DEFAULTS.scope).toLowerCase(),
+    departmentId: cleanStr(input.departmentId) || null,
+    scheduleId: cleanStr(input.scheduleId) || null,
+    isActive: input.isActive === undefined ? CALCULATION_SETTINGS_DEFAULTS.isActive : Boolean(input.isActive),
+    calculationMode: cleanStr(input.calculationMode || CALCULATION_SETTINGS_DEFAULTS.calculationMode),
+    workedDayRule: cleanStr(input.workedDayRule || CALCULATION_SETTINGS_DEFAULTS.workedDayRule),
+    holidayMode: cleanStr(input.holidayMode || CALCULATION_SETTINGS_DEFAULTS.holidayMode),
+    weekendMode: cleanStr(input.weekendMode || CALCULATION_SETTINGS_DEFAULTS.weekendMode),
+    nightMode: cleanStr(input.nightMode || CALCULATION_SETTINGS_DEFAULTS.nightMode),
+    includeBreakInWorkedHours: input.includeBreakInWorkedHours === undefined ? CALCULATION_SETTINGS_DEFAULTS.includeBreakInWorkedHours : Boolean(input.includeBreakInWorkedHours),
+    sumSplitIntervals: input.sumSplitIntervals === undefined ? CALCULATION_SETTINGS_DEFAULTS.sumSplitIntervals : Boolean(input.sumSplitIntervals),
+    holidayOnlyWorkedSegments: input.holidayOnlyWorkedSegments === undefined ? CALCULATION_SETTINGS_DEFAULTS.holidayOnlyWorkedSegments : Boolean(input.holidayOnlyWorkedSegments),
+    weekendOnlyWorkedSegments: input.weekendOnlyWorkedSegments === undefined ? CALCULATION_SETTINGS_DEFAULTS.weekendOnlyWorkedSegments : Boolean(input.weekendOnlyWorkedSegments),
+    excludeNonWorkingCodesFromWorkedDay: input.excludeNonWorkingCodesFromWorkedDay === undefined ? CALCULATION_SETTINGS_DEFAULTS.excludeNonWorkingCodesFromWorkedDay : Boolean(input.excludeNonWorkingCodesFromWorkedDay),
+    useShiftIdPriority: input.useShiftIdPriority === undefined ? CALCULATION_SETTINGS_DEFAULTS.useShiftIdPriority : Boolean(input.useShiftIdPriority),
+    scopeAwareFallback: input.scopeAwareFallback === undefined ? CALCULATION_SETTINGS_DEFAULTS.scopeAwareFallback : Boolean(input.scopeAwareFallback),
+    nonWorkingCodes: normalizeCommaCodes(input.nonWorkingCodes || CALCULATION_SETTINGS_DEFAULTS.nonWorkingCodes),
+    workingCodes: normalizeCommaCodes(input.workingCodes || CALCULATION_SETTINGS_DEFAULTS.workingCodes),
+    formulaText: cleanStr(input.formulaText || CALCULATION_SETTINGS_DEFAULTS.formulaText),
+  };
+
+  if (!partial && !normalized.name) {
+    throw createHttpError(400, 'name е задължително поле.');
+  }
+  if (!allowedScopes.has(normalized.scope)) {
+    throw createHttpError(400, 'scope трябва да е global|department|schedule.');
+  }
+  if (normalized.scope === 'department' && !isValidUuid(normalized.departmentId || '')) {
+    throw createHttpError(400, 'departmentId е задължително и трябва да е UUID при scope=department.');
+  }
+  if (normalized.scope === 'schedule' && !isValidUuid(normalized.scheduleId || '')) {
+    throw createHttpError(400, 'scheduleId е задължително и трябва да е UUID при scope=schedule.');
+  }
+
+  if (normalized.scope !== 'department') {
+    normalized.departmentId = null;
+  }
+  if (normalized.scope !== 'schedule') {
+    normalized.scheduleId = null;
+  }
+
+  return normalized;
+}
+
 function normalizeShiftImportRowsPayload(payload) {
   if (Array.isArray(payload?.rows)) {
     return payload.rows;
@@ -1484,6 +1563,37 @@ async function initDatabase() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS calculation_settings (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('global', 'department', 'schedule')),
+      department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL,
+      schedule_id UUID NULL REFERENCES schedules(id) ON DELETE SET NULL,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      calculation_mode TEXT NOT NULL,
+      worked_day_rule TEXT NOT NULL,
+      holiday_mode TEXT NOT NULL,
+      weekend_mode TEXT NOT NULL,
+      night_mode TEXT NOT NULL,
+      include_break_in_worked_hours BOOLEAN NOT NULL DEFAULT FALSE,
+      sum_split_intervals BOOLEAN NOT NULL DEFAULT TRUE,
+      holiday_only_worked_segments BOOLEAN NOT NULL DEFAULT TRUE,
+      weekend_only_worked_segments BOOLEAN NOT NULL DEFAULT TRUE,
+      exclude_non_working_codes_from_worked_day BOOLEAN NOT NULL DEFAULT TRUE,
+      use_shift_id_priority BOOLEAN NOT NULL DEFAULT TRUE,
+      scope_aware_fallback BOOLEAN NOT NULL DEFAULT TRUE,
+      non_working_codes TEXT NOT NULL DEFAULT '',
+      working_codes TEXT NOT NULL DEFAULT '',
+      formula_text TEXT NOT NULL DEFAULT '',
+      created_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+      updated_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS leave_types (
       id BIGSERIAL PRIMARY KEY,
       tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -1611,6 +1721,33 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS created_by UUID NULL`);
   await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
   await pool.query(`ALTER TABLE employee_leaves ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'global'`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS schedule_id UUID NULL REFERENCES schedules(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS calculation_mode TEXT NOT NULL DEFAULT 'worked-hours'`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS worked_day_rule TEXT NOT NULL DEFAULT 'working-shift-and-minutes'`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS holiday_mode TEXT NOT NULL DEFAULT 'segments-only'`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS weekend_mode TEXT NOT NULL DEFAULT 'segments-only'`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS night_mode TEXT NOT NULL DEFAULT 'range-22-06'`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS include_break_in_worked_hours BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS sum_split_intervals BOOLEAN NOT NULL DEFAULT TRUE`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS holiday_only_worked_segments BOOLEAN NOT NULL DEFAULT TRUE`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS weekend_only_worked_segments BOOLEAN NOT NULL DEFAULT TRUE`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS exclude_non_working_codes_from_worked_day BOOLEAN NOT NULL DEFAULT TRUE`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS use_shift_id_priority BOOLEAN NOT NULL DEFAULT TRUE`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS scope_aware_fallback BOOLEAN NOT NULL DEFAULT TRUE`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS non_working_codes TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS working_codes TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS formula_text TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS created_by UUID NULL REFERENCES users(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS updated_by UUID NULL REFERENCES users(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_calculation_settings_tenant_scope ON calculation_settings (tenant_id, scope, is_active, updated_at DESC)`);
 
   await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS break_minutes_applied INTEGER NULL`);
   await pool.query(`
@@ -2009,6 +2146,183 @@ app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+function serializeCalculationSettingsRow(row) {
+  if (!row) {
+    return { ...CALCULATION_SETTINGS_DEFAULTS };
+  }
+
+  return {
+    id: row.id,
+    name: row.name,
+    scope: row.scope,
+    departmentId: row.department_id || '',
+    scheduleId: row.schedule_id || '',
+    isActive: Boolean(row.is_active),
+    calculationMode: row.calculation_mode,
+    workedDayRule: row.worked_day_rule,
+    holidayMode: row.holiday_mode,
+    weekendMode: row.weekend_mode,
+    nightMode: row.night_mode,
+    includeBreakInWorkedHours: Boolean(row.include_break_in_worked_hours),
+    sumSplitIntervals: Boolean(row.sum_split_intervals),
+    holidayOnlyWorkedSegments: Boolean(row.holiday_only_worked_segments),
+    weekendOnlyWorkedSegments: Boolean(row.weekend_only_worked_segments),
+    excludeNonWorkingCodesFromWorkedDay: Boolean(row.exclude_non_working_codes_from_worked_day),
+    useShiftIdPriority: Boolean(row.use_shift_id_priority),
+    scopeAwareFallback: Boolean(row.scope_aware_fallback),
+    nonWorkingCodes: row.non_working_codes || '',
+    workingCodes: row.working_codes || '',
+    formulaText: row.formula_text || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+app.get('/api/platform/super-admin/calculation-settings', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
+  try {
+
+    const result = await pool.query(
+      `SELECT *
+       FROM calculation_settings
+       WHERE tenant_id = $1
+       ORDER BY is_active DESC, updated_at DESC, created_at DESC`,
+      [req.tenantId]
+    );
+
+    const settings = result.rows.map(serializeCalculationSettingsRow);
+    return res.json({ ok: true, settings, setting: settings[0] || { ...CALCULATION_SETTINGS_DEFAULTS } });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/platform/super-admin/calculation-settings', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
+  try {
+    const payload = normalizeCalculationSettingsPayload(req.body || {});
+
+    const created = await pool.query(
+      `INSERT INTO calculation_settings (
+         tenant_id, name, scope, department_id, schedule_id, is_active,
+         calculation_mode, worked_day_rule, holiday_mode, weekend_mode, night_mode,
+         include_break_in_worked_hours, sum_split_intervals,
+         holiday_only_worked_segments, weekend_only_worked_segments,
+         exclude_non_working_codes_from_worked_day, use_shift_id_priority, scope_aware_fallback,
+         non_working_codes, working_codes, formula_text,
+         created_by, updated_by
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6,
+         $7, $8, $9, $10, $11,
+         $12, $13,
+         $14, $15,
+         $16, $17, $18,
+         $19, $20, $21,
+         $22, $22
+       )
+       RETURNING *`,
+      [
+        req.tenantId,
+        payload.name,
+        payload.scope,
+        payload.departmentId,
+        payload.scheduleId,
+        payload.isActive,
+        payload.calculationMode,
+        payload.workedDayRule,
+        payload.holidayMode,
+        payload.weekendMode,
+        payload.nightMode,
+        payload.includeBreakInWorkedHours,
+        payload.sumSplitIntervals,
+        payload.holidayOnlyWorkedSegments,
+        payload.weekendOnlyWorkedSegments,
+        payload.excludeNonWorkingCodesFromWorkedDay,
+        payload.useShiftIdPriority,
+        payload.scopeAwareFallback,
+        payload.nonWorkingCodes,
+        payload.workingCodes,
+        payload.formulaText,
+        req.user?.id || null,
+      ]
+    );
+
+    return res.status(201).json({ ok: true, setting: serializeCalculationSettingsRow(created.rows[0]) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.put('/api/platform/super-admin/calculation-settings/:id', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
+  try {
+    const id = cleanStr(req.params.id);
+    if (!isValidUuid(id)) {
+      return res.status(400).json({ message: 'Невалиден id.' });
+    }
+
+    const payload = normalizeCalculationSettingsPayload(req.body || {});
+    const updated = await pool.query(
+      `UPDATE calculation_settings
+       SET name = $3,
+           scope = $4,
+           department_id = $5,
+           schedule_id = $6,
+           is_active = $7,
+           calculation_mode = $8,
+           worked_day_rule = $9,
+           holiday_mode = $10,
+           weekend_mode = $11,
+           night_mode = $12,
+           include_break_in_worked_hours = $13,
+           sum_split_intervals = $14,
+           holiday_only_worked_segments = $15,
+           weekend_only_worked_segments = $16,
+           exclude_non_working_codes_from_worked_day = $17,
+           use_shift_id_priority = $18,
+           scope_aware_fallback = $19,
+           non_working_codes = $20,
+           working_codes = $21,
+           formula_text = $22,
+           updated_by = $23,
+           updated_at = NOW()
+       WHERE tenant_id = $1
+         AND id = $2
+       RETURNING *`,
+      [
+        req.tenantId,
+        id,
+        payload.name,
+        payload.scope,
+        payload.departmentId,
+        payload.scheduleId,
+        payload.isActive,
+        payload.calculationMode,
+        payload.workedDayRule,
+        payload.holidayMode,
+        payload.weekendMode,
+        payload.nightMode,
+        payload.includeBreakInWorkedHours,
+        payload.sumSplitIntervals,
+        payload.holidayOnlyWorkedSegments,
+        payload.weekendOnlyWorkedSegments,
+        payload.excludeNonWorkingCodesFromWorkedDay,
+        payload.useShiftIdPriority,
+        payload.scopeAwareFallback,
+        payload.nonWorkingCodes,
+        payload.workingCodes,
+        payload.formulaText,
+        req.user?.id || null,
+      ]
+    );
+
+    if (!updated.rowCount) {
+      return res.status(404).json({ message: 'Настройката не е намерена.' });
+    }
+
+    return res.json({ ok: true, setting: serializeCalculationSettingsRow(updated.rows[0]) });
+  } catch (error) {
+    return next(error);
   }
 });
 

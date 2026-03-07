@@ -408,6 +408,7 @@ async function init() {
   if (userRoleSelect) {
     userRoleSelect.value = state.userRole;
   }
+  removeLegacyCalculationSettingsUi();
   updateSuperAdminPortalVisibility();
   updateUsersSettingsTabVisibility();
 
@@ -1796,6 +1797,18 @@ function attachTabs() {
   });
 }
 
+function removeLegacyCalculationSettingsUi() {
+  const legacySubtabBtn = document.querySelector('.settings-subtab-btn[data-settings-tab="adminCalculationSettingsPanel"]');
+  const legacySubtabPanel = document.getElementById('adminCalculationSettingsPanel');
+
+  if (legacySubtabBtn) {
+    legacySubtabBtn.remove();
+  }
+  if (legacySubtabPanel) {
+    legacySubtabPanel.remove();
+  }
+}
+
 
 function attachSettingsSubtabs() {
   if (!settingsSubtabButtons.length || !settingsSubtabPanels.length) {
@@ -1807,6 +1820,7 @@ function attachSettingsSubtabs() {
       const target = btn.dataset.settingsTab;
       settingsSubtabButtons.forEach((other) => other.classList.toggle('active', other === btn));
       settingsSubtabPanels.forEach((panel) => panel.classList.toggle('active', panel.id === target));
+
 
       if (target === 'usersSettingsPanel') {
         loadPlatformUserEmployees().catch(() => {
