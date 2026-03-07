@@ -2071,6 +2071,7 @@ async function upsertShiftTemplate({ id = null, code, name, departmentId = null,
   const payloadName = normalizedCode === 'R' ? 'Редовна' : normalizedName;
   const backendName = encodeShiftNameWithIntervals(payloadName, normalizedIntervals);
   const backendResult = await saveDepartmentShiftBackend(effectiveDepartmentId, {
+    id: cleanStoredValue(id) || null,
     code: normalizedCode,
     name: backendName,
     start_time: backendStart,

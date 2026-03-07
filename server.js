@@ -4476,6 +4476,11 @@ app.post('/api/departments/:departmentId/shifts', requireAuth, requireTenantCont
   }
 
   try {
+    const shiftId = cleanStr(req.body?.id || '');
+    if (shiftId && !isValidUuid(shiftId)) {
+      return res.status(400).json({ message: 'Невалиден id за смяната.' });
+    }
+
     let departmentId = null;
     const routeDepartmentId = cleanStr(req.params.departmentId);
     const payloadDepartmentIdRaw = req.body?.department_id ?? req.body?.departmentId;
@@ -4511,7 +4516,7 @@ app.post('/api/departments/:departmentId/shifts', requireAuth, requireTenantCont
     }
 
     const scopeParams = hasTenantId ? [req.tenantId] : [];
-    const existsResult = await pool.query(
+    const existingInScopeResult = await pool.query(
       `SELECT id
        FROM shift_templates
        WHERE code = $1
@@ -4523,7 +4528,62 @@ app.post('/api/departments/:departmentId/shifts', requireAuth, requireTenantCont
        LIMIT 1`,
       [code, ...scopeParams, departmentId]
     );
-    if (existsResult.rowCount > 0) {
+
+    if (shiftId) {
+      const editableScopeWhere = [
+        'id = $1',
+        hasTenantId ? 'tenant_id = $2' : null,
+        departmentId ? `${hasTenantId ? 'department_id = $3' : 'department_id = $2'}` : 'department_id IS NULL',
+      ].filter(Boolean).join(' AND ');
+      const editableScopeParams = departmentId
+        ? (hasTenantId ? [shiftId, req.tenantId, departmentId] : [shiftId, departmentId])
+        : (hasTenantId ? [shiftId, req.tenantId] : [shiftId]);
+      const editableResult = await pool.query(
+        `SELECT id FROM shift_templates WHERE ${editableScopeWhere} LIMIT 1`,
+        editableScopeParams
+      );
+      if (!editableResult.rowCount) {
+        return res.status(404).json({ message: 'Смяната за редакция не е намерена.' });
+      }
+
+      if (existingInScopeResult.rowCount > 0 && String(existingInScopeResult.rows[0].id) !== shiftId) {
+        return res.status(409).json({ message: 'Смяна с този код вече съществува за избрания отдел.' });
+      }
+
+      const updateValues = hasTenantId
+        ? [code, name, startTime, endTime, breakMinutes, breakIncluded, hours, shiftId, req.tenantId]
+        : [code, name, startTime, endTime, breakMinutes, breakIncluded, hours, shiftId];
+      const updateQuery = hasTenantId
+        ? `UPDATE shift_templates
+             SET code = $1,
+                 name = $2,
+                 start_time = $3,
+                 end_time = $4,
+                 break_minutes = $5,
+                 break_included = $6,
+                 hours = $7
+           WHERE id = $8 AND tenant_id = $9
+           RETURNING id, code, name, department_id, start_time, end_time, break_minutes, break_included, hours`
+        : `UPDATE shift_templates
+             SET code = $1,
+                 name = $2,
+                 start_time = $3,
+                 end_time = $4,
+                 break_minutes = $5,
+                 break_included = $6,
+                 hours = $7
+           WHERE id = $8
+           RETURNING id, code, name, department_id, start_time, end_time, break_minutes, break_included, hours`;
+
+      const updatedResult = await pool.query(updateQuery, updateValues);
+      if (!updatedResult.rowCount) {
+        return res.status(404).json({ message: 'Смяната за редакция не е намерена.' });
+      }
+
+      return res.json({ ok: true, shift: updatedResult.rows[0] });
+    }
+
+    if (existingInScopeResult.rowCount > 0) {
       return res.status(409).json({ message: 'Смяна с този код вече съществува за избрания отдел.' });
     }
 
