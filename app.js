@@ -24,6 +24,22 @@ const SYSTEM_SHIFTS = [
 
 const DEFAULT_WORK_SHIFT = { code: 'R', label: 'Р', name: 'Редовна', type: 'work', start: '08:00', end: '17:00', hours: 8, locked: true };
 
+const DB_ONLY_PERSISTENCE = true;
+
+if (DB_ONLY_PERSISTENCE && typeof window !== 'undefined' && window.localStorage) {
+  try {
+    const storageProto = Object.getPrototypeOf(window.localStorage);
+    if (storageProto) {
+      storageProto.setItem = function setItemNoop() {};
+      storageProto.removeItem = function removeItemNoop() {};
+      storageProto.clear = function clearNoop() {};
+      storageProto.getItem = function getItemNoop() { return null; };
+    }
+  } catch {
+    // Ignore override failures; DB-only persistence still enforced by API flow checks.
+  }
+}
+
 const LEAVE_SUMMARY_COLUMNS = SYSTEM_SHIFTS
   .filter((shift) => shift.type === 'leave')
   .map((shift) => ({
@@ -6023,9 +6039,7 @@ function calculateHolidayAndWeekendHoursByShift(shift, dateISO, workedMinutesOve
     : Math.max(0, Number(shift.break_minutes ?? shift.breakMinutes ?? 0) || 0);
   const calculatedWorkedMinutes = intervals.length >= 2
     ? durationMinutes
-    : (Boolean(shift.break_included ?? shift.breakIncluded)
-      ? durationMinutes
-      : Math.max(durationMinutes - breakMinutes, 0));
+    : Math.max(durationMinutes - breakMinutes, 0);
   const workedMinutes = Number.isFinite(Number(workedMinutesOverride))
     ? Math.max(0, Number(workedMinutesOverride))
     : calculatedWorkedMinutes;
@@ -8010,9 +8024,8 @@ function calcShiftHours(start, end, breakMinutes = 0, breakIncluded = false) {
 
   const totalMinutes = endMinutes - startMinutes;
   const normalizedBreakMinutes = Math.max(0, Number(breakMinutes) || 0);
-  const workedMinutes = breakIncluded
-    ? totalMinutes
-    : Math.max(totalMinutes - normalizedBreakMinutes, 0);
+  void breakIncluded;
+  const workedMinutes = Math.max(totalMinutes - normalizedBreakMinutes, 0);
 
   return Number((workedMinutes / 60).toFixed(2));
 }

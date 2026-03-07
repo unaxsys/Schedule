@@ -31,7 +31,7 @@ test('calculateDurationMinutes supports overnight shifts', () => {
 });
 
 
-test('validateShiftTemplatePayload maps break_paid as paid break (included)', () => {
+test('validateShiftTemplatePayload subtracts break from attendance to get worked minutes', () => {
   const result = validateShiftTemplatePayload({
     name: 'Ранна',
     code: 'R1',
@@ -43,5 +43,5 @@ test('validateShiftTemplatePayload maps break_paid as paid break (included)', ()
 
   assert.equal(result.ok, true);
   assert.equal(result.value.breakIncluded, true);
-  assert.equal(result.value.workedMinutes, 540);
+  assert.equal(result.value.workedMinutes, 480);
 });

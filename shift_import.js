@@ -164,7 +164,7 @@ function normalizeImportRow(row) {
     }
   }
 
-  const workedMinutes = durationMinutes === null ? null : (breakIncluded ? durationMinutes : durationMinutes - breakMinutes);
+  const workedMinutes = durationMinutes === null ? null : (durationMinutes - breakMinutes);
   if (workedMinutes !== null && workedMinutes < 0) {
     errors.push('worked_minutes не може да е отрицателно.');
   }
@@ -180,7 +180,7 @@ function normalizeImportRow(row) {
       break_included: breakIncluded,
       duration_minutes: durationMinutes,
       worked_minutes: workedMinutes,
-      hours: durationMinutes === null ? null : Number((durationMinutes / 60).toFixed(2)),
+      hours: workedMinutes === null ? null : Number((workedMinutes / 60).toFixed(2)),
     },
   };
 }
