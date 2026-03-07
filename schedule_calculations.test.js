@@ -7,6 +7,7 @@ const {
   countBusinessDays,
   finalizeSirvOvertimeAllocations,
   computeOvertimeMinutes,
+  calculatePayrollTotals,
   validateScheduleEntry,
 } = require('./schedule_calculations');
 
@@ -103,4 +104,25 @@ test('interdaily rest blocks overnight gap < 12h', () => {
     shift: { start_time: '08:00', end_time: '16:00' },
   });
   assert.ok(validation.errors.includes('insufficient_interdaily_rest'));
+});
+
+test('payable minutes follow worked minutes and overtime follows worked-vs-norm', () => {
+  const totals = calculatePayrollTotals({
+    mode: 'normal',
+    workedMinutes: 8 * 60,
+    holidayMinutes: 8 * 60,
+    weekendMinutes: 0,
+    nightMinutes: 0,
+    normMinutes: 4 * 60,
+    calculationSettings: {
+      includePremiumsInPayable: true,
+      payableHoursMode: 'worked-plus-premiums',
+      overtimeMode: 'payable-vs-norm',
+      holidayPremiumCoefficient: 2,
+    },
+  });
+
+  assert.equal(totals.payableMinutes, 8 * 60);
+  assert.equal(totals.overtimeMinutes, 4 * 60);
+  assert.equal(totals.holidayPremiumMinutes, 8 * 60);
 });

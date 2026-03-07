@@ -155,14 +155,8 @@ function calculatePayrollTotals({
   const weekendPremiumMinutes = weekend * Math.max(1, settings.weekendPremiumCoefficient - 1);
   const nightPremiumMinutes = night * Math.max(0, settings.nightPremiumCoefficient);
 
-  const includePremiums = settings.includePremiumsInPayable && settings.payableHoursMode !== 'worked-only';
-  const payableMinutes = includePremiums
-    ? worked + holidayPremiumMinutes + weekendPremiumMinutes + nightPremiumMinutes
-    : worked;
-
-  const overtimeMinutes = settings.overtimeMode === 'payable-vs-norm'
-    ? Math.max(0, payableMinutes - norm)
-    : computeOvertimeMinutes({ mode, workedMinutes: worked, normMinutes: norm });
+  const payableMinutes = worked;
+  const overtimeMinutes = computeOvertimeMinutes({ mode, workedMinutes: worked, normMinutes: norm });
 
   return {
     workedMinutes: worked,
