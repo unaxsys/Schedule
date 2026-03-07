@@ -261,3 +261,22 @@
 .calc-rule-editor-toolbar { display:flex; flex-wrap:wrap; gap:8px; }
 .calc-rule-inline-status { margin-top:10px; font-size:13px; font-weight:600; color:#065f46; }
 .calc-rule-inline-status[data-ok='0'] { color:#b91c1c; }
+
+.calc-editor-table input,
+.calc-editor-table select,
+.calc-editor-table textarea {
+  width: 100%;
+  font-size: 12px;
+}
+
+.calc-editor-table td {
+  vertical-align: top;
+}
+
+.calc-editor-table td:last-child {
+  min-width: 190px;
+}
+
+.calc-editor-table td:last-child .calc-btn {
+  margin: 2px;
+}

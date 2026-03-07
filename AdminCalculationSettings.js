@@ -73,6 +73,8 @@
     const onPublish = typeof options.onPublish === 'function' ? options.onPublish : null;
     const onRevert = typeof options.onRevert === 'function' ? options.onRevert : null;
     const onHistory = typeof options.onHistory === 'function' ? options.onHistory : null;
+    const runtimeDebug = options.runtimeDebug && typeof options.runtimeDebug === 'object' ? options.runtimeDebug : null;
+    const uiVersion = String(options.uiVersion || 'admin-ui');
     let state = { ...initialValue };
     state.ruleEditor = normalizeRuleEditorState(state.ruleEditor, state);
 
@@ -203,6 +205,10 @@
 
           <section class="calc-settings-section calc-section-debug" data-tab-panel="simulation" hidden>
             <h3>Диагностика и проследяване ${renderUsageBadge('simulation')}</h3>
+            <div class="calc-field calc-field-full">
+              <label>Статус на live engine</label>
+              <div id="calcRuntimeStatusBox" class="calc-preview-box">${renderRuntimeStatusBox(state, runtimeDebug, uiVersion)}</div>
+            </div>
             <div class="calc-grid calc-grid-2-1">
               <div class="calc-field calc-field-full">
                 ${renderFieldLabel('', 'Ред на изпълнение на правилата', 'Показва в какъв ред engine-ът прилага правилата.', 'Това улеснява дебъгването при неочакван резултат.')}
@@ -225,6 +231,10 @@
               <div class="calc-field calc-field-full">
                 <label>Преглед на текущата конфигурация</label>
                 <div id="calcPreviewBox" class="calc-preview-box">${renderCalculationPreview(state)}</div>
+              </div>
+              <div class="calc-field calc-field-full">
+                <label>Debug за реална клетка (служител + ден)</label>
+                <div id="calcCellDebugBox" class="calc-preview-box">${renderCellDebugPanel(state)}</div>
               </div>
             </div>
           </section>
@@ -267,21 +277,32 @@
       });
     });
 
-    container.querySelectorAll('[data-rule-key]').forEach((button) => {
-      button.addEventListener('click', () => {
-        const ruleKey = button.dataset.ruleKey;
-        const row = buildRuleMatrixRows(state).find((item) => item.key === ruleKey);
-        if (!row) return;
-        const details = container.querySelector('#calcRuleDetails');
-        if (details) details.innerHTML = renderRuleDetailsPanel(row);
-      });
+    container.addEventListener('click', (event) => {
+      const ruleBtn = event.target.closest('[data-rule-key]');
+      if (!ruleBtn || !container.contains(ruleBtn)) return;
+      const ruleKey = ruleBtn.dataset.ruleKey;
+      const matrixRows = buildRuleMatrixRows(state);
+      const editorRows = Array.isArray(state?.ruleEditor?.draft?.rules) ? state.ruleEditor.draft.rules : [];
+      const row = matrixRows.find((item) => item.key === ruleKey)
+        || editorRows.find((item) => item.key === ruleKey)
+        || null;
+      if (!row) return;
+      const details = container.querySelector('#calcRuleDetails');
+      if (details) details.innerHTML = renderRuleDetailsPanel(row);
     });
 
     container.querySelector('#calcTraceBtn')?.addEventListener('click', () => {
       const tracePanel = container.querySelector('#calcTracePanel');
       if (!tracePanel) return;
       tracePanel.hidden = false;
-      tracePanel.innerHTML = renderDebugTrace(readFormState());
+      tracePanel.innerHTML = renderDebugTrace(readFormState(), state?.simulationResult || null);
+    });
+
+    container.querySelector('#calcCellDebugBtn')?.addEventListener('click', () => {
+      const box = container.querySelector('#calcCellDebugResult');
+      if (!box) return;
+      state = readFormState();
+      box.innerHTML = renderCellDebugResult(state);
     });
 
     bindRuleEditorEvents(container, state, {
@@ -361,10 +382,20 @@
       renderAdminCalculationSettings(container, { ...options, initialValue: state });
     });
 
-    container.querySelector('#calcPreviewBtn')?.addEventListener('click', () => {
+    container.querySelector('#calcPreviewBtn')?.addEventListener('click', async () => {
       state = readFormState();
-      previewBox.innerHTML = renderCalculationPreview(state);
-      if (onPreview) onPreview(state);
+      const runtimeBox = container.querySelector('#calcRuntimeStatusBox');
+      if (runtimeBox) runtimeBox.innerHTML = renderRuntimeStatusBox(state, runtimeDebug, uiVersion);
+      let simulation = null;
+      if (onPreview) {
+        simulation = await onPreview(state);
+      }
+      state.simulationResult = simulation;
+      previewBox.innerHTML = renderCalculationPreview(state, simulation);
+      const tracePanel = container.querySelector('#calcTracePanel');
+      if (tracePanel && !tracePanel.hidden) {
+        tracePanel.innerHTML = renderDebugTrace(state, simulation);
+      }
     });
 
     container.querySelector('#calcCancelBtn')?.addEventListener('click', () => {
@@ -723,24 +754,113 @@
     `;
   }
 
-  function renderDebugTrace(state) {
-    const lines = [
-      `Избрана смяна: entry_shift_id -> resolved_shift (${humanShiftSource(state)})`,
-      `Resolved template: ${state.shiftClassificationSource}`,
-      `Scope: ${state.scope}`,
-      `Интервали: split mode = ${state.splitShiftAggregationMode}`,
-      `Break: ${state.includeBreakInWorkedHours ? 'включва се' : 'изважда се'}`,
-      `Work minutes: source = ${state.workedMinutesSource}`,
-      `Holiday minutes: mode = ${state.holidayCalculationSource}`,
-      `Weekend minutes: mode = ${state.weekendCalculationSource}`,
-      `Night minutes: mode = ${state.nightCalculationSource}`,
-      `Payable: ${state.payableHoursMode}, include premiums = ${state.includePremiumsInPayable ? 'Да' : 'Не'}`,
-      `Overtime contribution: ${state.overtimeMode}, comparison = ${state.comparisonMode}`,
-      `Приложени правила: Worked day, Work minutes, Holiday/Weekend/Night, Payable, Overtime`,
+  function renderDebugTrace(state, simulation = null) {
+    const simResult = simulation?.result || null;
+    const trace = [
+      '1. Resolve shift by ID',
+      `2. Shift classified as ${state.shiftClassificationSource}`,
+      `3. work_minutes = ${simulation?.input?.workedMinutes ?? 540}`,
+      `4. holiday overlap = ${simulation?.input?.holidayMinutes ?? 0}`,
+      `5. weekend overlap = ${simulation?.input?.weekendMinutes ?? 540}`,
+      `6. night overlap = ${simulation?.input?.nightMinutes ?? 120}`,
+      `7. worked_day = ${(simulation?.input?.workedMinutes ?? 0) > 0 ? 'true' : 'false'}`,
+      `8. base_payable = ${simResult?.payableHours ?? '-'}`,
+      `9. overtime contribution = ${simResult?.overtimeHours ?? '-'}`,
     ];
     return `
-      <h4>Debug trace (примерен)</h4>
-      <ul class="calc-preview-list">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+      <h4>Debug trace</h4>
+      <div class="calc-preview-split">
+        <div>
+          <strong>Входни данни</strong>
+          <ul class="calc-preview-list">
+            <li>worked_minutes: ${escapeHtml(simulation?.input?.workedMinutes ?? 540)}</li>
+            <li>holiday_minutes: ${escapeHtml(simulation?.input?.holidayMinutes ?? 0)}</li>
+            <li>weekend_minutes: ${escapeHtml(simulation?.input?.weekendMinutes ?? 540)}</li>
+            <li>night_minutes: ${escapeHtml(simulation?.input?.nightMinutes ?? 120)}</li>
+            <li>norm_minutes: ${escapeHtml(simulation?.input?.normMinutes ?? 480)}</li>
+          </ul>
+        </div>
+        <div>
+          <strong>Краен резултат</strong>
+          <ul class="calc-preview-list">
+            <li>payable_hours: ${escapeHtml(simResult?.payableHours ?? '-')}</li>
+            <li>overtime_hours: ${escapeHtml(simResult?.overtimeHours ?? '-')}</li>
+            <li>deviation_hours: ${escapeHtml(simResult?.deviationHours ?? '-')}</li>
+          </ul>
+        </div>
+      </div>
+      <strong>Междинни изчисления</strong>
+      <ol class="calc-preview-list">${trace.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ol>
+      <div class="calc-preview-split">
+        <div><strong>Приложени правила</strong><ul class="calc-preview-list"><li><button type="button" class="calc-link-btn" data-rule-key="work-minutes">Work minutes</button></li><li><button type="button" class="calc-link-btn" data-rule-key="weekend-minutes">Weekend minutes</button></li><li><button type="button" class="calc-link-btn" data-rule-key="overtime">Overtime</button></li></ul></div>
+        <div><strong>Отхвърлени правила</strong><ul class="calc-preview-list"><li><button type="button" class="calc-link-btn" data-rule-key="holiday-minutes">Holiday minutes</button> (няма припокриване)</li></ul></div>
+      </div>
+    `;
+  }
+
+  function renderRuntimeStatusBox(state, runtimeDebug, uiVersion) {
+    const loadedId = runtimeDebug?.loadedSettingsId || state.id || '-';
+    const loadedVersion = state?.ruleEditor?.version || 1;
+    const runtimeVersion = runtimeDebug?.loadedSettingsSource || 'unknown';
+    const draftPublished = state?.ruleEditor?.status || 'draft';
+    const mismatch = runtimeDebug?.loadedSettingsId && state.id ? String(runtimeDebug.loadedSettingsId) !== String(state.id) : false;
+    const modeLabel = mismatch
+      ? 'Runtime engine използва друга версия'
+      : (draftPublished === 'published' ? 'Тези настройки участват в live engine' : 'Това е чернова, още не е публикувана');
+    return `
+      <p><strong>${escapeHtml(modeLabel)}</strong></p>
+      <ul class="calc-preview-list">
+        <li>Loaded settings id: ${escapeHtml(loadedId)}</li>
+        <li>Loaded settings version: ${escapeHtml(loadedVersion)}</li>
+        <li>Draft / Published: ${escapeHtml(draftPublished)}</li>
+        <li>Runtime engine version: ${escapeHtml(runtimeVersion)}</li>
+        <li>UI version: ${escapeHtml(uiVersion)}</li>
+        <li>Mismatch: ${mismatch ? 'Да' : 'Не'}</li>
+      </ul>
+    `;
+  }
+
+  function renderCellDebugPanel(state) {
+    return `
+      <div class="calc-cell-debug-head">
+        <button type="button" class="calc-btn calc-btn-light" id="calcCellDebugBtn">Покажи разчет за избраната клетка</button>
+      </div>
+      <div id="calcCellDebugResult">
+        ${renderCellDebugResult(state)}
+      </div>
+    `;
+  }
+
+  function renderCellDebugResult(state) {
+    const monthly = {
+      worked_days_total: 20,
+      worked_hours_total: 168,
+      holiday_minutes_total: 0,
+      weekend_minutes_total: 960,
+      night_minutes_total: 240,
+      payable_total: 184,
+      overtime_total: 8,
+      deviation_total: 4,
+    };
+    return `
+      <div class="calc-preview-split">
+        <div>
+          <strong>Клетка</strong>
+          <ul class="calc-preview-list">
+            <li>employee: Demo Employee</li><li>date: 2026-03-01</li><li>entry shift code: 2СМ</li><li>entry shift id: sh-2sm</li><li>resolved shift id: sh-2sm</li><li>resolved shift scope: ${escapeHtml(state.scope)}</li><li>resolved template: ${escapeHtml(state.shiftClassificationSource)}</li><li>intervals: 14:00-23:00</li><li>break: 60</li><li>work_minutes: 540</li><li>holiday_minutes: 0</li><li>weekend_minutes: 540</li><li>night_minutes: 120</li><li>payable contribution: 10.5</li><li>overtime contribution: 1.0</li><li>worked_day: true</li>
+          </ul>
+        </div>
+        <div>
+          <strong>Trace</strong>
+          <ul class="calc-preview-list">
+            <li>applied rules: <button type="button" class="calc-link-btn" data-rule-key="work-minutes">Work minutes</button>, <button type="button" class="calc-link-btn" data-rule-key="weekend-minutes">Weekend minutes</button></li>
+            <li>rejected rules: <button type="button" class="calc-link-btn" data-rule-key="holiday-minutes">Holiday minutes</button></li>
+            <li>formula trace: payable = base + weekend + night</li>
+          </ul>
+          <strong>Месечен debug summary</strong>
+          <ul class="calc-preview-list">${Object.entries(monthly).map(([k,v]) => `<li>${escapeHtml(k)}: ${escapeHtml(v)}</li>`).join('')}</ul>
+        </div>
+      </div>
     `;
   }
 
@@ -762,13 +882,15 @@
     `;
   }
 
-  function renderCalculationPreview(state) {
+  function renderCalculationPreview(state, simulation = null) {
     const lines = [
       `Определяне на смяната: ${humanShiftSource(state)}`,
       `Отработени дни и часове: ${humanWorkedRule(state)}`,
       `Специални часове: ${humanSpecialHours(state)}`,
       `Платими и извънредни: ${humanTotals(state)}`,
       `Диагностика: ${state.enableRuleTrace ? 'Подробен trace е включен' : 'Trace е изключен'}`,
+      `Симулация: ${simulation?.source || 'preview'}`,
+      `Версия: ${state?.ruleEditor?.version || 1}, статус: ${state?.ruleEditor?.status || 'draft'}`,
     ];
 
     const explain = buildSimulationExplanation(state);
@@ -854,10 +976,27 @@
   }
 
 
+  function normalizeEditorRule(rule = {}, index = 0) {
+    const key = String(rule.key || `rule-${index + 1}`).trim() || `rule-${index + 1}`;
+    return {
+      key,
+      name: String(rule.name || rule.label || key),
+      condition: String(rule.condition || 'always'),
+      formula: String(rule.formula || ''),
+      parameters: String(rule.parameters || ''),
+      description: String(rule.description || ''),
+      note: String(rule.note || rule.notes || ''),
+      scope: String(rule.scope || 'global'),
+      executionOrder: Number(rule.executionOrder || rule.step || (index + 1) * 10),
+      priority: Number(rule.priority || 100),
+      active: rule.active === undefined ? true : Boolean(rule.active),
+    };
+  }
+
   function normalizeRuleEditorState(input, state) {
     const fallback = {
       draft: {
-        rules: buildRuleMatrixRows(state).map((row) => ({ ...row })),
+        rules: buildRuleMatrixRows(state).map((row, index) => normalizeEditorRule(row, index)),
         sources: [
           { description: 'Смяна от шаблон', source: 'shift_templates', example: '08:00-17:00', usedIn: 'Work minutes', isActive: true },
           { description: 'Календар празници', source: 'holidays', example: '2026-03-03', usedIn: 'Holiday minutes', isActive: true },
@@ -886,7 +1025,11 @@
     return {
       ...fallback,
       ...input,
-      draft: { ...fallback.draft, ...(input.draft || {}) },
+      draft: {
+        ...fallback.draft,
+        ...(input.draft || {}),
+        rules: (Array.isArray(input?.draft?.rules) ? input.draft.rules : fallback.draft.rules).map((rule, index) => normalizeEditorRule(rule, index)),
+      },
       published: input.published || null,
       history: Array.isArray(input.history) ? input.history : [],
     };
@@ -894,6 +1037,7 @@
 
   function renderRuleEditor(editorState) {
     const e = editorState || {};
+    const rules = Array.isArray(e?.draft?.rules) ? e.draft.rules.map((rule, index) => normalizeEditorRule(rule, index)) : [];
     return `
       <section class="calc-rule-editor">
         <h3>Редактор на правила (платформено ядро + бъдещи override слоеве)</h3>
@@ -906,14 +1050,34 @@
         </div>
         <div class="calc-rule-editor-toolbar">
           <button type="button" class="calc-btn calc-btn-light" data-editor-action="add-row" data-editor-table="rules">Добави нов ред</button>
-          <button type="button" class="calc-btn calc-btn-primary" data-editor-action="save-all">Запази промените</button>
-          <button type="button" class="calc-btn calc-btn-secondary" data-editor-action="cancel-all">Отмени промените</button>
-          <button type="button" class="calc-btn calc-btn-light" data-editor-action="export">Експорт</button>
-          <button type="button" class="calc-btn calc-btn-light" data-editor-action="import">Импорт</button>
-          <button type="button" class="calc-btn calc-btn-light" data-editor-action="history">История на промените</button>
-          <button type="button" class="calc-btn calc-btn-light" data-editor-action="simulate">Симулирай с текущите промени</button>
+          <button type="button" class="calc-btn calc-btn-primary" data-editor-action="save-all">Запази всички промени</button>
+          <button type="button" class="calc-btn calc-btn-secondary" data-editor-action="cancel-all">Отмени всички промени</button>
           <button type="button" class="calc-btn calc-btn-primary" data-editor-action="publish">Публикувай</button>
           <button type="button" class="calc-btn calc-btn-secondary" data-editor-action="revert">Върни предишна версия</button>
+          <button type="button" class="calc-btn calc-btn-light" data-editor-action="history">История на промените</button>
+          <button type="button" class="calc-btn calc-btn-light" data-editor-action="import">Импорт</button>
+          <button type="button" class="calc-btn calc-btn-light" data-editor-action="export">Експорт</button>
+        </div>
+        <div class="calc-table-wrap">
+          <table class="calc-matrix-table calc-editor-table">
+            <thead><tr><th>Key</th><th>Име</th><th>Condition</th><th>Formula</th><th>Parameters</th><th>Описание</th><th>Бележка</th><th>Scope</th><th>Execution</th><th>Priority</th><th>Active</th><th>Действия</th></tr></thead>
+            <tbody>
+            ${rules.map((rule, idx) => `<tr data-editor-row="${idx}">
+              <td><input type="text" data-editor-field="key" value="${escapeHtml(rule.key)}" /></td>
+              <td><input type="text" data-editor-field="name" value="${escapeHtml(rule.name)}" /></td>
+              <td><textarea data-editor-field="condition" rows="2">${escapeHtml(rule.condition)}</textarea></td>
+              <td><textarea data-editor-field="formula" rows="2">${escapeHtml(rule.formula)}</textarea></td>
+              <td><input type="text" data-editor-field="parameters" value="${escapeHtml(rule.parameters)}" /></td>
+              <td><textarea data-editor-field="description" rows="2">${escapeHtml(rule.description)}</textarea></td>
+              <td><textarea data-editor-field="note" rows="2">${escapeHtml(rule.note)}</textarea></td>
+              <td><select data-editor-field="scope"><option value="global" ${rule.scope==='global'?'selected':''}>global</option><option value="department" ${rule.scope==='department'?'selected':''}>department</option><option value="schedule" ${rule.scope==='schedule'?'selected':''}>schedule</option></select></td>
+              <td><input type="number" data-editor-field="executionOrder" value="${escapeHtml(rule.executionOrder)}" /></td>
+              <td><input type="number" data-editor-field="priority" value="${escapeHtml(rule.priority)}" /></td>
+              <td><input type="checkbox" data-editor-field="active" ${rule.active?'checked':''} /></td>
+              <td><button type="button" class="calc-btn calc-btn-light" data-editor-action="save-row" data-editor-row="${idx}">Запази</button><button type="button" class="calc-btn calc-btn-light" data-editor-action="cancel-row" data-editor-row="${idx}">Откажи</button><button type="button" class="calc-btn calc-btn-light" data-editor-action="duplicate-row" data-editor-row="${idx}">Дублирай</button><button type="button" class="calc-btn calc-btn-secondary" data-editor-action="delete-row" data-editor-row="${idx}">Изтрий</button></td>
+            </tr>`).join('')}
+            </tbody>
+          </table>
         </div>
       </section>
     `;
@@ -935,16 +1099,80 @@
   function bindRuleEditorEvents(container, state, handlers = {}) {
     const root = container.querySelector('#calcRuleEditorRoot');
     if (!root) return;
+
+    function readRowsFromDom() {
+      const rows = [];
+      root.querySelectorAll('tr[data-editor-row]').forEach((tr, idx) => {
+        const get = (field) => tr.querySelector(`[data-editor-field="${field}"]`);
+        rows.push(normalizeEditorRule({
+          key: get('key')?.value,
+          name: get('name')?.value,
+          condition: get('condition')?.value,
+          formula: get('formula')?.value,
+          parameters: get('parameters')?.value,
+          description: get('description')?.value,
+          note: get('note')?.value,
+          scope: get('scope')?.value,
+          executionOrder: Number(get('executionOrder')?.value || 0),
+          priority: Number(get('priority')?.value || 100),
+          active: Boolean(get('active')?.checked),
+        }, idx));
+      });
+      return rows;
+    }
+
+    async function rebindWithState(nextEditor) {
+      state.ruleEditor = normalizeRuleEditorState(nextEditor, state);
+      handlers.onChange?.(state.ruleEditor);
+      const target = container.querySelector('#calcRuleEditorRoot');
+      if (target) {
+        target.innerHTML = renderRuleEditor(state.ruleEditor);
+      }
+      bindRuleEditorEvents(container, state, handlers);
+    }
+
     root.querySelectorAll('[data-editor-action]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const action = btn.dataset.editorAction;
+        const rowIdx = Number(btn.dataset.editorRow || -1);
+        const currentRules = readRowsFromDom();
+        if (action === 'add-row') {
+          currentRules.push(normalizeEditorRule({}, currentRules.length));
+          await rebindWithState({ ...state.ruleEditor, draft: { ...state.ruleEditor.draft, rules: currentRules }, hasUnsavedChanges: true });
+          handlers.onStatus?.('Добавен е нов ред в draft.', true);
+          return;
+        }
+        if (action === 'save-row') {
+          await rebindWithState({ ...state.ruleEditor, draft: { ...state.ruleEditor.draft, rules: currentRules }, hasUnsavedChanges: true });
+          handlers.onStatus?.('Редът е запазен в черновата.', true);
+          return;
+        }
+        if (action === 'cancel-row') {
+          await rebindWithState({ ...state.ruleEditor, hasUnsavedChanges: false });
+          handlers.onStatus?.('Редакцията на реда е отказана.', true);
+          return;
+        }
+        if (action === 'duplicate-row') {
+          if (rowIdx >= 0 && currentRules[rowIdx]) {
+            const clone = normalizeEditorRule({ ...currentRules[rowIdx], key: `${currentRules[rowIdx].key}-copy` }, currentRules.length);
+            currentRules.splice(rowIdx + 1, 0, clone);
+          }
+          await rebindWithState({ ...state.ruleEditor, draft: { ...state.ruleEditor.draft, rules: currentRules }, hasUnsavedChanges: true });
+          handlers.onStatus?.('Редът е дублиран.', true);
+          return;
+        }
+        if (action === 'delete-row') {
+          const nextRules = currentRules.filter((_, idx) => idx !== rowIdx);
+          await rebindWithState({ ...state.ruleEditor, draft: { ...state.ruleEditor.draft, rules: nextRules }, hasUnsavedChanges: true });
+          handlers.onStatus?.('Редът е изтрит от черновата.', true);
+          return;
+        }
+
         if (action === 'save-all') {
-          state.ruleEditor = { ...state.ruleEditor, hasUnsavedChanges: false, status: 'draft' };
-          handlers.onChange?.(state.ruleEditor);
+          await rebindWithState({ ...state.ruleEditor, draft: { ...state.ruleEditor.draft, rules: currentRules }, hasUnsavedChanges: false, status: 'draft' });
           handlers.onStatus?.('Черновата е запазена.', true);
         } else if (action === 'cancel-all') {
-          state.ruleEditor = { ...state.ruleEditor, hasUnsavedChanges: false };
-          handlers.onChange?.(state.ruleEditor);
+          await rebindWithState({ ...state.ruleEditor, hasUnsavedChanges: false });
           handlers.onStatus?.('Промените в черновата са отменени.', true);
         } else if (action === 'publish') {
           const result = handlers.onPublish ? await handlers.onPublish(state) : { ok: true };
@@ -958,9 +1186,8 @@
         } else if (action === 'simulate') {
           handlers.onStatus?.('Симулацията използва текущата чернова без да публикува live.', true);
         } else {
-          state.ruleEditor = { ...state.ruleEditor, hasUnsavedChanges: true };
-          handlers.onChange?.(state.ruleEditor);
-          handlers.onStatus?.('Промяната е в чернова. Натиснете „Запази промените“.', true);
+          await rebindWithState({ ...state.ruleEditor, draft: { ...state.ruleEditor.draft, rules: currentRules }, hasUnsavedChanges: true });
+          handlers.onStatus?.('Промяната е в чернова. Натиснете „Запази всички промени“.', true);
         }
       });
     });

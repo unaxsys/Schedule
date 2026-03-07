@@ -7750,6 +7750,8 @@ function renderAdminCalculationSettingsPanel() {
     departments: state.departments || [],
     schedules: state.schedules || [],
     initialValue: state.calculationSettings || {},
+    runtimeDebug: state.calculationSettingsRuntimeDebug || null,
+    uiVersion: 'admin-ui-v2',
     onSave: async (settingsPayload) => {
       const requestBody = { ...settingsPayload };
       const method = requestBody.id ? 'PUT' : 'POST';
@@ -7785,8 +7787,45 @@ function renderAdminCalculationSettingsPanel() {
     onCancel: () => {
       setStatus('Промените в настройките за изчисление не бяха записани.', false);
     },
-    onPreview: () => {
-      // preview only in UI
+    onPreview: async (settingsPayload) => {
+      const simulationInput = {
+        mode: settingsPayload?.comparisonMode === 'sirv-monthly' ? 'sirv' : 'normal',
+        workedMinutes: 540,
+        holidayMinutes: 0,
+        weekendMinutes: 540,
+        nightMinutes: 120,
+        normMinutes: 480,
+        settingsOverride: settingsPayload,
+      };
+      if (!state.backendAvailable) {
+        return {
+          ok: true,
+          source: 'local-preview',
+          input: simulationInput,
+          result: null,
+          settingsDebug: state.calculationSettingsRuntimeDebug || null,
+        };
+      }
+      try {
+        const response = await apiFetch('/api/admin/calculation-settings/simulate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(simulationInput),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          return { ok: false, message: payload.message || 'Грешка при симулацията.' };
+        }
+        return {
+          ok: true,
+          source: 'runtime-simulate-api',
+          input: simulationInput,
+          result: payload.result || null,
+          settingsDebug: payload.settingsDebug || null,
+        };
+      } catch {
+        return { ok: false, message: 'Грешка при връзка със simulate API.' };
+      }
     },
   });
 }
