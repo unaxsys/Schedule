@@ -452,8 +452,6 @@
                 <label>Празнични часове<input id="saHolidayHours" type="number" min="0" step="0.25" value="8" /></label>
                 <label>Уикенд часове<input id="saWeekendHours" type="number" min="0" step="0.25" value="16" /></label>
                 <label>Нощни часове (премия)<input id="saNightPremiumHours" type="number" min="0" step="0.25" value="2" /></label>
-                <label>Коефициент празник<input id="saHolidayRate" type="number" min="1" step="0.01" value="2" /></label>
-                <label>Коефициент уикенд<input id="saWeekendRate" type="number" min="1" step="0.01" value="1.75" /></label>
 
                 <fieldset class="sa-logic-flags">
                   <legend>Критерии за режим (фиксиран график vs СИРВ)</legend>
@@ -468,6 +466,7 @@
             </article>
             <article class="sa-logic-card">
               <h4>Резултат</h4>
+              <div id="saRuntimeInfo" class="sa-bubbles" style="margin-bottom:8px;"></div>
               <div id="saLogicSummary" class="sa-logic-result"></div>
               <div id="saLogicFormula" class="sa-bubbles"></div>
             </article>
@@ -547,12 +546,12 @@
       const longShiftRotationsInput = document.getElementById('saLongShiftRotations');
       const logicSummaryEl = document.getElementById('saLogicSummary');
       const logicFormulaEl = document.getElementById('saLogicFormula');
+      const runtimeInfoEl = document.getElementById('saRuntimeInfo');
       const holidaysYearInput = document.getElementById('saHolidayYear');
       const holidaysLoadBtn = document.getElementById('saHolidayLoadBtn');
       const holidaysSeedBtn = document.getElementById('saHolidaySeedBtn');
       const holidaysForm = document.getElementById('saHolidayForm');
       const holidaysRowsEl = document.getElementById('saHolidayRows');
-      const holidaysTenantInput = document.getElementById('saHolidayTenant'); // compatibility for old cached handlers
 
       function safeAddListener(element, eventName, handler) {
         if (element && typeof element.addEventListener === 'function') {
@@ -565,7 +564,8 @@
       let apiBaseUrl = localStorage.getItem('apiBaseUrl') || `${window.location.protocol}//${window.location.hostname}:4000`;
       let previousTenantSnapshot = new Map();
       let tenantNameById = new Map();
-      let selectedHolidayTenantId = '';
+      let calculationSettingsSource = 'localStorage';
+      let currentCalculationSettingsForSimulator = loadSuperAdminCalculationSettingsLocal();
       apiUrlInput.value = apiBaseUrl;
 
       function setStatus(text, ok = true) {
@@ -616,8 +616,11 @@
           const payload = await apiRequest('/api/platform/super-admin/calculation-settings', { method: 'GET' });
           const setting = payload.setting || payload.settings?.[0] || {};
           saveSuperAdminCalculationSettingsLocal(setting);
+          currentCalculationSettingsForSimulator = setting;
+          calculationSettingsSource = 'API';
           return setting;
         } catch (_error) {
+          calculationSettingsSource = 'localStorage';
           return loadSuperAdminCalculationSettingsLocal();
         }
       }
@@ -628,6 +631,7 @@
         }
 
         const value = initialValue || loadSuperAdminCalculationSettingsLocal();
+        currentCalculationSettingsForSimulator = value;
         window.AdminCalculationSettings.renderAdminCalculationSettings(saAdminCalculationSettingsContainer, {
           departments: [],
           schedules: [],
@@ -644,6 +648,9 @@
               });
               const saved = payload.setting || settingsPayload;
               saveSuperAdminCalculationSettingsLocal(saved);
+              currentCalculationSettingsForSimulator = saved;
+              calculationSettingsSource = 'API';
+              await renderCalculationLogic();
               return { ok: true };
             } catch (error) {
               return { ok: false, message: String(error?.message || 'Грешка при запис на настройките.') };
@@ -652,8 +659,29 @@
           onCancel: () => {
             setStatus('Промените в логиката за изчисление не са записани.', false);
           },
-          onPreview: () => {},
+          onPreview: (settingsPayload) => {
+            currentCalculationSettingsForSimulator = settingsPayload || currentCalculationSettingsForSimulator;
+            calculationSettingsSource = 'UI-preview';
+          },
         });
+      }
+
+      function renderRuntimeInfoBox({ settingsDebug = {}, resolvedMode, mismatch }) {
+        if (!runtimeInfoEl) {
+          return;
+        }
+
+        const lines = [
+          `loaded settings id: ${settingsDebug.loadedSettingsId || 'defaults'}`,
+          `loaded settings updated_at: ${settingsDebug.loadedSettingsUpdatedAt || 'n/a'}`,
+          `source: ${calculationSettingsSource}`,
+          `simulator mode: runtime-engine (${resolvedMode.mode})`,
+          `engine integration status: ${mismatch ? 'MISMATCH' : 'OK'}`,
+        ];
+
+        runtimeInfoEl.innerHTML = lines
+          .map((line) => `<span class="sa-bubble">${escapeHtml(line)}</span>`)
+          .join('');
       }
 
       function toPositiveNumber(value, fallback = 0) {
@@ -695,45 +723,54 @@
         };
       }
 
-      function renderCalculationLogic() {
+      async function renderCalculationLogic() {
         const selectedMode = logicModeInput.value === 'sirv' ? 'sirv' : 'normal';
         const resolvedMode = resolveCalculatedMode(selectedMode);
-        const mode = resolvedMode.mode;
         const workedHours = toPositiveNumber(document.getElementById('saWorkedHours').value);
         const normHours = toPositiveNumber(document.getElementById('saNormHours').value);
         const holidayHours = toPositiveNumber(document.getElementById('saHolidayHours').value);
         const weekendHours = toPositiveNumber(document.getElementById('saWeekendHours').value);
         const nightPremiumHours = toPositiveNumber(document.getElementById('saNightPremiumHours').value);
-        const holidayRate = Math.max(1, toPositiveNumber(document.getElementById('saHolidayRate').value, 2));
-        const weekendRate = Math.max(1, toPositiveNumber(document.getElementById('saWeekendRate').value, 1.75));
 
-        const normalizedHolidayHours = holidayHours * holidayRate;
-        const normalizedWeekendHours = mode === 'sirv' ? weekendHours : weekendHours * weekendRate;
-        const payableHours = workedHours - holidayHours - weekendHours + normalizedHolidayHours + normalizedWeekendHours + nightPremiumHours;
-        const overtimeHours = mode === 'sirv' ? Math.max(0, workedHours + nightPremiumHours - normHours) : Math.max(0, workedHours - normHours);
+        const payload = await apiRequest('/api/platform/super-admin/calculation-settings/simulate', {
+          method: 'POST',
+          body: JSON.stringify({
+            mode: resolvedMode.mode,
+            workedMinutes: Math.round(workedHours * 60),
+            normMinutes: Math.round(normHours * 60),
+            holidayMinutes: Math.round(holidayHours * 60),
+            weekendMinutes: Math.round(weekendHours * 60),
+            nightMinutes: Math.round(nightPremiumHours * 60),
+            settingsOverride: currentCalculationSettingsForSimulator,
+          }),
+        });
+
+        const result = payload.result || {};
+        const settingsDebug = payload.settingsDebug || {};
+        const localSetting = loadSuperAdminCalculationSettingsLocal();
+        const mismatch = Boolean(localSetting?.id) && Boolean(settingsDebug.loadedSettingsId) && String(localSetting.id) !== String(settingsDebug.loadedSettingsId);
+        renderRuntimeInfoBox({ settingsDebug, resolvedMode, mismatch });
 
         logicSummaryEl.innerHTML = `
-          <strong>${mode === 'sirv' ? 'СИРВ режим' : 'Нормален режим'}</strong><br />
+          <strong>${resolvedMode.mode === 'sirv' ? 'СИРВ режим' : 'Нормален режим'}</strong><br />
           Основание: ${escapeHtml(resolvedMode.reason)}<br />
-          Платими часове: <strong>${payableHours.toFixed(2)}</strong><br />
-          Извънреден труд: <strong>${overtimeHours.toFixed(2)}</strong><br />
-          Норма за сравнение: <strong>${normHours.toFixed(2)}</strong>
+          Платими часове: <strong>${(Number(result.payableMinutes || 0) / 60).toFixed(2)}</strong><br />
+          Извънреден труд: <strong>${(Number(result.overtimeMinutes || 0) / 60).toFixed(2)}</strong><br />
+          Runtime settings: <strong>${escapeHtml(settingsDebug.loadedSettingsId || 'defaults')}</strong><br />
+          ${mismatch ? '<span style="color:#b91c1c">⚠️ UI config и runtime config са различни.</span>' : '<span style="color:#166534">✅ UI config и runtime config са синхронизирани.</span>'}
         `;
 
         logicFormulaEl.innerHTML = [
-          `Избран режим: ${selectedMode === 'sirv' ? 'СИРВ' : 'Нормално'} → Приложен режим: ${mode === 'sirv' ? 'СИРВ' : 'Нормално'}`,
-          `Празнични: ${holidayHours.toFixed(2)} × ${holidayRate.toFixed(2)} = ${normalizedHolidayHours.toFixed(2)}`,
-          mode === 'sirv'
-            ? `Уикенд (СИРВ): ${weekendHours.toFixed(2)} × 1.00 = ${normalizedWeekendHours.toFixed(2)}`
-            : `Уикенд (нормално): ${weekendHours.toFixed(2)} × ${weekendRate.toFixed(2)} = ${normalizedWeekendHours.toFixed(2)}`,
-          `Платими = ${workedHours.toFixed(2)} - ${holidayHours.toFixed(2)} - ${weekendHours.toFixed(2)} + ${normalizedHolidayHours.toFixed(2)} + ${normalizedWeekendHours.toFixed(2)} + ${nightPremiumHours.toFixed(2)}`,
-          mode === 'sirv'
-            ? `Извънреден (СИРВ) = max(0, ${workedHours.toFixed(2)} + ${nightPremiumHours.toFixed(2)} - ${normHours.toFixed(2)})`
-            : `Извънреден (нормално) = max(0, ${workedHours.toFixed(2)} - ${normHours.toFixed(2)})`,
+          `mode=${resolvedMode.mode}`,
+          `worked=${workedHours.toFixed(2)}h norm=${normHours.toFixed(2)}h`,
+          `holiday=${holidayHours.toFixed(2)}h weekend=${weekendHours.toFixed(2)}h night=${nightPremiumHours.toFixed(2)}h`,
+          `runtime_source=${settingsDebug.loadedSettingsSource || 'defaults'}`,
+          `payable=${(Number(result.payableMinutes || 0) / 60).toFixed(2)}h overtime=${(Number(result.overtimeMinutes || 0) / 60).toFixed(2)}h`,
         ]
           .map((line) => `<span class="sa-bubble">${escapeHtml(line)}</span>`)
           .join('');
       }
+
 
 
       function escapeHtml(value) {
@@ -883,20 +920,6 @@
           .join('');
 
         previousTenantSnapshot = nextSnapshot;
-        renderHolidayTenantOptions();
-      }
-
-      function renderHolidayTenantOptions() {
-        if (!holidaysTenantInput) {
-          return;
-        }
-        const options = Array.from(tenantNameById.entries())
-          .map(([id, name]) => `<option value="${escapeHtml(id)}">${escapeHtml(name)} (${escapeHtml(id)})</option>`)
-          .join('');
-        holidaysTenantInput.innerHTML = `<option value="">Избери фирма…</option>${options}`;
-        if (selectedHolidayTenantId && tenantNameById.has(selectedHolidayTenantId)) {
-          holidaysTenantInput.value = selectedHolidayTenantId;
-        }
       }
 
       function holidayTypeLabel(type) {
@@ -913,193 +936,21 @@
           return;
         }
         if (!rows.length) {
-          holidaysRowsEl.innerHTML = '<tr><td colspan="4">Няма дни за тази година.</td></tr>';
+          holidaysRowsEl.innerHTML = '<tr><td colspan="5">Няма дни за тази година.</td></tr>';
           return;
         }
 
         holidaysRowsEl.innerHTML = rows
           .map((row) => {
-            const rowType = String(row.type || 'none');
-            const canDelete = rowType !== 'official';
+            const rowType = String(row.type || (row.isOfficial ? 'official' : 'official'));
+            const canDelete = rowType !== 'official' || Boolean(row.source);
             return `
               <tr>
                 <td>${escapeHtml(row.date || '—')}</td>
                 <td>${escapeHtml(row.name || '—')}</td>
                 <td><span class="sa-holiday-type sa-holiday-type--${escapeHtml(rowType)}">${escapeHtml(holidayTypeLabel(rowType))}</span></td>
+                <td>${escapeHtml(row.source || 'platform')}</td>
                 <td>${canDelete ? `<button type="button" onclick="window.__saDeleteHoliday('${escapeHtml(row.date)}')">Изтрий</button>` : '🔒'}</td>
-              </tr>
-            `;
-          })
-          .join('');
-      }
-
-      async function loadTenantHolidays() {
-        if (!selectedHolidayTenantId) {
-          renderHolidayRows([]);
-          return;
-        }
-        const year = Number(holidaysYearInput?.value || new Date().getFullYear());
-        if (!Number.isInteger(year) || year < 2020 || year > 2100) {
-          setStatus('Невалидна година за празници.', false);
-          return;
-        }
-        const path = tenantScopedPath(`/api/holidays?year=${encodeURIComponent(String(year))}`, selectedHolidayTenantId);
-        const payload = await apiRequest(path);
-        renderHolidayRows(payload.holidays || []);
-      }
-
-      function holidayTypeLabel(type) {
-        const map = {
-          official: 'Официален празник',
-        };
-        return map[type] || 'Официален празник';
-      }
-
-      function renderHolidayRows(rows = []) {
-        if (!holidaysRowsEl) {
-          return;
-        }
-        if (!rows.length) {
-          holidaysRowsEl.innerHTML = '<tr><td colspan="5">Няма дни за тази година.</td></tr>';
-          return;
-        }
-
-        holidaysRowsEl.innerHTML = rows
-          .map((row) => {
-            const rowType = String(row.isOfficial ? 'official' : 'official');
-            return `
-              <tr>
-                <td>${escapeHtml(row.date || '—')}</td>
-                <td>${escapeHtml(row.name || '—')}</td>
-                <td><span class="sa-holiday-type sa-holiday-type--official">${escapeHtml(holidayTypeLabel(rowType))}</span></td>
-                <td>${escapeHtml(row.source || '—')}</td>
-                <td><button type="button" onclick="window.__saDeleteHoliday('${escapeHtml(row.date)}')">Изтрий</button></td>
-              </tr>
-            `;
-          })
-          .join('');
-      }
-
-      async function loadPublicHolidays() {
-        const year = Number(holidaysYearInput?.value || new Date().getFullYear());
-        if (!Number.isInteger(year) || year < 2020 || year > 2100) {
-          setStatus('Невалидна година за празници.', false);
-          return;
-        }
-        const payload = await apiRequest(`/api/platform/super-admin/public-holidays?year=${encodeURIComponent(String(year))}`);
-        renderHolidayRows(payload.holidays || []);
-      }
-
-      function holidayTypeLabel(type) {
-        const map = {
-          official: 'Официален празник',
-        };
-        return map[type] || 'Официален празник';
-      }
-
-      function renderHolidayRows(rows = []) {
-        if (!holidaysRowsEl) {
-          return;
-        }
-        if (!rows.length) {
-          holidaysRowsEl.innerHTML = '<tr><td colspan="5">Няма дни за тази година.</td></tr>';
-          return;
-        }
-
-        holidaysRowsEl.innerHTML = rows
-          .map((row) => {
-            const rowType = String(row.isOfficial ? 'official' : 'official');
-            return `
-              <tr>
-                <td>${escapeHtml(row.date || '—')}</td>
-                <td>${escapeHtml(row.name || '—')}</td>
-                <td><span class="sa-holiday-type sa-holiday-type--official">${escapeHtml(holidayTypeLabel(rowType))}</span></td>
-                <td>${escapeHtml(row.source || '—')}</td>
-                <td><button type="button" onclick="window.__saDeleteHoliday('${escapeHtml(row.date)}')">Изтрий</button></td>
-              </tr>
-            `;
-          })
-          .join('');
-      }
-
-      async function loadPublicHolidays() {
-        const year = Number(holidaysYearInput?.value || new Date().getFullYear());
-        if (!Number.isInteger(year) || year < 2020 || year > 2100) {
-          setStatus('Невалидна година за празници.', false);
-          return;
-        }
-        const payload = await apiRequest(`/api/platform/super-admin/public-holidays?year=${encodeURIComponent(String(year))}`);
-        renderHolidayRows(payload.holidays || []);
-      }
-
-      function holidayTypeLabel(type) {
-        const map = {
-          official: 'Официален празник',
-        };
-        return map[type] || 'Официален празник';
-      }
-
-      function renderHolidayRows(rows = []) {
-        if (!holidaysRowsEl) {
-          return;
-        }
-        if (!rows.length) {
-          holidaysRowsEl.innerHTML = '<tr><td colspan="5">Няма дни за тази година.</td></tr>';
-          return;
-        }
-
-        holidaysRowsEl.innerHTML = rows
-          .map((row) => {
-            const rowType = String(row.isOfficial ? 'official' : 'official');
-            return `
-              <tr>
-                <td>${escapeHtml(row.date || '—')}</td>
-                <td>${escapeHtml(row.name || '—')}</td>
-                <td><span class="sa-holiday-type sa-holiday-type--official">${escapeHtml(holidayTypeLabel(rowType))}</span></td>
-                <td>${escapeHtml(row.source || '—')}</td>
-                <td><button type="button" onclick="window.__saDeleteHoliday('${escapeHtml(row.date)}')">Изтрий</button></td>
-              </tr>
-            `;
-          })
-          .join('');
-      }
-
-      async function loadPublicHolidays() {
-        const year = Number(holidaysYearInput?.value || new Date().getFullYear());
-        if (!Number.isInteger(year) || year < 2020 || year > 2100) {
-          setStatus('Невалидна година за празници.', false);
-          return;
-        }
-        const payload = await apiRequest(`/api/platform/super-admin/public-holidays?year=${encodeURIComponent(String(year))}`);
-        renderHolidayRows(payload.holidays || []);
-      }
-
-      function holidayTypeLabel(type) {
-        const map = {
-          official: 'Официален празник',
-        };
-        return map[type] || 'Официален празник';
-      }
-
-      function renderHolidayRows(rows = []) {
-        if (!holidaysRowsEl) {
-          return;
-        }
-        if (!rows.length) {
-          holidaysRowsEl.innerHTML = '<tr><td colspan="5">Няма дни за тази година.</td></tr>';
-          return;
-        }
-
-        holidaysRowsEl.innerHTML = rows
-          .map((row) => {
-            const rowType = String(row.isOfficial ? 'official' : 'official');
-            return `
-              <tr>
-                <td>${escapeHtml(row.date || '—')}</td>
-                <td>${escapeHtml(row.name || '—')}</td>
-                <td><span class="sa-holiday-type sa-holiday-type--official">${escapeHtml(holidayTypeLabel(rowType))}</span></td>
-                <td>${escapeHtml(row.source || '—')}</td>
-                <td><button type="button" onclick="window.__saDeleteHoliday('${escapeHtml(row.date)}')">Изтрий</button></td>
               </tr>
             `;
           })
@@ -1291,7 +1142,9 @@
       safeAddListener(tabStatsBtn, 'click', () => switchTab('stats'));
       safeAddListener(tabLogicBtn, 'click', () => switchTab('logic'));
       safeAddListener(tabHolidaysBtn, 'click', () => switchTab('holidays'));
-      safeAddListener(logicForm, 'input', () => renderCalculationLogic());
+      safeAddListener(logicForm, 'input', () => {
+        renderCalculationLogic().catch((error) => setStatus(error.message, false));
+      });
 
       safeAddListener(holidaysLoadBtn, 'click', async () => {
         try {
@@ -1306,7 +1159,7 @@
       safeAddListener(holidaysSeedBtn, 'click', async () => {
         try {
           const year = Number(holidaysYearInput?.value || new Date().getFullYear());
-          await apiRequest('/api/holidays/seed', {
+          await apiRequest('/api/platform/super-admin/public-holidays/seed', {
             method: 'POST',
             body: JSON.stringify({ year }),
           });
@@ -1316,17 +1169,6 @@
           setStatus(error.message, false);
         }
       });
-
-
-      // Backward-compatibility guard: older bundles referenced holidaysTenantInput.
-      safeAddListener(holidaysTenantInput, 'change', async () => {
-        try {
-          await loadPublicHolidays();
-        } catch (error) {
-          setStatus(String(error?.message || error), false);
-        }
-      });
-
       safeAddListener(holidaysForm, 'submit', async (event) => {
         event.preventDefault();
         try {
@@ -1361,7 +1203,7 @@
       loadSuperAdminCalculationSettingsFromApi().then((settings) => {
         renderSuperAdminCalculationSettings(settings);
       });
-      renderCalculationLogic();
+      renderCalculationLogic().catch((error) => setStatus(error.message, false));
     </script>
   </body>
 </html>
