@@ -6,6 +6,7 @@
     <title>Супер администраторски панел</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="admin-calculation-settings.css" />
     <style>
       body {
         background: linear-gradient(180deg, #edf2fb 0%, #dbe7fb 100%);
@@ -432,7 +433,8 @@
       <section id="saLogicTab" class="sa-tab-panel" hidden>
         <section class="panel">
           <h3>Логика за изчисление (СИРВ / нормално)</h3>
-          <p>Тук се визуализира как се образува платимото време и извънредния труд. Полетата са за бърза редакция на параметрите.</p>
+          <p>Централни настройки за логиката на изчисление. Тези правила се управляват от супер админ панела.</p>
+          <div id="saAdminCalculationSettingsContainer"></div>
 
           <div class="sa-logic-grid">
             <article class="sa-logic-card">
@@ -516,6 +518,7 @@
       </section>
     </main>
 
+    <script src="./AdminCalculationSettings.js?v=20260307-2"></script>
     <script>
       const apiUrlInput = document.getElementById('saApiUrl');
       const connectBtn = document.getElementById('saConnectBtn');
@@ -533,6 +536,7 @@
       const statsTab = document.getElementById('saStatsTab');
       const logicTab = document.getElementById('saLogicTab');
       const holidaysTab = document.getElementById('saHolidaysTab');
+      const saAdminCalculationSettingsContainer = document.getElementById('saAdminCalculationSettingsContainer');
       const logicForm = document.getElementById('saLogicForm');
       const logicModeInput = document.getElementById('saLogicMode');
       const fixedWeeklyPatternInput = document.getElementById('saFixedWeeklyPattern');
@@ -589,6 +593,67 @@
         tabStatsBtn.classList.toggle('is-active', statsActive);
         tabLogicBtn.classList.toggle('is-active', logicActive);
         tabHolidaysBtn.classList.toggle('is-active', holidaysActive);
+        if (logicActive) {
+          renderSuperAdminCalculationSettings();
+        }
+      }
+
+      function loadSuperAdminCalculationSettingsLocal() {
+        try {
+          const parsed = JSON.parse(localStorage.getItem('superAdminCalculationSettings') || '{}');
+          return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function saveSuperAdminCalculationSettingsLocal(settings) {
+        localStorage.setItem('superAdminCalculationSettings', JSON.stringify(settings || {}));
+      }
+
+      async function loadSuperAdminCalculationSettingsFromApi() {
+        try {
+          const payload = await apiRequest('/api/platform/super-admin/calculation-settings', { method: 'GET' });
+          const setting = payload.setting || payload.settings?.[0] || {};
+          saveSuperAdminCalculationSettingsLocal(setting);
+          return setting;
+        } catch (_error) {
+          return loadSuperAdminCalculationSettingsLocal();
+        }
+      }
+
+      function renderSuperAdminCalculationSettings(initialValue = null) {
+        if (!saAdminCalculationSettingsContainer || !window.AdminCalculationSettings?.renderAdminCalculationSettings) {
+          return;
+        }
+
+        const value = initialValue || loadSuperAdminCalculationSettingsLocal();
+        window.AdminCalculationSettings.renderAdminCalculationSettings(saAdminCalculationSettingsContainer, {
+          departments: [],
+          schedules: [],
+          initialValue: value,
+          onSave: async (settingsPayload) => {
+            try {
+              const isUpdate = Boolean(settingsPayload?.id);
+              const path = isUpdate
+                ? `/api/platform/super-admin/calculation-settings/${encodeURIComponent(String(settingsPayload.id))}`
+                : '/api/platform/super-admin/calculation-settings';
+              const payload = await apiRequest(path, {
+                method: isUpdate ? 'PUT' : 'POST',
+                body: JSON.stringify(settingsPayload),
+              });
+              const saved = payload.setting || settingsPayload;
+              saveSuperAdminCalculationSettingsLocal(saved);
+              return { ok: true };
+            } catch (error) {
+              return { ok: false, message: String(error?.message || 'Грешка при запис на настройките.') };
+            }
+          },
+          onCancel: () => {
+            setStatus('Промените в логиката за изчисление не са записани.', false);
+          },
+          onPreview: () => {},
+        });
       }
 
       function toPositiveNumber(value, fallback = 0) {
@@ -1293,6 +1358,9 @@
 
       refreshOverview();
       startLiveRefresh();
+      loadSuperAdminCalculationSettingsFromApi().then((settings) => {
+        renderSuperAdminCalculationSettings(settings);
+      });
       renderCalculationLogic();
     </script>
   </body>
