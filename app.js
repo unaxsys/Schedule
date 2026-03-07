@@ -111,7 +111,8 @@ const state = {
   leaves: [],
   leavesByEmployeeDay: {},
   holidaysByMonthCache: {},
-  shiftEditContext: null
+  shiftEditContext: null,
+  calculationSettings: loadCalculationSettingsLocal()
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -262,6 +263,7 @@ const usersSettingsSubtabButton = document.querySelector('.settings-subtab-btn[d
 const usersSettingsPanel = document.getElementById('usersSettingsPanel');
 const summarySettingsSubtabButton = document.querySelector('.settings-subtab-btn[data-settings-tab="summarySettingsPanel"]');
 const summarySettingsPanel = document.getElementById('summarySettingsPanel');
+const adminCalculationSettingsContainer = document.getElementById('adminCalculationSettingsContainer');
 const departmentForm = document.getElementById('departmentForm');
 const departmentNameInput = document.getElementById('departmentNameInput');
 const departmentList = document.getElementById('departmentList');
@@ -1808,6 +1810,10 @@ function attachSettingsSubtabs() {
       settingsSubtabButtons.forEach((other) => other.classList.toggle('active', other === btn));
       settingsSubtabPanels.forEach((panel) => panel.classList.toggle('active', panel.id === target));
 
+      if (target === 'adminCalculationSettingsPanel') {
+        renderAdminCalculationSettingsPanel();
+      }
+
       if (target === 'usersSettingsPanel') {
         loadPlatformUserEmployees().catch(() => {
           renderPlatformUserEmployeeOptions();
@@ -3234,6 +3240,7 @@ function resolveBaseVacationAllowance(employee) {
 }
 
 function renderAll() {
+  renderAdminCalculationSettingsPanel();
   renderShiftDepartmentOptions();
   renderEmployees();
   renderSchedule();
@@ -7099,6 +7106,7 @@ async function loadFromBackend(options = {}) {
     state.backendAvailable = true;
     await loadDepartmentsFromBackend();
     await refreshMonthlyView();
+    await loadCalculationSettingsFromBackend();
 
     const response = await apiFetch('/api/state');
     if (response.ok) {
@@ -7668,6 +7676,90 @@ function loadUserRole() {
   } catch {
     return 'user';
   }
+}
+
+function loadCalculationSettingsLocal() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('adminCalculationSettings') || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCalculationSettingsLocal() {
+  localStorage.setItem('adminCalculationSettings', JSON.stringify(state.calculationSettings || {}));
+}
+
+async function loadCalculationSettingsFromBackend() {
+  if (!state.backendAvailable) {
+    return state.calculationSettings || {};
+  }
+
+  try {
+    const response = await apiFetch('/api/admin/calculation-settings');
+    if (!response.ok) {
+      return state.calculationSettings || {};
+    }
+    const payload = await response.json();
+    const setting = payload.setting || payload.activeSetting || payload.settings?.[0] || {};
+    state.calculationSettings = setting;
+    saveCalculationSettingsLocal();
+    renderAdminCalculationSettingsPanel();
+    return setting;
+  } catch {
+    return state.calculationSettings || {};
+  }
+}
+
+function renderAdminCalculationSettingsPanel() {
+  if (!adminCalculationSettingsContainer || !window.AdminCalculationSettings?.renderAdminCalculationSettings) {
+    return;
+  }
+
+  window.AdminCalculationSettings.renderAdminCalculationSettings(adminCalculationSettingsContainer, {
+    departments: state.departments || [],
+    schedules: state.schedules || [],
+    initialValue: state.calculationSettings || {},
+    onSave: async (settingsPayload) => {
+      const requestBody = { ...settingsPayload };
+      const method = requestBody.id ? 'PUT' : 'POST';
+      const path = requestBody.id
+        ? `/api/admin/calculation-settings/${encodeURIComponent(requestBody.id)}`
+        : '/api/admin/calculation-settings';
+
+      if (!state.backendAvailable) {
+        state.calculationSettings = requestBody;
+        saveCalculationSettingsLocal();
+        setStatus('Настройките са запазени локално (без API).', false);
+        return { ok: true };
+      }
+
+      try {
+        const response = await apiFetch(path, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          return { ok: false, message: payload.message || 'Грешка при запис на настройките.' };
+        }
+
+        state.calculationSettings = payload.setting || requestBody;
+        saveCalculationSettingsLocal();
+        return { ok: true };
+      } catch {
+        return { ok: false, message: 'Възникна грешка при връзка със сървъра.' };
+      }
+    },
+    onCancel: () => {
+      setStatus('Промените в настройките за изчисление не бяха записани.', false);
+    },
+    onPreview: () => {
+      // preview only in UI
+    },
+  });
 }
 
 function loadRates() {
