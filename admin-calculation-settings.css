@@ -45,6 +45,27 @@
 .calc-settings-section { border: 1px solid #e5ebf5; border-radius: 16px; padding: 18px; background: #f8fbff; }
 .calc-settings-section h3 { margin: 0 0 16px; font-size: 18px; color: #14213d; }
 
+.calc-section-shift { border-color: #bfdbfe; background: #eff6ff; }
+.calc-section-worked { border-color: #bbf7d0; background: #f0fdf4; }
+.calc-section-special { border-color: #fed7aa; background: #fff7ed; }
+.calc-section-payroll { border-color: #ddd6fe; background: #f5f3ff; }
+.calc-section-debug { border-color: #e2e8f0; background: #f8fafc; }
+.calc-section-neutral { border-color: #cbd5e1; background: #f8fafc; }
+
+.calc-usage-badge {
+  display: inline-flex;
+  margin-left: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.calc-usage-badge-runtime { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+.calc-usage-badge-sim { background: #ede9fe; color: #5b21b6; border: 1px solid #c4b5fd; }
+.calc-usage-badge-doc { background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; }
+
 .calc-grid { display: grid; grid-template-columns: repeat(2, minmax(260px, 1fr)); gap: 16px; }
 .calc-grid-2-1 { grid-template-columns: 1fr; }
 .calc-field { display: flex; flex-direction: column; gap: 8px; }
@@ -107,7 +128,6 @@
   border-radius: 12px;
   padding: 12px 14px;
 }
-.calc-checkbox input { width: 16px; height: 16px; margin: 0; }
 
 .calc-checkbox input { width: 16px; height: 16px; margin-top: 2px; }
 .calc-checkbox > span { font-weight: 600; color: #24324a; }
@@ -116,6 +136,7 @@
 .calc-preview-box { border: 1px dashed #bfd0e8; border-radius: 14px; background: #fff; padding: 16px; }
 .calc-preview-list { margin: 0; padding-left: 18px; color: #223047; }
 .calc-preview-formula pre { margin: 10px 0 0; padding: 12px; border-radius: 12px; background: #0f172a; color: #e2e8f0; font-size: 13px; white-space: pre-wrap; }
+.calc-preview-split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
 
 .calc-actions { display: flex; justify-content: flex-end; gap: 12px; }
 .calc-btn { border: none; border-radius: 12px; padding: 12px 18px; font-size: 14px; font-weight: 700; cursor: pointer; }
@@ -132,4 +153,5 @@
 @media (max-width: 900px) {
   .calc-grid { grid-template-columns: 1fr; }
   .calc-settings-header { flex-direction: column; }
+  .calc-preview-split { grid-template-columns: 1fr; }
 }
