@@ -410,6 +410,7 @@ async function init() {
   if (userRoleSelect) {
     userRoleSelect.value = state.userRole;
   }
+  removeLegacyCalculationSettingsUi();
   updateSuperAdminPortalVisibility();
   updateUsersSettingsTabVisibility();
 
@@ -1796,6 +1797,18 @@ function attachTabs() {
       tabPanels.forEach((panel) => panel.classList.toggle('active', panel.id === target));
     });
   });
+}
+
+function removeLegacyCalculationSettingsUi() {
+  const legacySubtabBtn = document.querySelector('.settings-subtab-btn[data-settings-tab="adminCalculationSettingsPanel"]');
+  const legacySubtabPanel = document.getElementById('adminCalculationSettingsPanel');
+
+  if (legacySubtabBtn) {
+    legacySubtabBtn.remove();
+  }
+  if (legacySubtabPanel) {
+    legacySubtabPanel.remove();
+  }
 }
 
 
