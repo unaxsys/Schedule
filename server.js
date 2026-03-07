@@ -11,13 +11,12 @@ function getYearBounds(yearRaw) {
 
 require('dotenv').config();
 
-const { createHolidayService } = require('./holidayService');
+const { createTenantHolidayService } = require('./services/holidayService');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { Pool } = require('pg');
 const {
   parseCsvText,
   normalizeImportRow,
@@ -57,31 +56,32 @@ const {
   computeLeaveMinutesForRange,
 } = require('./leave_utils');
 
+const { createAuthMiddleware } = require('./middleware/auth');
+const { createTenantContextMiddleware } = require('./middleware/tenantContext');
+const { createRoleMiddleware } = require('./middleware/requireRole');
+const tenantRepository = require('./repositories/tenantRepository');
+const { createHealthRouter } = require('./routes/healthRoutes');
+
+const { APP_CONFIG } = require('./config/appConfig');
+const { createDbPool } = require('./config/db');
+
 const app = express();
-const port = Number(process.env.PORT || 4000);
+const port = APP_CONFIG.port;
+const pool = createDbPool();
 
-const pool =
-  process.env.DATABASE_URL && process.env.DATABASE_URL.trim().length > 0
-    ? new Pool({ connectionString: process.env.DATABASE_URL })
-    : new Pool({
-        host: process.env.PGHOST || '127.0.0.1',
-        port: Number(process.env.PGPORT || 5432),
-        database: process.env.PGDATABASE || 'schedule_db',
-        user: process.env.PGUSER || 'postgres',
-        password: process.env.PGPASSWORD || '',
-      });
-
-const holidayService = createHolidayService(pool);
+const holidayService = createTenantHolidayService(pool);
 
 app.use(
   cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Role'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-Id'],
   })
 );
 
 app.use(express.json({ limit: '2mb' }));
+
+app.use('/api', createHealthRouter(pool));
 
 function isValidUuid(v) {
   return (
@@ -455,18 +455,18 @@ function computeSystemShiftSnapshot(shiftCode, date, isHoliday = () => ({ isHoli
   return null;
 }
 
-function ensureAdmin(req, res) {
-  const role = cleanStr(req.get('x-user-role')).toLowerCase();
-  if (!['admin', 'super_admin'].includes(role)) {
+let ensureAdmin = (req, res) => {
+  const role = cleanStr(req.user?.role).toLowerCase();
+  if (!['admin', 'owner'].includes(role) && req.user?.is_super_admin !== true) {
     res.status(403).json({ message: 'Само администратор може да изтрива служители.' });
     return false;
   }
   return true;
-}
+};
 
 const JWT_SECRET = cleanStr(process.env.JWT_SECRET);
-const JWT_EXPIRES_IN = cleanStr(process.env.JWT_EXPIRES_IN || '12h');
-const LOGIN_TOKEN_EXPIRES_IN = cleanStr(process.env.LOGIN_TOKEN_EXPIRES_IN || '5m');
+const JWT_EXPIRES_IN = cleanStr(APP_CONFIG.jwtExpiresIn);
+const LOGIN_TOKEN_EXPIRES_IN = cleanStr(APP_CONFIG.loginTokenExpiresIn);
 
 function createHttpError(status, message) {
   const error = new Error(message);
@@ -1094,219 +1094,28 @@ function verifyLoginSelectionToken(token) {
   }
 }
 
-function requireAuth(req, res, next) {
-  try {
-    const authHeader = cleanStr(req.get('authorization'));
-    if (!authHeader.toLowerCase().startsWith('bearer ')) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
+const { requireAuth } = createAuthMiddleware({ jwtSecret: JWT_SECRET });
 
-    const token = authHeader.slice(7).trim();
-    if (!token) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
+const {
+  resolveTenantId,
+  resolveActorTenant,
+  requireTenantContext,
+} = createTenantContextMiddleware({
+  pool,
+  tenantRepository,
+});
 
-    if (!JWT_SECRET) {
-      return next(createHttpError(500, 'JWT secret is not configured.'));
-    }
+const {
+  requireSuperAdmin,
+  requireTenantRoles,
+  requireTenantManagerRole,
+  ensureAdmin: ensureAdminFromMiddleware,
+} = createRoleMiddleware({
+  requireAuth,
+  resolveActorTenant,
+});
 
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = {
-      id: decoded.id,
-      email: decoded.email,
-      first_name: decoded.first_name,
-      last_name: decoded.last_name,
-      role: cleanStr(decoded.role).toLowerCase() || null,
-      is_super_admin: decoded.is_super_admin === true,
-      tenant_id: cleanStr(decoded.tenant_id || decoded.tenantId) || null,
-      active_tenant_id: cleanStr(decoded.active_tenant_id || decoded.activeTenantId) || null,
-    };
-
-    return next();
-  } catch (error) {
-    if (error.name === 'TokenExpiredError' || error.name === 'JsonWebTokenError') {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    return next(error);
-  }
-}
-
-function isPlatformRoute(req) {
-  return String(req.path || '').startsWith('/api/platform/');
-}
-
-function requireSuperAdmin(req, res, next) {
-  const roleHeader = cleanStr(req.get('x-user-role')).toLowerCase();
-  if (roleHeader === 'super_admin') {
-    req.user = req.user || {
-      id: null,
-      email: '',
-      first_name: '',
-      last_name: '',
-      is_super_admin: true,
-    };
-    return next();
-  }
-
-  return requireAuth(req, res, (authError) => {
-    if (authError) {
-      return next(authError);
-    }
-
-    if (!req.user || req.user.is_super_admin !== true) {
-      return res.status(403).json({ message: 'Forbidden' });
-    }
-
-    return next();
-  });
-}
-
-async function resolveTenantId(req) {
-  const isSuperAdmin = req.user?.is_super_admin === true;
-  if (isSuperAdmin) {
-    const requestedTenantId = cleanStr(
-      req.body?.tenantId
-      || req.body?.registrationId
-      || req.query?.tenantId
-      || req.get('x-tenant-id')
-    );
-    if (isPlatformRoute(req)) {
-      if (!requestedTenantId) {
-        throw createHttpError(400, 'Липсва tenantId (избери организация).');
-      }
-      if (!isValidUuid(requestedTenantId)) {
-        throw createHttpError(400, 'Невалиден tenantId.');
-      }
-      return requestedTenantId;
-    }
-
-    const explicitActiveTenantId = cleanStr(req.user?.active_tenant_id || req.user?.tenant_id);
-    if (requestedTenantId) {
-      if (!isValidUuid(requestedTenantId)) {
-        throw createHttpError(400, 'Невалиден tenantId.');
-      }
-      return requestedTenantId;
-    }
-
-    if (!explicitActiveTenantId || !isValidUuid(explicitActiveTenantId)) {
-      console.warn('TENANT RESOLUTION BLOCKED: super admin without explicit active tenant on non-platform route', {
-        path: req.path,
-        userId: req.user?.id || null,
-      });
-      throw createHttpError(403, 'Изберете организация (tenant) преди достъп до този ресурс.');
-    }
-
-    return explicitActiveTenantId;
-  }
-
-  const membership = await pool.query(
-    `SELECT tu.tenant_id AS "tenantId", tu.role
-     FROM tenant_users tu
-     JOIN tenants t ON t.id = tu.tenant_id
-     WHERE tu.user_id = $1
-       AND t.status = 'approved'
-     ORDER BY CASE tu.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, tu.tenant_id`,
-    [req.user?.id]
-  );
-
-  if (!membership.rowCount) {
-    throw createHttpError(403, 'Нямате организация за управление.');
-  }
-
-  const tokenTenantId = cleanStr(req.user?.active_tenant_id || req.user?.tenant_id);
-  if (!tokenTenantId) {
-    if (membership.rowCount > 1) {
-      throw createHttpError(403, 'Потребителят има достъп до повече от една организация. Изберете tenant при вход.');
-    }
-    return membership.rows[0].tenantId;
-  }
-
-  if (!isValidUuid(tokenTenantId)) {
-    throw createHttpError(403, 'Невалиден tenant контекст в токена.');
-  }
-
-  const membershipForTokenTenant = membership.rows.find((row) => row.tenantId === tokenTenantId);
-  if (!membershipForTokenTenant) {
-    throw createHttpError(403, 'Нямате права за избрания tenant.');
-  }
-
-  return tokenTenantId;
-}
-
-async function resolveActorTenant(req) {
-  const tenantId = await resolveTenantId(req);
-
-  if (req.user?.is_super_admin === true) {
-    return { tenantId, role: 'super_admin' };
-  }
-
-  const membership = await pool.query(
-    `SELECT tu.role
-     FROM tenant_users tu
-     JOIN tenants t ON t.id = tu.tenant_id
-     WHERE tu.user_id = $1
-       AND tu.tenant_id = $2
-       AND t.status = 'approved'
-     LIMIT 1`,
-    [req.user?.id, tenantId]
-  );
-
-  if (!membership.rowCount) {
-    throw createHttpError(403, 'Нямате права за избрания tenant.');
-  }
-
-  return {
-    tenantId,
-    role: cleanStr(membership.rows[0].role).toLowerCase(),
-  };
-}
-
-async function requireTenantContext(req, res, next) {
-  try {
-    const tenantId = await resolveTenantId(req);
-    if (!tenantId) {
-      console.warn('TENANT ASSERTION FAILED: tenant_id missing for tenant route', {
-        path: req.path,
-        userId: req.user?.id || null,
-      });
-      return res.status(403).json({ message: 'Missing tenant context.' });
-    }
-    req.tenantId = tenantId;
-    return next();
-  } catch (error) {
-    if (error.status) {
-      return res.status(error.status).json({ message: error.message });
-    }
-    return next(error);
-  }
-}
-
-
-async function requireTenantManagerRole(req, res) {
-  const actor = await resolveActorTenant(req);
-  if (!['owner', 'admin', 'manager', 'super_admin'].includes(actor.role)) {
-    res.status(403).json({ message: 'Нямате права за управление на отсъствия.' });
-    return null;
-  }
-  return actor;
-}
-
-async function requireTenantRoles(req, roles = []) {
-  const actor = await resolveActorTenant(req);
-  const allowedRoles = Array.isArray(roles)
-    ? roles.map((role) => cleanStr(role).toLowerCase()).filter(Boolean)
-    : [];
-
-  if (!allowedRoles.length) {
-    return actor;
-  }
-
-  if (!allowedRoles.includes(actor.role) && actor.role !== 'super_admin') {
-    throw createHttpError(403, 'Нямате права за това действие.');
-  }
-
-  return actor;
-}
+ensureAdmin = ensureAdminFromMiddleware;
 
 async function assertLeavesUnlocked(tenantId, dateFrom, dateTo) {
   const from = normalizeDateOnly(dateFrom);
@@ -2370,15 +2179,6 @@ async function initDatabase() {
       AND vacation_allowance >= 26
   `);
 }
-
-app.get('/api/health', async (_req, res) => {
-  try {
-    await pool.query('SELECT 1');
-    res.json({ ok: true, database: 'connected' });
-  } catch (error) {
-    res.status(500).json({ ok: false, message: error.message });
-  }
-});
 
 app.get('/api/state', requireAuth, requireTenantContext, async (req, res) => {
   try {

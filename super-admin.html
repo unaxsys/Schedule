@@ -561,10 +561,13 @@
 
       const REFRESH_EVERY_MS = 5000;
       let refreshTimer = null;
-      let apiBaseUrl = localStorage.getItem('apiBaseUrl') || `${window.location.protocol}//${window.location.hostname}:4000`;
+      const saMemoryState = window.__superAdminMemoryState || (window.__superAdminMemoryState = Object.create(null));
+      const readSaMemory = (key) => (Object.prototype.hasOwnProperty.call(saMemoryState, key) ? saMemoryState[key] : null);
+      const writeSaMemory = (key, value) => { saMemoryState[key] = String(value); };
+      let apiBaseUrl = readSaMemory('apiBaseUrl') || `${window.location.protocol}//${window.location.hostname}:4000`;
       let previousTenantSnapshot = new Map();
       let tenantNameById = new Map();
-      let calculationSettingsSource = 'localStorage';
+      let calculationSettingsSource = 'memory';
       let currentCalculationSettingsForSimulator = loadSuperAdminCalculationSettingsLocal();
       apiUrlInput.value = apiBaseUrl;
 
@@ -600,7 +603,7 @@
 
       function loadSuperAdminCalculationSettingsLocal() {
         try {
-          const parsed = JSON.parse(localStorage.getItem('superAdminCalculationSettings') || '{}');
+          const parsed = JSON.parse(readSaMemory('superAdminCalculationSettings') || '{}');
           return parsed && typeof parsed === 'object' ? parsed : {};
         } catch {
           return {};
@@ -608,7 +611,7 @@
       }
 
       function saveSuperAdminCalculationSettingsLocal(settings) {
-        localStorage.setItem('superAdminCalculationSettings', JSON.stringify(settings || {}));
+        writeSaMemory('superAdminCalculationSettings', JSON.stringify(settings || {}));
       }
 
       async function loadSuperAdminCalculationSettingsFromApi() {
@@ -620,7 +623,7 @@
           calculationSettingsSource = 'API';
           return setting;
         } catch (_error) {
-          calculationSettingsSource = 'localStorage';
+          calculationSettingsSource = 'memory';
           return loadSuperAdminCalculationSettingsLocal();
         }
       }
@@ -715,7 +718,7 @@
         ];
 
         runtimeInfoEl.innerHTML = lines
-          .map((line) => `<span class="sa-bubble">${escapeHtml(line)}</span>`)
+          .map((line) => `<span class="sa-bubble">${sanitizeHtmlSuperAdmin(line)}</span>`)
           .join('');
       }
 
@@ -788,10 +791,10 @@
 
         logicSummaryEl.innerHTML = `
           <strong>${resolvedMode.mode === 'sirv' ? 'СИРВ режим' : 'Нормален режим'}</strong><br />
-          Основание: ${escapeHtml(resolvedMode.reason)}<br />
+          Основание: ${sanitizeHtmlSuperAdmin(resolvedMode.reason)}<br />
           Платими часове: <strong>${(Number(result.payableMinutes || 0) / 60).toFixed(2)}</strong><br />
           Извънреден труд: <strong>${(Number(result.overtimeMinutes || 0) / 60).toFixed(2)}</strong><br />
-          Runtime settings: <strong>${escapeHtml(settingsDebug.loadedSettingsId || 'defaults')}</strong><br />
+          Runtime settings: <strong>${sanitizeHtmlSuperAdmin(settingsDebug.loadedSettingsId || 'defaults')}</strong><br />
           ${mismatch ? '<span style="color:#b91c1c">⚠️ UI config и runtime config са различни.</span>' : '<span style="color:#166534">✅ UI config и runtime config са синхронизирани.</span>'}
         `;
 
@@ -802,13 +805,13 @@
           `runtime_source=${settingsDebug.loadedSettingsSource || 'defaults'}`,
           `payable=${(Number(result.payableMinutes || 0) / 60).toFixed(2)}h overtime=${(Number(result.overtimeMinutes || 0) / 60).toFixed(2)}h`,
         ]
-          .map((line) => `<span class="sa-bubble">${escapeHtml(line)}</span>`)
+          .map((line) => `<span class="sa-bubble">${sanitizeHtmlSuperAdmin(line)}</span>`)
           .join('');
       }
 
 
 
-      function escapeHtml(value) {
+      function sanitizeHtmlSuperAdmin(value) {
         return String(value ?? '')
           .replaceAll('&', '&amp;')
           .replaceAll('<', '&lt;')
@@ -818,8 +821,8 @@
       }
 
       async function apiRequest(path, options = {}) {
-        const headers = { ...(options.headers || {}), 'X-User-Role': 'super_admin' };
-        const authToken = (localStorage.getItem('authToken') || '').trim();
+        const headers = { ...(options.headers || {}) };
+        const authToken = (readSaMemory('authToken') || '').trim();
         if (authToken && !headers.Authorization) {
           headers.Authorization = `Bearer ${authToken}`;
         }
@@ -867,7 +870,7 @@
         ];
 
         usageCards.innerHTML = cards
-          .map((card) => `<div class="sa-stat"><span>${escapeHtml(card.label)}</span><strong>${escapeHtml(card.value)}</strong></div>`)
+          .map((card) => `<div class="sa-stat"><span>${sanitizeHtmlSuperAdmin(card.label)}</span><strong>${sanitizeHtmlSuperAdmin(card.value)}</strong></div>`)
           .join('');
       }
 
@@ -879,7 +882,7 @@
           disabled: 'Спряна',
         };
         const label = labelByStatus[normalized] || normalized;
-        return `<span class="sa-status-pill sa-status-pill--${escapeHtml(normalized)}">${escapeHtml(label)}</span>`;
+        return `<span class="sa-status-pill sa-status-pill--${sanitizeHtmlSuperAdmin(normalized)}">${sanitizeHtmlSuperAdmin(label)}</span>`;
       }
 
       function actionsForTenant(tenant) {
@@ -925,27 +928,27 @@
               <article class="sa-tenant" ${changed ? 'style="box-shadow:0 0 0 2px #bfdbfe inset;"' : ''}>
                 <div class="sa-tenant-head">
                   <div>
-                    <strong>${escapeHtml(tenant.name || 'Без име')}</strong>
+                    <strong>${sanitizeHtmlSuperAdmin(tenant.name || 'Без име')}</strong>
                     <div class="sa-tenant-meta">
-                      <span><strong>ЕИК:</strong> ${escapeHtml(eik)}</span>
-                      <span><strong>Собственик:</strong> ${escapeHtml(ownerName)}</span>
-                      <span><strong>Email:</strong> ${escapeHtml(ownerEmail)}</span>
-                      <span><strong>Телефон:</strong> ${escapeHtml(ownerPhone)}</span>
-                      <span><strong>Създадена:</strong> ${escapeHtml(fmtDate(tenant.createdAt))}</span>
-                      <span><strong>Одобрена:</strong> ${escapeHtml(fmtDate(tenant.approvedAt))}</span>
+                      <span><strong>ЕИК:</strong> ${sanitizeHtmlSuperAdmin(eik)}</span>
+                      <span><strong>Собственик:</strong> ${sanitizeHtmlSuperAdmin(ownerName)}</span>
+                      <span><strong>Email:</strong> ${sanitizeHtmlSuperAdmin(ownerEmail)}</span>
+                      <span><strong>Телефон:</strong> ${sanitizeHtmlSuperAdmin(ownerPhone)}</span>
+                      <span><strong>Създадена:</strong> ${sanitizeHtmlSuperAdmin(fmtDate(tenant.createdAt))}</span>
+                      <span><strong>Одобрена:</strong> ${sanitizeHtmlSuperAdmin(fmtDate(tenant.approvedAt))}</span>
                     </div>
                   </div>
                   <div>${getStatusBadge(tenant.status)}</div>
                 </div>
 
                 <div class="sa-usage-stats">
-                  <span class="sa-usage-pill"><span>Потребители</span><strong>${escapeHtml(tenantUsage.usersCount ?? 0)}</strong></span>
-                  <span class="sa-usage-pill"><span>Служители</span><strong>${escapeHtml(tenantUsage.employeesCount ?? 0)}</strong></span>
-                  <span class="sa-usage-pill"><span>Отдели</span><strong>${escapeHtml(tenantUsage.departmentsCount ?? 0)}</strong></span>
-                  <span class="sa-usage-pill"><span>Графици</span><strong>${escapeHtml(tenantUsage.schedulesCount ?? 0)}</strong></span>
-                  <span class="sa-usage-pill"><span>Записи</span><strong>${escapeHtml(tenantUsage.scheduleEntriesCount ?? 0)}</strong></span>
-                  <span class="sa-usage-pill"><span>Audit</span><strong>${escapeHtml(tenantUsage.auditEventsCount ?? 0)}</strong></span>
-                  <span class="sa-usage-pill"><span>Заявки</span><strong>${escapeHtml(tenantUsage.requestsCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Потребители</span><strong>${sanitizeHtmlSuperAdmin(tenantUsage.usersCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Служители</span><strong>${sanitizeHtmlSuperAdmin(tenantUsage.employeesCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Отдели</span><strong>${sanitizeHtmlSuperAdmin(tenantUsage.departmentsCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Графици</span><strong>${sanitizeHtmlSuperAdmin(tenantUsage.schedulesCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Записи</span><strong>${sanitizeHtmlSuperAdmin(tenantUsage.scheduleEntriesCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Audit</span><strong>${sanitizeHtmlSuperAdmin(tenantUsage.auditEventsCount ?? 0)}</strong></span>
+                  <span class="sa-usage-pill"><span>Заявки</span><strong>${sanitizeHtmlSuperAdmin(tenantUsage.requestsCount ?? 0)}</strong></span>
                 </div>
 
                 <div class="sa-actions">${actionsForTenant(tenant)}</div>
@@ -981,11 +984,11 @@
             const canDelete = rowType !== 'official' || Boolean(row.source);
             return `
               <tr>
-                <td>${escapeHtml(row.date || '—')}</td>
-                <td>${escapeHtml(row.name || '—')}</td>
-                <td><span class="sa-holiday-type sa-holiday-type--${escapeHtml(rowType)}">${escapeHtml(holidayTypeLabel(rowType))}</span></td>
-                <td>${escapeHtml(row.source || 'platform')}</td>
-                <td>${canDelete ? `<button type="button" onclick="window.__saDeleteHoliday('${escapeHtml(row.date)}')">Изтрий</button>` : '🔒'}</td>
+                <td>${sanitizeHtmlSuperAdmin(row.date || '—')}</td>
+                <td>${sanitizeHtmlSuperAdmin(row.name || '—')}</td>
+                <td><span class="sa-holiday-type sa-holiday-type--${sanitizeHtmlSuperAdmin(rowType)}">${sanitizeHtmlSuperAdmin(holidayTypeLabel(rowType))}</span></td>
+                <td>${sanitizeHtmlSuperAdmin(row.source || 'platform')}</td>
+                <td>${canDelete ? `<button type="button" onclick="window.__saDeleteHoliday('${sanitizeHtmlSuperAdmin(row.date)}')">Изтрий</button>` : '🔒'}</td>
               </tr>
             `;
           })
@@ -1005,7 +1008,7 @@
       function renderBubbles(row, hiddenKeys = new Set()) {
         const bubbles = Object.entries(row || {})
           .filter(([key]) => !hiddenKeys.has(key))
-          .map(([key, value]) => `<span class="sa-bubble"><strong>${escapeHtml(prettifyColumnName(key))}:</strong> ${escapeHtml(formatTableValue(key, value))}</span>`)
+          .map(([key, value]) => `<span class="sa-bubble"><strong>${sanitizeHtmlSuperAdmin(prettifyColumnName(key))}:</strong> ${sanitizeHtmlSuperAdmin(formatTableValue(key, value))}</span>`)
           .join('');
         return bubbles || '<span class="sa-bubble">Няма детайли</span>';
       }
@@ -1021,7 +1024,7 @@
           .map(
             (log) => `
               <article class="sa-row-card">
-                <p class="sa-row-title"><strong>${escapeHtml(log.action || 'audit')}</strong> · ${escapeHtml(log.entity || 'entity')} · ${escapeHtml(fmtDate(log.createdAt))}</p>
+                <p class="sa-row-title"><strong>${sanitizeHtmlSuperAdmin(log.action || 'audit')}</strong> · ${sanitizeHtmlSuperAdmin(log.entity || 'entity')} · ${sanitizeHtmlSuperAdmin(fmtDate(log.createdAt))}</p>
                 <div class="sa-bubbles">${renderBubbles(log, new Set(['id', 'action', 'entity', 'createdAt']))}</div>
               </article>
             `,
@@ -1110,7 +1113,7 @@
             const title = row.name || row.title || row.email || `Ред #${index + 1}`;
             return `
               <article class="sa-row-card">
-                <p class="sa-row-title"><strong>${escapeHtml(title)}</strong></p>
+                <p class="sa-row-title"><strong>${sanitizeHtmlSuperAdmin(title)}</strong></p>
                 <div class="sa-bubbles">${renderBubbles(row, hiddenKeys)}</div>
               </article>
             `;
@@ -1165,7 +1168,7 @@
 
       safeAddListener(connectBtn, 'click', async () => {
         apiBaseUrl = apiUrlInput.value.trim().replace(/\/$/, '');
-        localStorage.setItem('apiBaseUrl', apiBaseUrl);
+        writeSaMemory('apiBaseUrl', apiBaseUrl);
         setStatus(`API URL е записан: ${apiBaseUrl}`);
         await refreshOverview();
       });
