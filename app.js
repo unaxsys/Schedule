@@ -7316,7 +7316,9 @@ async function saveScheduleEntryBackend(employee, day, shiftCode, options = {}) 
 
 async function saveShiftTemplateBackend(shift) {
   if (!state.backendAvailable) {
-    return { ok: true, localOnly: true };
+    const message = 'Бекендът не е достъпен. Промяната не е записана (няма локално записване).';
+    setStatus(message, false);
+    return { ok: false, message };
   }
 
   try {
@@ -7343,6 +7345,7 @@ async function saveShiftTemplateBackend(shift) {
 
 async function deleteShiftTemplateBackend(code, departmentId = null) {
   if (!state.backendAvailable) {
+    setStatus('Бекендът не е достъпен. Промяната не е записана (няма локално записване).', false);
     return;
   }
 
@@ -7357,8 +7360,7 @@ async function deleteShiftTemplateBackend(code, departmentId = null) {
       throw new Error('Delete shift template failed');
     }
   } catch {
-    setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Данните са запазени локално.`, false);
-    // keep backend mode active; surface error via status
+    setStatus(`Грешка към бекенд (${state.apiBaseUrl}). Промяната не е записана (няма локално записване).`, false);
   }
 }
 
@@ -7831,7 +7833,7 @@ function loadRates() {
 }
 
 function saveShiftTemplates() {
-  localStorage.setItem('shiftTemplates', JSON.stringify(state.shiftTemplates));
+  // DB-only режим: не съхраняваме шаблони за смени в localStorage.
 }
 
 function buildShiftTemplateIdentityKey(shiftTemplate = {}) {
@@ -7919,12 +7921,8 @@ function mergeShiftTemplates(backendShiftTemplates) {
 
 
 function loadShiftTemplates() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem('shiftTemplates') || '[]');
-    return mergeShiftTemplates(parsed);
-  } catch {
-    return [...SYSTEM_SHIFTS, DEFAULT_WORK_SHIFT];
-  }
+  // DB-only режим: шаблоните за смени идват от backend.
+  return [...SYSTEM_SHIFTS, DEFAULT_WORK_SHIFT];
 }
 
 function saveLockedMonths() {
@@ -8055,7 +8053,11 @@ function orthodoxEaster(year) {
 
 
 async function saveDepartmentShiftBackend(departmentId, payload) {
-  if (!state.backendAvailable) return { ok: true, localOnly: true };
+  if (!state.backendAvailable) {
+    const message = 'Бекендът не е достъпен. Промяната не е записана (няма локално записване).';
+    setStatus(message, false);
+    return { ok: false, message };
+  }
   const normalizedDepartmentId = cleanStoredValue(departmentId) || null;
   const routeDepartmentId = normalizedDepartmentId || 'global';
   try {
