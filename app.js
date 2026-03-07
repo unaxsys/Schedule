@@ -5858,15 +5858,8 @@ function getVisibleSummaryColumns() {
 
 function calculateEmployeeTotals({ employee, summary, year, month, monthNormHours }) {
   const runtimeCalcSettings = state.calculationSettings || {};
-  const includePremiumsInPayable = runtimeCalcSettings.includePremiumsInPayable !== false;
-  const holidayRateSetting = Number(runtimeCalcSettings.holidayPremiumCoefficient || state.rates.holiday || 2);
-  const weekendRateSetting = Number(runtimeCalcSettings.weekendPremiumCoefficient || state.rates.weekend || 1.75);
   const remainingVacation = getVacationAllowanceForYear(employee, year) - getVacationUsedForYear(employee.id, year);
-  const normalizedHolidayHours = summary.holidayWorkedHours * Math.max(1, holidayRateSetting);
   const isSirvEmployee = Boolean(employee?.isSirv);
-  const normalizedWeekendHours = isSirvEmployee
-    ? summary.weekendWorkedHours
-    : summary.weekendWorkedHours * Math.max(1, weekendRateSetting);
   const nightPremiumHours = Math.max(0, summary.nightConvertedHours - summary.nightWorkedHours);
   const payableHours = summary.workedHours;
   const employeeSirvPeriod = Number(employee?.sirvPeriodMonths || 1) || 1;
@@ -5878,7 +5871,7 @@ function calculateEmployeeTotals({ employee, summary, year, month, monthNormHour
     ? Math.max(0, sirvTotals.workedHours - sirvTotals.normHours)
     : Math.max(0, summary.workedHours - monthNormHours);
 
-  const reportedWeekendWorkedHours = summary.weekendWorkedHours;
+  const reportedWeekendWorkedHours = isSirvEmployee ? 0 : summary.weekendWorkedHours;
   const reportedWorkedHours = isSirvEmployee ? 0 : summary.workedHours;
   const reportedNormHours = isSirvEmployee ? 0 : monthNormHours;
   const reportedSirvNormHours = isSirvEmployee ? sirvTotals.normHours : 0;
@@ -6306,6 +6299,7 @@ function getPeriodMonths(endMonth, periodMonths) {
 
 function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
   const employeeId = employee?.id;
+  const employeeWorkdayHours = Math.max(1, Number(employee?.workdayMinutes ?? employee?.workday_minutes ?? 480) / 60);
   const months = getPeriodMonths(endMonth, periodMonths);
   const totals = {
     normHours: 0,
@@ -6320,12 +6314,6 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
     for (let day = 1; day <= totalDays; day += 1) {
       if (!isEmployeeActiveOnDate(employee, year, monthIndex, day)) {
         continue;
-      }
-
-      const date = new Date(year, monthIndex - 1, day);
-      const dateISO = `${year}-${String(monthIndex).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      if (isNormWorkingDay({ dateISO, holiday: isOfficialHoliday(date), weekend: isWeekend(date) })) {
-        totals.normHours += 8;
       }
 
       const key = scheduleKey(employeeId, monthKey, day);
@@ -6346,6 +6334,7 @@ function getSirvTotalsForEmployee(employee, endMonth, periodMonths) {
       const nightHours = getShiftNightHours(shift, { isYoungWorker: Boolean(employee?.youngWorker) });
       totals.workedHours += workedHours;
       totals.convertedWorkedHours += workedHours + nightHours * (NIGHT_HOURS_COEFFICIENT - 1);
+      totals.normHours += employeeWorkdayHours;
     }
   });
 
