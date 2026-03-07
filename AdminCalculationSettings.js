@@ -2,42 +2,54 @@
   const DEFAULT_CALCULATION_SETTINGS = {
     id: null,
     name: 'Основни правила',
-    scope: 'global', // global | department | schedule
+    scope: 'global',
     departmentId: '',
     scheduleId: '',
     isActive: true,
+    priority: 100,
+    conflictResolution: 'highest-priority-wins',
 
-    calculationMode: 'worked-hours', // standard | sirv | planned-hours | worked-hours | fixed-8h | shift-template
-    workedDayRule: 'working-shift-and-minutes', // working-shift-and-minutes | any-entry | working-template-only | exclude-leaves
-    holidayMode: 'segments-only', // segments-only | whole-shift
-    weekendMode: 'segments-only', // segments-only | whole-shift
-    nightMode: 'range-22-06', // auto | range-22-06 | disabled
+    shiftResolutionPrimary: 'shift-id-first',
+    shiftResolutionFallback: 'department-local-then-global',
+    shiftClassificationSource: 'template-metadata',
+    allowCodeOnlyFallback: false,
+    legacyCodeFallbackMode: 'fallback-only',
 
+    workedDayRule: 'working-shift-and-positive-minutes',
+    workedMinutesSource: 'snapshot',
     includeBreakInWorkedHours: false,
-    sumSplitIntervals: true,
-    holidayOnlyWorkedSegments: true,
-    weekendOnlyWorkedSegments: true,
+    splitShiftAggregationMode: 'sum-all-intervals',
+    zeroSnapshotForNonWorking: true,
+    workedDayRequiresPositiveMinutes: true,
     excludeNonWorkingCodesFromWorkedDay: true,
-    useShiftIdPriority: true,
-    scopeAwareFallback: true,
+
+    holidayCalculationSource: 'segments-only',
+    weekendCalculationSource: 'segments-only',
+    nightCalculationSource: 'segments-only',
+    holidayPremiumCoefficient: '2.00',
+    weekendPremiumCoefficient: '1.75',
+    nightPremiumCoefficient: '0.25',
+    specialHoursOnlyIfWorkMinutesPositive: true,
+    splitByCalendarDate: true,
+    crossMidnightSplitMode: 'split-by-date',
+
+    payableHoursMode: 'worked-plus-premiums',
+    overtimeMode: 'worked-vs-norm',
+    comparisonMode: 'monthly-norm',
+    includePremiumsInPayable: true,
+    nightConversionMode: 'disabled',
+
+    enableRuleTrace: true,
+    showAppliedRules: true,
+    showRejectedRules: true,
 
     nonWorkingCodes: 'O,B,OFF,REST,LEAVE,SICK',
     workingCodes: 'Р,1СМ,2СМ,3СМ,4СМ,5СМ,6СМ,7СМ,Рд',
-
-    formulaText: [
-      'worked_day = is_working_shift && work_minutes > 0',
-      'holiday_minutes = sum(all_work_segments_overlapping_holiday)',
-      'weekend_minutes = sum(all_work_segments_overlapping_weekend)',
-      'night_minutes = sum(all_work_segments_overlapping_22_06)',
-      'payable_hours = work_minutes / 60',
-    ].join('\n'),
+    formulaText: 'worked_day = working_shift && work_minutes > 0',
   };
 
   function createAdminCalculationSettingsState(overrides = {}) {
-    return {
-      ...DEFAULT_CALCULATION_SETTINGS,
-      ...overrides,
-    };
+    return { ...DEFAULT_CALCULATION_SETTINGS, ...overrides };
   }
 
   function normalizeCommaCodes(value) {
@@ -56,170 +68,126 @@
     const initialValue = createAdminCalculationSettingsState(options.initialValue || {});
     const onSave = typeof options.onSave === 'function' ? options.onSave : null;
     const onCancel = typeof options.onCancel === 'function' ? options.onCancel : null;
-    const onPreview = typeof options.onPreview === 'function' ? options.onPreview : null;
-
     let state = { ...initialValue };
 
     container.innerHTML = `
       <div class="calc-settings-card">
         <div class="calc-settings-header">
           <div>
-            <h2>Настройки за изчисление</h2>
-            <p>Управлявай логиката за worked days, часове, СИРВ, празничен, почивен и нощен труд.</p>
+            <h2>Rule engine admin screen</h2>
+            <p>Изберете източник на истина, изчисления и симулация с видим execution order.</p>
           </div>
           <span class="calc-settings-badge">${state.isActive ? 'Активна' : 'Неактивна'}</span>
         </div>
 
+        <div class="calc-tabs" role="tablist" aria-label="Calculation tabs">
+          <button type="button" class="calc-tab-btn is-active" data-calc-tab="general">Общи правила</button>
+          <button type="button" class="calc-tab-btn" data-calc-tab="calculations">Изчисления</button>
+          <button type="button" class="calc-tab-btn" data-calc-tab="simulation">Симулация и дебъг</button>
+        </div>
+
         <form id="adminCalculationSettingsForm" class="calc-settings-form">
-          <section class="calc-settings-section">
-            <h3>Основни настройки</h3>
+          <section class="calc-settings-section" data-tab-panel="general">
+            <h3>Карта: Scope rules</h3>
             <div class="calc-grid">
-              <div class="calc-field">
-                <label for="calcSettingName">Име на настройката</label>
-                <input id="calcSettingName" name="name" type="text" value="${escapeHtml(state.name)}" placeholder="Напр. Основни правила за СИРВ" />
-              </div>
-
-              <div class="calc-field">
-                <label for="calcScope">Обхват</label>
-                <select id="calcScope" name="scope">
-                  <option value="global" ${state.scope === 'global' ? 'selected' : ''}>Глобално</option>
-                  <option value="department" ${state.scope === 'department' ? 'selected' : ''}>За отдел</option>
-                  <option value="schedule" ${state.scope === 'schedule' ? 'selected' : ''}>За график</option>
-                </select>
-              </div>
-
-              <div class="calc-field ${state.scope === 'department' ? '' : 'is-disabled'}">
-                <label for="calcDepartmentId">Отдел</label>
-                <select id="calcDepartmentId" name="departmentId" ${state.scope === 'department' ? '' : 'disabled'}>
-                  <option value="">Избери отдел</option>
-                  ${departments.map((department) => `
-                    <option value="${escapeHtml(String(department.id || ''))}" ${String(state.departmentId || '') === String(department.id || '') ? 'selected' : ''}>
-                      ${escapeHtml(department.name || department.label || 'Без име')}
-                    </option>
-                  `).join('')}
-                </select>
-              </div>
-
-              <div class="calc-field ${state.scope === 'schedule' ? '' : 'is-disabled'}">
-                <label for="calcScheduleId">График</label>
-                <select id="calcScheduleId" name="scheduleId" ${state.scope === 'schedule' ? '' : 'disabled'}>
-                  <option value="">Избери график</option>
-                  ${schedules.map((schedule) => `
-                    <option value="${escapeHtml(String(schedule.id || ''))}" ${String(state.scheduleId || '') === String(schedule.id || '') ? 'selected' : ''}>
-                      ${escapeHtml(schedule.name || `${schedule.month || ''} ${schedule.department || ''}`.trim() || 'График')}
-                    </option>
-                  `).join('')}
-                </select>
-              </div>
-
-              <div class="calc-field">
-                <label for="calcIsActive">Статус</label>
-                <select id="calcIsActive" name="isActive">
-                  <option value="true" ${state.isActive ? 'selected' : ''}>Активна</option>
-                  <option value="false" ${!state.isActive ? 'selected' : ''}>Неактивна</option>
-                </select>
-              </div>
+              <div class="calc-field"><label for="calcSettingName">Име</label><input id="calcSettingName" name="name" type="text" value="${escapeHtml(state.name)}" /></div>
+              <div class="calc-field"><label for="calcIsActive">Статус</label><select id="calcIsActive" name="isActive"><option value="true" ${state.isActive ? 'selected' : ''}>Активна</option><option value="false" ${!state.isActive ? 'selected' : ''}>Неактивна</option></select></div>
+              <div class="calc-field"><label for="calcScope">Обхват</label><select id="calcScope" name="scope"><option value="global" ${state.scope === 'global' ? 'selected' : ''}>Global</option><option value="department" ${state.scope === 'department' ? 'selected' : ''}>Department</option><option value="schedule" ${state.scope === 'schedule' ? 'selected' : ''}>Schedule</option></select></div>
+              <div class="calc-field"><label for="calcPriority">Priority</label><input id="calcPriority" name="priority" type="number" min="1" value="${escapeHtml(state.priority)}" /></div>
+              <div class="calc-field"><label for="calcConflictResolution">Conflict resolution</label><select id="calcConflictResolution" name="conflictResolution"><option value="highest-priority-wins" ${state.conflictResolution === 'highest-priority-wins' ? 'selected' : ''}>Highest priority wins</option><option value="latest-updated-wins" ${state.conflictResolution === 'latest-updated-wins' ? 'selected' : ''}>Latest updated wins</option></select></div>
+              <div class="calc-field ${state.scope === 'department' ? '' : 'is-disabled'}"><label for="calcDepartmentId">Отдел</label><select id="calcDepartmentId" name="departmentId" ${state.scope === 'department' ? '' : 'disabled'}><option value="">Избери отдел</option>${departments.map((department) => `<option value="${escapeHtml(String(department.id || ''))}" ${String(state.departmentId || '') === String(department.id || '') ? 'selected' : ''}>${escapeHtml(department.name || department.label || 'Без име')}</option>`).join('')}</select></div>
+              <div class="calc-field ${state.scope === 'schedule' ? '' : 'is-disabled'}"><label for="calcScheduleId">График</label><select id="calcScheduleId" name="scheduleId" ${state.scope === 'schedule' ? '' : 'disabled'}><option value="">Избери график</option>${schedules.map((schedule) => `<option value="${escapeHtml(String(schedule.id || ''))}" ${String(state.scheduleId || '') === String(schedule.id || '') ? 'selected' : ''}>${escapeHtml(schedule.name || 'График')}</option>`).join('')}</select></div>
             </div>
           </section>
 
-          <section class="calc-settings-section">
-            <h3>Логика за изчисление</h3>
+          <section class="calc-settings-section" data-tab-panel="general">
+            <h3>Карта: Source of truth</h3>
             <div class="calc-grid">
-              <div class="calc-field">
-                <label for="calcMode">Как да се изчислява</label>
-                <select id="calcMode" name="calculationMode">
-                  <option value="standard" ${state.calculationMode === 'standard' ? 'selected' : ''}>Стандартно</option>
-                  <option value="sirv" ${state.calculationMode === 'sirv' ? 'selected' : ''}>СИРВ</option>
-                  <option value="planned-hours" ${state.calculationMode === 'planned-hours' ? 'selected' : ''}>По планирани часове</option>
-                  <option value="worked-hours" ${state.calculationMode === 'worked-hours' ? 'selected' : ''}>По реално отработени часове</option>
-                  <option value="fixed-8h" ${state.calculationMode === 'fixed-8h' ? 'selected' : ''}>Фиксирани 8 часа</option>
-                  <option value="shift-template" ${state.calculationMode === 'shift-template' ? 'selected' : ''}>По шаблон на смяна</option>
-                </select>
-                <small class="calc-help">Това е основният режим, по който engine-ът ще смята worked days и часовете.</small>
-              </div>
-
-              <div class="calc-field">
-                <label for="workedDayRule">Работен ден се брои ако</label>
-                <select id="workedDayRule" name="workedDayRule">
-                  <option value="working-shift-and-minutes" ${state.workedDayRule === 'working-shift-and-minutes' ? 'selected' : ''}>Има работна смяна и work_minutes > 0</option>
-                  <option value="any-entry" ${state.workedDayRule === 'any-entry' ? 'selected' : ''}>Има запис в клетката</option>
-                  <option value="working-template-only" ${state.workedDayRule === 'working-template-only' ? 'selected' : ''}>Само ако шаблонът е работен</option>
-                  <option value="exclude-leaves" ${state.workedDayRule === 'exclude-leaves' ? 'selected' : ''}>Без отпуск, болничен и почивка</option>
-                </select>
-              </div>
-
-              <div class="calc-field">
-                <label for="holidayMode">Празничен труд</label>
-                <select id="holidayMode" name="holidayMode">
-                  <option value="segments-only" ${state.holidayMode === 'segments-only' ? 'selected' : ''}>Само по работните сегменти</option>
-                  <option value="whole-shift" ${state.holidayMode === 'whole-shift' ? 'selected' : ''}>По цялата смяна</option>
-                </select>
-              </div>
-
-              <div class="calc-field">
-                <label for="weekendMode">Почивен труд</label>
-                <select id="weekendMode" name="weekendMode">
-                  <option value="segments-only" ${state.weekendMode === 'segments-only' ? 'selected' : ''}>Само по работните сегменти</option>
-                  <option value="whole-shift" ${state.weekendMode === 'whole-shift' ? 'selected' : ''}>По цялата смяна</option>
-                </select>
-              </div>
-
-              <div class="calc-field">
-                <label for="nightMode">Нощен труд</label>
-                <select id="nightMode" name="nightMode">
-                  <option value="auto" ${state.nightMode === 'auto' ? 'selected' : ''}>Автоматично</option>
-                  <option value="range-22-06" ${state.nightMode === 'range-22-06' ? 'selected' : ''}>Само 22:00–06:00</option>
-                  <option value="disabled" ${state.nightMode === 'disabled' ? 'selected' : ''}>Изключено</option>
-                </select>
-              </div>
+              <div class="calc-field"><label>Primary shift resolution</label><select name="shiftResolutionPrimary"><option value="shift-id-first" ${state.shiftResolutionPrimary === 'shift-id-first' ? 'selected' : ''}>shift_id first</option><option value="department-local-first" ${state.shiftResolutionPrimary === 'department-local-first' ? 'selected' : ''}>department-local first</option></select></div>
+              <div class="calc-field"><label>Secondary fallback</label><select name="shiftResolutionFallback"><option value="department-local-then-global" ${state.shiftResolutionFallback === 'department-local-then-global' ? 'selected' : ''}>department-local → global</option><option value="global-only" ${state.shiftResolutionFallback === 'global-only' ? 'selected' : ''}>global only</option></select></div>
+              <div class="calc-field"><label>Classification source</label><select name="shiftClassificationSource"><option value="template-metadata" ${state.shiftClassificationSource === 'template-metadata' ? 'selected' : ''}>template metadata</option><option value="working-non-working-type" ${state.shiftClassificationSource === 'working-non-working-type' ? 'selected' : ''}>working/non-working type</option></select></div>
+              <div class="calc-field"><label>Code override policy</label><select name="legacyCodeFallbackMode"><option value="fallback-only" ${state.legacyCodeFallbackMode === 'fallback-only' ? 'selected' : ''}>allowed as fallback only</option><option value="disabled" ${state.legacyCodeFallbackMode === 'disabled' ? 'selected' : ''}>disabled</option><option value="legacy-only" ${state.legacyCodeFallbackMode === 'legacy-only' ? 'selected' : ''}>allowed for legacy entries</option></select></div>
+              <div class="calc-field calc-field-full">${renderCheckboxField('allowCodeOnlyFallback', 'allowCodeOnlyFallback (working/non-working never code-only)', state.allowCodeOnlyFallback)}</div>
             </div>
           </section>
 
-          <section class="calc-settings-section">
-            <h3>Правила за engine-а</h3>
-            <div class="calc-checkbox-grid">
-              ${renderCheckboxField('includeBreakInWorkedHours', 'Включвай почивката в работните часове', state.includeBreakInWorkedHours)}
-              ${renderCheckboxField('sumSplitIntervals', 'При прекъсната смяна сумирай всички интервали', state.sumSplitIntervals)}
-              ${renderCheckboxField('holidayOnlyWorkedSegments', 'Празничният труд да се смята само по работните сегменти', state.holidayOnlyWorkedSegments)}
-              ${renderCheckboxField('weekendOnlyWorkedSegments', 'Почивният труд да се смята само по работните сегменти', state.weekendOnlyWorkedSegments)}
-              ${renderCheckboxField('excludeNonWorkingCodesFromWorkedDay', 'Почивки и отпуски да не участват в worked day', state.excludeNonWorkingCodesFromWorkedDay)}
-              ${renderCheckboxField('useShiftIdPriority', 'Първо използвай shift_id, после code fallback', state.useShiftIdPriority)}
-              ${renderCheckboxField('scopeAwareFallback', 'Code fallback да е scope-aware (department -> global)', state.scopeAwareFallback)}
-            </div>
-          </section>
-
-          <section class="calc-settings-section">
-            <h3>Кодове и формула</h3>
+          <section class="calc-settings-section" data-tab-panel="general">
+            <h3>Карта: Non-working handling</h3>
             <div class="calc-grid">
-              <div class="calc-field calc-field-full">
-                <label for="nonWorkingCodes">Кодове, които не се броят за работни</label>
-                <input id="nonWorkingCodes" name="nonWorkingCodes" type="text" value="${escapeHtml(state.nonWorkingCodes)}" placeholder="Напр. O,B,OFF,REST,LEAVE,SICK" />
-                <small class="calc-help">Разделяй с запетая. Тези кодове не трябва да вдигат worked days и work minutes.</small>
-              </div>
-
-              <div class="calc-field calc-field-full">
-                <label for="workingCodes">Кодове, които се считат за работни</label>
-                <input id="workingCodes" name="workingCodes" type="text" value="${escapeHtml(state.workingCodes)}" placeholder="Напр. Р,1СМ,2СМ,Рд" />
-              </div>
-
-              <div class="calc-field calc-field-full">
-                <label for="formulaText">Поле за правило / как да изчислява</label>
-                <textarea id="formulaText" name="formulaText" rows="8" placeholder="Опиши логиката за изчисление">${escapeHtml(state.formulaText)}</textarea>
-                <small class="calc-help">Това поле може да се пази като конфигурация и да се използва за документация или бъдещо rule engine изпълнение.</small>
-              </div>
+              <div class="calc-field calc-field-full"><label for="nonWorkingCodes">Non-working codes</label><input id="nonWorkingCodes" name="nonWorkingCodes" value="${escapeHtml(state.nonWorkingCodes)}" /></div>
+              <div class="calc-field calc-field-full"><label for="workingCodes">Working codes</label><input id="workingCodes" name="workingCodes" value="${escapeHtml(state.workingCodes)}" /></div>
+              <div class="calc-field calc-field-full">${renderCheckboxField('zeroSnapshotForNonWorking', 'zeroSnapshotForNonWorking', state.zeroSnapshotForNonWorking)}</div>
             </div>
           </section>
 
-          <section class="calc-settings-section">
-            <h3>Преглед на логиката</h3>
-            <div class="calc-preview-box" id="calcPreviewBox">
-              ${renderCalculationPreview(state)}
+          <section class="calc-settings-section" data-tab-panel="calculations" hidden>
+            <h3>Карта: Worked day / Worked minutes</h3>
+            <div class="calc-grid">
+              <div class="calc-field"><label>Worked day rule</label><select name="workedDayRule"><option value="working-shift-and-positive-minutes" ${state.workedDayRule === 'working-shift-and-positive-minutes' ? 'selected' : ''}>working shift + positive minutes</option><option value="any-working-entry" ${state.workedDayRule === 'any-working-entry' ? 'selected' : ''}>any working entry</option></select></div>
+              <div class="calc-field"><label>workedMinutesSource</label><select name="workedMinutesSource"><option value="snapshot" ${state.workedMinutesSource === 'snapshot' ? 'selected' : ''}>snapshot</option><option value="shift-template" ${state.workedMinutesSource === 'shift-template' ? 'selected' : ''}>shift template</option><option value="actual-intervals" ${state.workedMinutesSource === 'actual-intervals' ? 'selected' : ''}>actual intervals</option></select></div>
+              <div class="calc-field"><label>Break handling</label><select name="includeBreakInWorkedHours"><option value="false" ${!state.includeBreakInWorkedHours ? 'selected' : ''}>изключена</option><option value="true" ${state.includeBreakInWorkedHours ? 'selected' : ''}>включена</option></select></div>
+              <div class="calc-field"><label>splitShiftAggregationMode</label><select name="splitShiftAggregationMode"><option value="sum-all-intervals" ${state.splitShiftAggregationMode === 'sum-all-intervals' ? 'selected' : ''}>sum all intervals</option><option value="first-interval-only" ${state.splitShiftAggregationMode === 'first-interval-only' ? 'selected' : ''}>first interval only</option></select></div>
+              <div class="calc-field">${renderCheckboxField('workedDayRequiresPositiveMinutes', 'workedDayRequiresPositiveMinutes', state.workedDayRequiresPositiveMinutes)}</div>
+              <div class="calc-field">${renderCheckboxField('excludeNonWorkingCodesFromWorkedDay', 'excludeNonWorkingCodesFromWorkedDay', state.excludeNonWorkingCodesFromWorkedDay)}</div>
+            </div>
+          </section>
+
+          <section class="calc-settings-section" data-tab-panel="calculations" hidden>
+            <h3>Карта: Special hours</h3>
+            <div class="calc-grid">
+              <div class="calc-field"><label>holidayCalculationSource</label><select name="holidayCalculationSource"><option value="segments-only" ${state.holidayCalculationSource === 'segments-only' ? 'selected' : ''}>segments only</option><option value="whole-shift" ${state.holidayCalculationSource === 'whole-shift' ? 'selected' : ''}>whole shift</option></select></div>
+              <div class="calc-field"><label>weekendCalculationSource</label><select name="weekendCalculationSource"><option value="segments-only" ${state.weekendCalculationSource === 'segments-only' ? 'selected' : ''}>segments only</option><option value="whole-shift" ${state.weekendCalculationSource === 'whole-shift' ? 'selected' : ''}>whole shift</option></select></div>
+              <div class="calc-field"><label>nightCalculationSource</label><select name="nightCalculationSource"><option value="segments-only" ${state.nightCalculationSource === 'segments-only' ? 'selected' : ''}>segments only</option><option value="whole-shift" ${state.nightCalculationSource === 'whole-shift' ? 'selected' : ''}>whole shift</option></select></div>
+              <div class="calc-field"><label>crossMidnightSplitMode</label><select name="crossMidnightSplitMode"><option value="split-by-date" ${state.crossMidnightSplitMode === 'split-by-date' ? 'selected' : ''}>split by calendar date</option><option value="keep-original-shift" ${state.crossMidnightSplitMode === 'keep-original-shift' ? 'selected' : ''}>keep original shift</option></select></div>
+              <div class="calc-field"><label>Holiday premium</label><input name="holidayPremiumCoefficient" type="number" step="0.01" min="0" value="${escapeHtml(state.holidayPremiumCoefficient)}" /></div>
+              <div class="calc-field"><label>Weekend premium</label><input name="weekendPremiumCoefficient" type="number" step="0.01" min="0" value="${escapeHtml(state.weekendPremiumCoefficient)}" /></div>
+              <div class="calc-field"><label>Night premium</label><input name="nightPremiumCoefficient" type="number" step="0.01" min="0" value="${escapeHtml(state.nightPremiumCoefficient)}" /></div>
+              <div class="calc-field">${renderCheckboxField('specialHoursOnlyIfWorkMinutesPositive', 'Count only if work_minutes > 0', state.specialHoursOnlyIfWorkMinutesPositive)}</div>
+              <div class="calc-field">${renderCheckboxField('splitByCalendarDate', 'Split by calendar date', state.splitByCalendarDate)}</div>
+            </div>
+          </section>
+
+          <section class="calc-settings-section" data-tab-panel="calculations" hidden>
+            <h3>Карта: Totals and payroll</h3>
+            <div class="calc-grid">
+              <div class="calc-field"><label>payableHoursMode</label><select name="payableHoursMode"><option value="worked-plus-premiums" ${state.payableHoursMode === 'worked-plus-premiums' ? 'selected' : ''}>worked + premiums</option><option value="worked-only" ${state.payableHoursMode === 'worked-only' ? 'selected' : ''}>worked only</option></select></div>
+              <div class="calc-field"><label>overtimeMode</label><select name="overtimeMode"><option value="worked-vs-norm" ${state.overtimeMode === 'worked-vs-norm' ? 'selected' : ''}>worked vs norm</option><option value="payable-vs-norm" ${state.overtimeMode === 'payable-vs-norm' ? 'selected' : ''}>payable vs norm</option></select></div>
+              <div class="calc-field"><label>comparisonMode</label><select name="comparisonMode"><option value="monthly-norm" ${state.comparisonMode === 'monthly-norm' ? 'selected' : ''}>monthly norm</option><option value="sirv-norm" ${state.comparisonMode === 'sirv-norm' ? 'selected' : ''}>SIRV norm</option><option value="fixed-planned-hours" ${state.comparisonMode === 'fixed-planned-hours' ? 'selected' : ''}>fixed planned hours</option></select></div>
+              <div class="calc-field"><label>nightConversionMode</label><select name="nightConversionMode"><option value="disabled" ${state.nightConversionMode === 'disabled' ? 'selected' : ''}>no conversion</option><option value="to-day-equivalent" ${state.nightConversionMode === 'to-day-equivalent' ? 'selected' : ''}>convert to day equivalent</option></select></div>
+              <div class="calc-field">${renderCheckboxField('includePremiumsInPayable', 'includePremiumsInPayable', state.includePremiumsInPayable)}</div>
+            </div>
+          </section>
+
+          <section class="calc-settings-section" data-tab-panel="simulation" hidden>
+            <h3>Execution order + simulation</h3>
+            <div class="calc-grid calc-grid-2-1">
+              <div class="calc-field calc-field-full">
+                <label>Execution pipeline</label>
+                <ol class="calc-preview-list">
+                  <li>Resolve shift source (primary + fallback).</li>
+                  <li>Classify working/non-working.</li>
+                  <li>Calculate worked day and worked minutes.</li>
+                  <li>Calculate holiday/weekend/night segments.</li>
+                  <li>Apply payable + overtime + comparison mode.</li>
+                </ol>
+              </div>
+              <div class="calc-field calc-field-full">
+                <label for="formulaText">Execution trace template</label>
+                <textarea id="formulaText" name="formulaText" rows="8">${escapeHtml(state.formulaText)}</textarea>
+              </div>
+              <div class="calc-field">${renderCheckboxField('enableRuleTrace', 'enableRuleTrace', state.enableRuleTrace)}</div>
+              <div class="calc-field">${renderCheckboxField('showAppliedRules', 'showAppliedRules', state.showAppliedRules)}</div>
+              <div class="calc-field">${renderCheckboxField('showRejectedRules', 'showRejectedRules', state.showRejectedRules)}</div>
+              <div class="calc-field calc-field-full">
+                <label>Test case input / Output / Explanation trace</label>
+                <div id="calcPreviewBox" class="calc-preview-box">${renderCalculationPreview(state)}</div>
+              </div>
             </div>
           </section>
 
           <div class="calc-actions">
             <button type="button" class="calc-btn calc-btn-secondary" id="calcCancelBtn">Отказ</button>
-            <button type="button" class="calc-btn calc-btn-light" id="calcPreviewBtn">Обнови преглед</button>
+            <button type="button" class="calc-btn calc-btn-light" id="calcPreviewBtn">Симулирай</button>
             <button type="submit" class="calc-btn calc-btn-primary">Запази настройките</button>
           </div>
         </form>
@@ -229,8 +197,19 @@
     const form = container.querySelector('#adminCalculationSettingsForm');
     const previewBox = container.querySelector('#calcPreviewBox');
     const scopeSelect = container.querySelector('#calcScope');
-    const cancelBtn = container.querySelector('#calcCancelBtn');
-    const previewBtn = container.querySelector('#calcPreviewBtn');
+
+    function toggleTab(tabKey) {
+      container.querySelectorAll('.calc-tab-btn').forEach((btn) => {
+        btn.classList.toggle('is-active', btn.dataset.calcTab === tabKey);
+      });
+      container.querySelectorAll('[data-tab-panel]').forEach((panel) => {
+        panel.hidden = panel.dataset.tabPanel !== tabKey;
+      });
+    }
+
+    container.querySelectorAll('.calc-tab-btn').forEach((btn) => {
+      btn.addEventListener('click', () => toggleTab(btn.dataset.calcTab));
+    });
 
     function readFormState() {
       const formData = new FormData(form);
@@ -241,21 +220,37 @@
         departmentId: String(formData.get('departmentId') || '').trim(),
         scheduleId: String(formData.get('scheduleId') || '').trim(),
         isActive: String(formData.get('isActive')) === 'true',
-
-        calculationMode: String(formData.get('calculationMode') || 'worked-hours'),
-        workedDayRule: String(formData.get('workedDayRule') || 'working-shift-and-minutes'),
-        holidayMode: String(formData.get('holidayMode') || 'segments-only'),
-        weekendMode: String(formData.get('weekendMode') || 'segments-only'),
-        nightMode: String(formData.get('nightMode') || 'range-22-06'),
-
-        includeBreakInWorkedHours: formData.get('includeBreakInWorkedHours') === 'on',
-        sumSplitIntervals: formData.get('sumSplitIntervals') === 'on',
-        holidayOnlyWorkedSegments: formData.get('holidayOnlyWorkedSegments') === 'on',
-        weekendOnlyWorkedSegments: formData.get('weekendOnlyWorkedSegments') === 'on',
+        priority: Number(formData.get('priority') || 100),
+        conflictResolution: String(formData.get('conflictResolution') || 'highest-priority-wins'),
+        shiftResolutionPrimary: String(formData.get('shiftResolutionPrimary') || 'shift-id-first'),
+        shiftResolutionFallback: String(formData.get('shiftResolutionFallback') || 'department-local-then-global'),
+        shiftClassificationSource: String(formData.get('shiftClassificationSource') || 'template-metadata'),
+        allowCodeOnlyFallback: formData.get('allowCodeOnlyFallback') === 'on',
+        legacyCodeFallbackMode: String(formData.get('legacyCodeFallbackMode') || 'fallback-only'),
+        workedDayRule: String(formData.get('workedDayRule') || 'working-shift-and-positive-minutes'),
+        workedMinutesSource: String(formData.get('workedMinutesSource') || 'snapshot'),
+        includeBreakInWorkedHours: String(formData.get('includeBreakInWorkedHours') || 'false') === 'true',
+        splitShiftAggregationMode: String(formData.get('splitShiftAggregationMode') || 'sum-all-intervals'),
+        zeroSnapshotForNonWorking: formData.get('zeroSnapshotForNonWorking') === 'on',
+        workedDayRequiresPositiveMinutes: formData.get('workedDayRequiresPositiveMinutes') === 'on',
         excludeNonWorkingCodesFromWorkedDay: formData.get('excludeNonWorkingCodesFromWorkedDay') === 'on',
-        useShiftIdPriority: formData.get('useShiftIdPriority') === 'on',
-        scopeAwareFallback: formData.get('scopeAwareFallback') === 'on',
-
+        holidayCalculationSource: String(formData.get('holidayCalculationSource') || 'segments-only'),
+        weekendCalculationSource: String(formData.get('weekendCalculationSource') || 'segments-only'),
+        nightCalculationSource: String(formData.get('nightCalculationSource') || 'segments-only'),
+        holidayPremiumCoefficient: String(formData.get('holidayPremiumCoefficient') || '2.00'),
+        weekendPremiumCoefficient: String(formData.get('weekendPremiumCoefficient') || '1.75'),
+        nightPremiumCoefficient: String(formData.get('nightPremiumCoefficient') || '0.25'),
+        specialHoursOnlyIfWorkMinutesPositive: formData.get('specialHoursOnlyIfWorkMinutesPositive') === 'on',
+        splitByCalendarDate: formData.get('splitByCalendarDate') === 'on',
+        crossMidnightSplitMode: String(formData.get('crossMidnightSplitMode') || 'split-by-date'),
+        payableHoursMode: String(formData.get('payableHoursMode') || 'worked-plus-premiums'),
+        overtimeMode: String(formData.get('overtimeMode') || 'worked-vs-norm'),
+        comparisonMode: String(formData.get('comparisonMode') || 'monthly-norm'),
+        includePremiumsInPayable: formData.get('includePremiumsInPayable') === 'on',
+        nightConversionMode: String(formData.get('nightConversionMode') || 'disabled'),
+        enableRuleTrace: formData.get('enableRuleTrace') === 'on',
+        showAppliedRules: formData.get('showAppliedRules') === 'on',
+        showRejectedRules: formData.get('showRejectedRules') === 'on',
         nonWorkingCodes: normalizeCommaCodes(formData.get('nonWorkingCodes')),
         workingCodes: normalizeCommaCodes(formData.get('workingCodes')),
         formulaText: String(formData.get('formulaText') || '').trim(),
@@ -263,43 +258,23 @@
     }
 
     function validateSettings(nextState) {
-      if (!nextState.name) {
-        return { ok: false, message: 'Попълнете име на настройката.' };
-      }
-      if (nextState.scope === 'department' && !nextState.departmentId) {
-        return { ok: false, message: 'Изберете отдел за настройката.' };
-      }
-      if (nextState.scope === 'schedule' && !nextState.scheduleId) {
-        return { ok: false, message: 'Изберете график за настройката.' };
-      }
-      if (!nextState.calculationMode) {
-        return { ok: false, message: 'Изберете режим на изчисление.' };
-      }
-      if (!nextState.workedDayRule) {
-        return { ok: false, message: 'Изберете правило за worked day.' };
-      }
+      if (!nextState.name) return { ok: false, message: 'Попълнете име.' };
+      if (nextState.scope === 'department' && !nextState.departmentId) return { ok: false, message: 'Изберете отдел.' };
+      if (nextState.scope === 'schedule' && !nextState.scheduleId) return { ok: false, message: 'Изберете график.' };
       return { ok: true };
     }
 
-    function updateScopeState() {
+    scopeSelect?.addEventListener('change', () => {
       state = readFormState();
-      renderAdminCalculationSettings(container, {
-        ...options,
-        initialValue: state,
-      });
-    }
-
-    scopeSelect?.addEventListener('change', updateScopeState);
-
-    previewBtn?.addEventListener('click', () => {
-      state = readFormState();
-      previewBox.innerHTML = renderCalculationPreview(state);
-      if (onPreview) {
-        onPreview(state);
-      }
+      renderAdminCalculationSettings(container, { ...options, initialValue: state });
     });
 
-    cancelBtn?.addEventListener('click', () => {
+    container.querySelector('#calcPreviewBtn')?.addEventListener('click', () => {
+      state = readFormState();
+      previewBox.innerHTML = renderCalculationPreview(state);
+    });
+
+    container.querySelector('#calcCancelBtn')?.addEventListener('click', () => {
       if (onCancel) onCancel(state);
     });
 
@@ -307,98 +282,37 @@
       event.preventDefault();
       const nextState = readFormState();
       const validation = validateSettings(nextState);
-
       if (!validation.ok) {
         showCalculationSettingsMessage(container, validation.message, false);
         return;
       }
-
       state = nextState;
       previewBox.innerHTML = renderCalculationPreview(state);
-
       if (onSave) {
         const result = await onSave(state);
         if (result?.ok === false) {
-          showCalculationSettingsMessage(container, result.message || 'Грешка при запис на настройките.', false);
+          showCalculationSettingsMessage(container, result.message || 'Грешка при запис.', false);
           return;
         }
       }
-
       showCalculationSettingsMessage(container, 'Настройките са запазени успешно.', true);
     });
   }
 
   function renderCheckboxField(name, label, checked) {
-    return `
-      <label class="calc-checkbox">
-        <input type="checkbox" name="${escapeHtml(name)}" ${checked ? 'checked' : ''} />
-        <span>${escapeHtml(label)}</span>
-      </label>
-    `;
+    return `<label class="calc-checkbox"><input type="checkbox" name="${escapeHtml(name)}" ${checked ? 'checked' : ''} /><span>${escapeHtml(label)}</span></label>`;
   }
 
   function renderCalculationPreview(state) {
     const lines = [
-      `Режим: ${getCalculationModeLabel(state.calculationMode)}`,
-      `Worked day: ${getWorkedDayRuleLabel(state.workedDayRule)}`,
-      `Празничен труд: ${getSegmentModeLabel(state.holidayMode)}`,
-      `Почивен труд: ${getSegmentModeLabel(state.weekendMode)}`,
-      `Нощен труд: ${getNightModeLabel(state.nightMode)}`,
-      `Прекъсната смяна: ${state.sumSplitIntervals ? 'Сумирай всички интервали' : 'Не сумирай всички интервали'}`,
-      `Scope-aware fallback: ${state.scopeAwareFallback ? 'Да' : 'Не'}`,
-      `Shift ID priority: ${state.useShiftIdPriority ? 'Да' : 'Не'}`,
-      `Non-working codes: ${state.nonWorkingCodes || 'няма'}`,
-      `Working codes: ${state.workingCodes || 'няма'}`,
+      `Source of truth: ${state.shiftResolutionPrimary} + ${state.shiftResolutionFallback}`,
+      `Classification: ${state.shiftClassificationSource} (code-only fallback: ${state.allowCodeOnlyFallback ? 'on' : 'off'})`,
+      `Worked day: ${state.workedDayRule}; minutes source: ${state.workedMinutesSource}`,
+      `Special hours: holiday=${state.holidayCalculationSource}, weekend=${state.weekendCalculationSource}, night=${state.nightCalculationSource}`,
+      `Totals: payable=${state.payableHoursMode}, overtime=${state.overtimeMode}, compare=${state.comparisonMode}`,
+      `Trace: ${state.enableRuleTrace ? 'enabled' : 'disabled'} | applied=${state.showAppliedRules ? 'yes' : 'no'} | rejected=${state.showRejectedRules ? 'yes' : 'no'}`,
     ];
-
-    return `
-      <ul class="calc-preview-list">
-        ${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}
-      </ul>
-      <div class="calc-preview-formula">
-        <strong>Формула / правило:</strong>
-        <pre>${escapeHtml(state.formulaText || 'Няма зададена формула.')}</pre>
-      </div>
-    `;
-  }
-
-  function getCalculationModeLabel(value) {
-    const map = {
-      standard: 'Стандартно',
-      sirv: 'СИРВ',
-      'planned-hours': 'По планирани часове',
-      'worked-hours': 'По реално отработени часове',
-      'fixed-8h': 'Фиксирани 8 часа',
-      'shift-template': 'По шаблон на смяна',
-    };
-    return map[value] || value;
-  }
-
-  function getWorkedDayRuleLabel(value) {
-    const map = {
-      'working-shift-and-minutes': 'Има работна смяна и work_minutes > 0',
-      'any-entry': 'Има запис в клетката',
-      'working-template-only': 'Само ако шаблонът е работен',
-      'exclude-leaves': 'Без отпуск, болничен и почивка',
-    };
-    return map[value] || value;
-  }
-
-  function getSegmentModeLabel(value) {
-    const map = {
-      'segments-only': 'Само по работните сегменти',
-      'whole-shift': 'По цялата смяна',
-    };
-    return map[value] || value;
-  }
-
-  function getNightModeLabel(value) {
-    const map = {
-      auto: 'Автоматично',
-      'range-22-06': 'Само 22:00–06:00',
-      disabled: 'Изключено',
-    };
-    return map[value] || value;
+    return `<ul class="calc-preview-list">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul><div class="calc-preview-formula"><strong>Explanation trace</strong><pre>${escapeHtml(state.formulaText || 'Няма trace шаблон.')}</pre></div>`;
   }
 
   function showCalculationSettingsMessage(container, message, isSuccess) {
