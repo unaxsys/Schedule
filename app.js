@@ -2087,7 +2087,9 @@ async function upsertShiftTemplate({ id = null, code, name, departmentId = null,
   }
 
   await loadFromBackend({ silentStatus: true, skipReconnectSchedule: true });
-  await loadDepartmentShifts(state.lastSelectedDepartment || DEFAULT_DEPARTMENT, { force: true, silent: true });
+  if (effectiveDepartmentId) {
+    await loadDepartmentShifts(effectiveDepartmentId, { force: true, silent: true });
+  }
   return { ok: true };
 }
 
@@ -3462,6 +3464,7 @@ function renderLegend() {
 
   legendShifts.forEach((shift) => {
     const span = document.createElement('span');
+    const explicitlyNonWorkingCode = isNonWorkingShiftCode(shift?.code);
     if (shift.type === 'work' && !explicitlyNonWorkingCode) {
       span.innerHTML = `<b>${getShiftDisplayLabel(shift)}</b> - ${shift.name} (${shift.start}-${shift.end}, ${shift.hours}ч)`;
     } else {
