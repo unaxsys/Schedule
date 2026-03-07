@@ -1810,9 +1810,6 @@ function attachSettingsSubtabs() {
       settingsSubtabButtons.forEach((other) => other.classList.toggle('active', other === btn));
       settingsSubtabPanels.forEach((panel) => panel.classList.toggle('active', panel.id === target));
 
-      if (target === 'adminCalculationSettingsPanel') {
-        renderAdminCalculationSettingsPanel();
-      }
 
       if (target === 'usersSettingsPanel') {
         loadPlatformUserEmployees().catch(() => {
