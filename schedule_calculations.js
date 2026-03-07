@@ -72,7 +72,9 @@ function computeEntryMetrics({
   dateISO,
   shift = {},
   isHoliday = () => false,
+  calculationSettings = {},
 }) {
+  const settings = normalizeCalculationRuntimeSettings(calculationSettings);
   const snapshot = computeShiftSnapshot({
     dateISO,
     shiftCode: shift.code,
@@ -81,18 +83,95 @@ function computeEntryMetrics({
     endTime: shift.end_time || shift.end,
     intervals: shift.intervals,
     breakMinutes: shift.break_minutes,
-    breakIncluded: shift.break_included,
+    breakIncluded: settings.includeBreakInWorkedHours ? true : shift.break_included,
     holidayResolver: isHoliday,
   });
 
+  const adjustedSnapshot = applyCalculationSettingsToSnapshot(snapshot, settings);
+
   return {
-    duration_minutes: snapshot.duration_minutes,
-    break_minutes_applied: snapshot.break_minutes_applied,
-    work_minutes_total: snapshot.work_minutes_total,
-    night_minutes: snapshot.night_minutes,
-    weekend_minutes: snapshot.weekend_minutes,
-    holiday_minutes: snapshot.holiday_minutes,
+    duration_minutes: adjustedSnapshot.duration_minutes,
+    break_minutes_applied: adjustedSnapshot.break_minutes_applied,
+    work_minutes_total: adjustedSnapshot.work_minutes_total,
+    night_minutes: adjustedSnapshot.night_minutes,
+    weekend_minutes: adjustedSnapshot.weekend_minutes,
+    holiday_minutes: adjustedSnapshot.holiday_minutes,
     overtime_minutes: 0,
+  };
+}
+
+function normalizeCalculationRuntimeSettings(settings = {}) {
+  return {
+    workedDayRequiresPositiveMinutes: settings.workedDayRequiresPositiveMinutes !== false,
+    specialHoursOnlyIfWorkMinutesPositive: settings.specialHoursOnlyIfWorkMinutesPositive !== false,
+    includeBreakInWorkedHours: Boolean(settings.includeBreakInWorkedHours),
+    includePremiumsInPayable: settings.includePremiumsInPayable !== false,
+    comparisonMode: String(settings.comparisonMode || 'monthly-norm'),
+    payableHoursMode: String(settings.payableHoursMode || 'worked-plus-premiums'),
+    overtimeMode: String(settings.overtimeMode || 'worked-vs-norm'),
+    holidayPremiumCoefficient: Number(settings.holidayPremiumCoefficient || 2) || 2,
+    weekendPremiumCoefficient: Number(settings.weekendPremiumCoefficient || 1.75) || 1.75,
+    nightPremiumCoefficient: Number(settings.nightPremiumCoefficient || 0.25) || 0.25,
+  };
+}
+
+function applyCalculationSettingsToSnapshot(snapshot = {}, settings = {}) {
+  const normalized = normalizeCalculationRuntimeSettings(settings);
+  const base = {
+    ...snapshot,
+    work_minutes: Math.max(0, Number(snapshot.work_minutes || 0)),
+    work_minutes_total: Math.max(0, Number(snapshot.work_minutes_total || snapshot.work_minutes || 0)),
+    holiday_minutes: Math.max(0, Number(snapshot.holiday_minutes || 0)),
+    weekend_minutes: Math.max(0, Number(snapshot.weekend_minutes || 0)),
+    night_minutes: Math.max(0, Number(snapshot.night_minutes || 0)),
+  };
+
+  if (normalized.specialHoursOnlyIfWorkMinutesPositive && base.work_minutes_total <= 0) {
+    base.holiday_minutes = 0;
+    base.weekend_minutes = 0;
+    base.night_minutes = 0;
+  }
+
+  return base;
+}
+
+function calculatePayrollTotals({
+  workedMinutes = 0,
+  holidayMinutes = 0,
+  weekendMinutes = 0,
+  nightMinutes = 0,
+  normMinutes = 0,
+  mode = 'normal',
+  calculationSettings = {},
+}) {
+  const settings = normalizeCalculationRuntimeSettings(calculationSettings);
+  const worked = Math.max(0, Number(workedMinutes) || 0);
+  const holiday = Math.max(0, Number(holidayMinutes) || 0);
+  const weekend = Math.max(0, Number(weekendMinutes) || 0);
+  const night = Math.max(0, Number(nightMinutes) || 0);
+  const norm = Math.max(0, Number(normMinutes) || 0);
+
+  const holidayPremiumMinutes = holiday * Math.max(1, settings.holidayPremiumCoefficient - 1);
+  const weekendPremiumMinutes = weekend * Math.max(1, settings.weekendPremiumCoefficient - 1);
+  const nightPremiumMinutes = night * Math.max(0, settings.nightPremiumCoefficient);
+
+  const includePremiums = settings.includePremiumsInPayable && settings.payableHoursMode !== 'worked-only';
+  const payableMinutes = includePremiums
+    ? worked + holidayPremiumMinutes + weekendPremiumMinutes + nightPremiumMinutes
+    : worked;
+
+  const overtimeMinutes = settings.overtimeMode === 'payable-vs-norm'
+    ? Math.max(0, payableMinutes - norm)
+    : computeOvertimeMinutes({ mode, workedMinutes: worked, normMinutes: norm });
+
+  return {
+    workedMinutes: worked,
+    payableMinutes,
+    overtimeMinutes,
+    holidayPremiumMinutes,
+    weekendPremiumMinutes,
+    nightPremiumMinutes,
+    comparisonMode: settings.comparisonMode,
   };
 }
 
@@ -252,6 +331,9 @@ module.exports = {
   parseTimeToMinutes,
   shiftSegmentsByDay,
   computeEntryMetrics,
+  applyCalculationSettingsToSnapshot,
+  normalizeCalculationRuntimeSettings,
+  calculatePayrollTotals,
   computeOvertimeMinutes,
   validateScheduleEntry,
   holidayResolverFactory,
