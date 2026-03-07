@@ -1777,8 +1777,9 @@ async function initDatabase() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS calculation_rule_audit (
       id BIGSERIAL PRIMARY KEY,
-      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-      calculation_setting_id UUID NOT NULL REFERENCES calculation_settings(id) ON DELETE CASCADE,
+      tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      rule_set_id UUID NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE,
+      calculation_setting_id UUID NULL REFERENCES calculation_settings(id) ON DELETE CASCADE,
       entity_type TEXT NOT NULL,
       entity_id TEXT NULL,
       action TEXT NOT NULL,
@@ -2051,6 +2052,7 @@ async function initDatabase() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_calculation_rule_sets_scope_status ON calculation_rule_sets(scope, status, updated_at DESC)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_calculation_rule_audit_ruleset ON calculation_rule_audit(rule_set_id, changed_at DESC)`);
   await pool.query(`ALTER TABLE calculation_rule_audit ALTER COLUMN tenant_id DROP NOT NULL`);
+  await pool.query(`ALTER TABLE calculation_rule_audit ALTER COLUMN calculation_setting_id DROP NOT NULL`);
   await pool.query(`ALTER TABLE calculation_rule_audit ADD COLUMN IF NOT EXISTS rule_set_id UUID NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE`);
 
   await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS break_minutes_applied INTEGER NULL`);

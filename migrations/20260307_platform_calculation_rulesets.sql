@@ -71,6 +71,20 @@ CREATE TABLE IF NOT EXISTS calculation_rule_steps (
   UNIQUE(rule_set_id, step_order)
 );
 
+CREATE TABLE IF NOT EXISTS calculation_rule_audit (
+  id BIGSERIAL PRIMARY KEY,
+  tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  rule_set_id UUID NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE,
+  calculation_setting_id UUID NULL REFERENCES calculation_settings(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NULL,
+  action TEXT NOT NULL,
+  old_value JSONB NULL,
+  new_value JSONB NULL,
+  changed_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 ALTER TABLE calculation_rule_audit ALTER COLUMN tenant_id DROP NOT NULL;
 ALTER TABLE calculation_rule_audit ADD COLUMN IF NOT EXISTS rule_set_id UUID NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE;
 ALTER TABLE calculation_rule_audit ALTER COLUMN calculation_setting_id DROP NOT NULL;
