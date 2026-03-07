@@ -2181,9 +2181,8 @@ function serializeCalculationSettingsRow(row) {
   };
 }
 
-app.get('/api/admin/calculation-settings', requireAuth, requireTenantContext, async (req, res, next) => {
+app.get('/api/platform/super-admin/calculation-settings', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
   try {
-    await requireTenantRoles(req, ['owner', 'admin']);
 
     const result = await pool.query(
       `SELECT *
@@ -2200,9 +2199,8 @@ app.get('/api/admin/calculation-settings', requireAuth, requireTenantContext, as
   }
 });
 
-app.post('/api/admin/calculation-settings', requireAuth, requireTenantContext, async (req, res, next) => {
+app.post('/api/platform/super-admin/calculation-settings', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
   try {
-    await requireTenantRoles(req, ['owner', 'admin']);
     const payload = normalizeCalculationSettingsPayload(req.body || {});
 
     const created = await pool.query(
@@ -2256,9 +2254,8 @@ app.post('/api/admin/calculation-settings', requireAuth, requireTenantContext, a
   }
 });
 
-app.put('/api/admin/calculation-settings/:id', requireAuth, requireTenantContext, async (req, res, next) => {
+app.put('/api/platform/super-admin/calculation-settings/:id', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
   try {
-    await requireTenantRoles(req, ['owner', 'admin']);
     const id = cleanStr(req.params.id);
     if (!isValidUuid(id)) {
       return res.status(400).json({ message: 'Невалиден id.' });

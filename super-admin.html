@@ -613,7 +613,7 @@
 
       async function loadSuperAdminCalculationSettingsFromApi() {
         try {
-          const payload = await apiRequest('/api/admin/calculation-settings', { method: 'GET' });
+          const payload = await apiRequest('/api/platform/super-admin/calculation-settings', { method: 'GET' });
           const setting = payload.setting || payload.settings?.[0] || {};
           saveSuperAdminCalculationSettingsLocal(setting);
           return setting;
@@ -636,8 +636,8 @@
             try {
               const isUpdate = Boolean(settingsPayload?.id);
               const path = isUpdate
-                ? `/api/admin/calculation-settings/${encodeURIComponent(String(settingsPayload.id))}`
-                : '/api/admin/calculation-settings';
+                ? `/api/platform/super-admin/calculation-settings/${encodeURIComponent(String(settingsPayload.id))}`
+                : '/api/platform/super-admin/calculation-settings';
               const payload = await apiRequest(path, {
                 method: isUpdate ? 'PUT' : 'POST',
                 body: JSON.stringify(settingsPayload),
