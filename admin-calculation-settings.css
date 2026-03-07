@@ -107,6 +107,7 @@
   border-radius: 12px;
   padding: 12px 14px;
 }
+.calc-checkbox input { width: 16px; height: 16px; margin: 0; }
 
 .calc-checkbox input { width: 16px; height: 16px; margin-top: 2px; }
 .calc-checkbox > span { font-weight: 600; color: #24324a; }

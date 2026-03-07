@@ -197,7 +197,7 @@
 
           <div class="calc-actions">
             <button type="button" class="calc-btn calc-btn-secondary" id="calcCancelBtn">Отказ</button>
-            <button type="button" class="calc-btn calc-btn-light" id="calcPreviewBtn">Обнови преглед</button>
+            <button type="button" class="calc-btn calc-btn-light" id="calcPreviewBtn">Симулирай</button>
             <button type="submit" class="calc-btn calc-btn-primary">Запази настройките</button>
           </div>
         </form>
@@ -305,7 +305,6 @@
       }
       state = nextState;
       previewBox.innerHTML = renderCalculationPreview(state);
-
       if (onSave) {
         const result = await onSave(state);
         if (result?.ok === false) {
@@ -313,7 +312,6 @@
           return;
         }
       }
-
       showCalculationSettingsMessage(container, 'Настройките са запазени успешно.', true);
     });
   }
