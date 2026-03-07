@@ -2052,20 +2052,6 @@ async function initDatabase() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_calculation_rule_audit_ruleset ON calculation_rule_audit(rule_set_id, changed_at DESC)`);
   await pool.query(`ALTER TABLE calculation_rule_audit ALTER COLUMN tenant_id DROP NOT NULL`);
   await pool.query(`ALTER TABLE calculation_rule_audit ADD COLUMN IF NOT EXISTS rule_set_id UUID NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE`);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS calculation_rule_audit (
-      id BIGSERIAL PRIMARY KEY,
-      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-      calculation_setting_id UUID NOT NULL REFERENCES calculation_settings(id) ON DELETE CASCADE,
-      entity_type TEXT NOT NULL,
-      entity_id TEXT NULL,
-      action TEXT NOT NULL,
-      old_value JSONB NULL,
-      new_value JSONB NULL,
-      changed_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
-      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
 
   await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS break_minutes_applied INTEGER NULL`);
   await pool.query(`
@@ -2935,37 +2921,6 @@ app.post('/api/admin/calculation-settings/simulate', requireAuth, requireTenantC
       settingsDebug: {
         loadedSettingsId: settings.id || null,
         loadedSettingsSource: settings._source,
-        loadedSettingsUpdatedAt: settings.updatedAt || settings.updated_at || null,
-      },
-      result,
-    });
-  } catch (error) {
-    return next(error);
-  }
-});
-
-app.post('/api/platform/super-admin/calculation-settings/simulate', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
-  try {
-    const mode = String(req.body?.mode || 'normal').toLowerCase() === 'sirv' ? 'sirv' : 'normal';
-    const settingsOverride = req.body?.settingsOverride && typeof req.body.settingsOverride === 'object'
-      ? normalizeCalculationSettingsPayload(req.body.settingsOverride, { partial: true })
-      : null;
-    let settings = settingsOverride || await loadRuntimeCalculationSettings({ tenantId: req.tenantId });
-    settings = applyRuleEditorToCalculationSettings(settings, settings?.ruleEditor?.draft || settings?.ruleEditor?.published);
-    const result = calculatePayrollTotals({
-      mode,
-      workedMinutes: Number(req.body?.workedMinutes || 0),
-      holidayMinutes: Number(req.body?.holidayMinutes || 0),
-      weekendMinutes: Number(req.body?.weekendMinutes || 0),
-      nightMinutes: Number(req.body?.nightMinutes || 0),
-      normMinutes: Number(req.body?.normMinutes || 0),
-      calculationSettings: settings,
-    });
-    return res.json({
-      ok: true,
-      settingsDebug: {
-        loadedSettingsId: settings.id || null,
-        loadedSettingsSource: settings._source || 'UI-override',
         loadedSettingsUpdatedAt: settings.updatedAt || settings.updated_at || null,
       },
       result,
