@@ -1778,7 +1778,6 @@ async function initDatabase() {
     CREATE TABLE IF NOT EXISTS calculation_rule_audit (
       id BIGSERIAL PRIMARY KEY,
       tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
-      rule_set_id UUID NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE,
       calculation_setting_id UUID NULL REFERENCES calculation_settings(id) ON DELETE CASCADE,
       entity_type TEXT NOT NULL,
       entity_id TEXT NULL,
