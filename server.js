@@ -146,6 +146,92 @@ const CALCULATION_SETTINGS_DEFAULTS = {
   ruleEditor: null
 };
 
+const PLATFORM_RULESET_SCOPE_ORDER = ['platform', 'company', 'department', 'schedule', 'manual-cell'];
+
+function buildDefaultPlatformRuleEditor() {
+  return {
+    draft: {
+      metadata: {
+        sourceOfTruth: 'platform-core',
+        overrideChain: PLATFORM_RULESET_SCOPE_ORDER,
+        notes: 'Платформена логика. Фирмените настройки са само override слой.'
+      },
+      rules: [
+        { key: 'entry-classification', label: 'Класификация на записите', active: true, priority: 1000, risk: 'high', condition: 'always', formula: 'classify by shift_id -> metadata -> legacy fallback', fallback: 'zero snapshot', notes: 'Поддържа работна смяна, почивка, платен/неплатен отпуск, болничен, майчинство, самоотлъчка, официален празник, работа на празник, работа в почивен ден, служебно отсъствие, командировка, обучение, престой' },
+        { key: 'cross-midnight', label: 'Смени през полунощ', active: true, priority: 990, risk: 'high', condition: 'end <= start', formula: 'split by calendar day', fallback: 'single day', notes: 'Нормална/прекъсната/8ч/12ч/24ч смяна и ротации 2/2, 4/2, ден/нощ' },
+        { key: 'breaks', label: 'Почивки', active: true, priority: 980, risk: 'medium', condition: 'has break', formula: 'paid break included, unpaid break excluded', fallback: '0', notes: 'Поддържа paid/unpaid break и break included/excluded' },
+        { key: 'work-minutes', label: 'Отработени минути/часове', active: true, priority: 970, risk: 'high', condition: 'is_real_working_shift', formula: 'sum working intervals - unpaid break', fallback: '0', notes: 'Worked day/minutes/hours, payable, overtime, deviation, SIRV worked/norm, monthly norm' },
+        { key: 'special-minutes', label: 'Празнични/почивни/нощни минути', active: true, priority: 960, risk: 'high', condition: 'worked minutes > 0', formula: 'segment overlap with holiday/weekend/night windows', fallback: '0', notes: 'holiday/weekend/night minutes + premiums + night conversion' },
+        { key: 'shift-guards', label: 'Ограничения по смени', active: true, priority: 950, risk: 'medium', condition: 'on save/publish', formula: 'validate min rest, max shift duration, max consecutive days', fallback: 'reject publish', notes: 'Контрол и предупреждение за high-risk промени' },
+      ],
+      parameters: [
+        { key: 'holidayPremiumCoefficient', label: 'Премия за официален празник', value: '2.00', type: 'number' },
+        { key: 'weekendPremiumCoefficient', label: 'Премия за почивен ден', value: '1.75', type: 'number' },
+        { key: 'nightPremiumCoefficient', label: 'Премия за нощен труд', value: '0.25', type: 'number' },
+        { key: 'nightConversionCoefficient', label: 'Коефициент за нощно преобразуване', value: '1.43', type: 'number' },
+        { key: 'minRestBetweenShiftsMinutes', label: 'Минимална почивка между смени (минути)', value: '720', type: 'number' },
+        { key: 'maxShiftDurationMinutes', label: 'Максимална продължителност на смяна (минути)', value: '1440', type: 'number' },
+      ],
+      sources: [
+        { key: 'shift_id', label: 'Shift ID', status: 'runtime', notes: 'Първичен източник при resolution' },
+        { key: 'template-metadata', label: 'Метаданни от шаблон', status: 'runtime', notes: 'Класификация по шаблонни настройки' },
+        { key: 'legacy-code', label: 'Legacy код', status: 'runtime', notes: 'Fallback, не primary source of truth' },
+        { key: 'company-calendar', label: 'Фирмен календар override', status: 'override-ready', notes: 'Бъдещ override слой' },
+      ],
+      execution: [
+        { step: 10, key: 'resolve-shift-id', label: 'Resolve shift: shift_id -> department-local -> global' },
+        { step: 20, key: 'classify-entry', label: 'Класификация по metadata + fallback' },
+        { step: 30, key: 'snapshot', label: 'Изчисли snapshot и zero snapshot за неработни записи' },
+        { step: 40, key: 'special-minutes', label: 'Holiday/weekend/night + calendar split logic' },
+        { step: 50, key: 'totals', label: 'Payable/overtime/deviation/SIRV/monthly norm' },
+        { step: 60, key: 'debug-trace', label: 'Applied/rejected/mismatch/manual markers' },
+      ],
+    },
+    published: null,
+    version: 1,
+    status: 'draft',
+    history: [],
+  };
+}
+
+function normalizePlatformRuleEditor(input) {
+  if (!input || typeof input !== 'object') return buildDefaultPlatformRuleEditor();
+  const fallback = buildDefaultPlatformRuleEditor();
+  return {
+    ...fallback,
+    ...input,
+    draft: { ...fallback.draft, ...(input.draft || {}) },
+    published: input.published || null,
+    history: Array.isArray(input.history) ? input.history : [],
+  };
+}
+
+function validateRuleEditorPayload(ruleEditor) {
+  const errors = [];
+  const draft = ruleEditor?.draft || {};
+  if (!Array.isArray(draft.rules) || !draft.rules.length) errors.push('Липсват правила.');
+  if (!Array.isArray(draft.execution) || !draft.execution.length) errors.push('Липсва execution order.');
+  if (Array.isArray(draft.execution)) {
+    const steps = draft.execution.map((s) => Number(s.step));
+    const sorted = [...steps].sort((a,b)=>a-b);
+    if (steps.some((s)=>!Number.isFinite(s))) errors.push('Execution order съдържа невалидна стъпка.');
+    if (JSON.stringify(steps)!==JSON.stringify(sorted)) errors.push('Execution order трябва да е подреден във възходящ ред.');
+  }
+  const parameterKeys = new Set((Array.isArray(draft.parameters) ? draft.parameters : []).map((p) => String(p.key || '').trim()).filter(Boolean));
+  for (const rule of (Array.isArray(draft.rules) ? draft.rules : [])) {
+    if (!String(rule.key || '').trim()) errors.push('Има правило без key.');
+    if (!String(rule.label || '').trim()) errors.push(`Правило ${rule.key || '(без key)'} е без label.`);
+    if (typeof rule.formula === 'string' && rule.formula.includes('${')) errors.push(`Правило ${rule.key || '(без key)'} използва невалиден formula шаблон.`);
+  }
+  for (const source of (Array.isArray(draft.sources) ? draft.sources : [])) {
+    if (!String(source.key || '').trim()) errors.push('Има source без key.');
+  }
+  if (!parameterKeys.size) errors.push('Липсват параметри.');
+  return errors;
+}
+
+
+
 function normalizeCommaCodes(rawValue) {
   return String(rawValue || '')
     .split(',')
@@ -155,7 +241,7 @@ function normalizeCommaCodes(rawValue) {
 }
 
 function normalizeCalculationSettingsPayload(input = {}, { partial = false } = {}) {
-  const allowedScopes = new Set(['global', 'department', 'schedule']);
+  const allowedScopes = new Set(['platform', 'global', 'company', 'department', 'schedule']);
   const normalized = {
     name: cleanStr(input.name || CALCULATION_SETTINGS_DEFAULTS.name),
     scope: cleanStr(input.scope || CALCULATION_SETTINGS_DEFAULTS.scope).toLowerCase(),
@@ -212,7 +298,7 @@ function normalizeCalculationSettingsPayload(input = {}, { partial = false } = {
     throw createHttpError(400, 'name е задължително поле.');
   }
   if (!allowedScopes.has(normalized.scope)) {
-    throw createHttpError(400, 'scope трябва да е global|department|schedule.');
+    throw createHttpError(400, 'scope трябва да е platform|global|company|department|schedule.');
   }
   if (normalized.scope === 'department' && !isValidUuid(normalized.departmentId || '')) {
     throw createHttpError(400, 'departmentId е задължително и трябва да е UUID при scope=department.');
@@ -1691,8 +1777,8 @@ async function initDatabase() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS calculation_rule_audit (
       id BIGSERIAL PRIMARY KEY,
-      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-      calculation_setting_id UUID NOT NULL REFERENCES calculation_settings(id) ON DELETE CASCADE,
+      tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      calculation_setting_id UUID NULL REFERENCES calculation_settings(id) ON DELETE CASCADE,
       entity_type TEXT NOT NULL,
       entity_id TEXT NULL,
       action TEXT NOT NULL,
@@ -1865,11 +1951,93 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS rule_editor_published_at TIMESTAMPTZ NULL`);
   await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS rule_editor_published_by UUID NULL REFERENCES users(id) ON DELETE SET NULL`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_calculation_settings_tenant_scope ON calculation_settings (tenant_id, scope, is_active, updated_at DESC)`);
+  await pool.query(`ALTER TABLE calculation_settings ALTER COLUMN tenant_id DROP NOT NULL`);
+  await pool.query(`ALTER TABLE calculation_settings DROP CONSTRAINT IF EXISTS calculation_settings_scope_check`);
+  await pool.query(`ALTER TABLE calculation_settings ADD CONSTRAINT calculation_settings_scope_check CHECK (scope IN ('global', 'department', 'schedule', 'platform'))`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS calculation_rule_sets (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      scope TEXT NOT NULL CHECK (scope IN ('platform','company','department','schedule')),
+      tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      department_id UUID NULL REFERENCES departments(id) ON DELETE CASCADE,
+      schedule_id UUID NULL REFERENCES schedules(id) ON DELETE CASCADE,
+      parent_rule_set_id UUID NULL REFERENCES calculation_rule_sets(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published','archived')),
+      version INTEGER NOT NULL DEFAULT 1,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      rule_editor_draft JSONB NOT NULL,
+      rule_editor_published JSONB NULL,
+      published_at TIMESTAMPTZ NULL,
+      published_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+      created_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+      updated_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS calculation_rules (
+      id BIGSERIAL PRIMARY KEY,
+      rule_set_id UUID NOT NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE,
+      rule_key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      risk_level TEXT NOT NULL DEFAULT 'safe',
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      priority INTEGER NOT NULL DEFAULT 100,
+      condition_text TEXT NULL,
+      formula_text TEXT NULL,
+      fallback_text TEXT NULL,
+      notes TEXT NULL,
+      UNIQUE(rule_set_id, rule_key)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS calculation_rule_parameters (
+      id BIGSERIAL PRIMARY KEY,
+      rule_set_id UUID NOT NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE,
+      param_key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      value_text TEXT NULL,
+      value_type TEXT NOT NULL DEFAULT 'text',
+      helper_text TEXT NULL,
+      tooltip_text TEXT NULL,
+      UNIQUE(rule_set_id, param_key)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS calculation_rule_sources (
+      id BIGSERIAL PRIMARY KEY,
+      rule_set_id UUID NOT NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE,
+      source_key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      source_status TEXT NOT NULL DEFAULT 'runtime',
+      notes TEXT NULL,
+      UNIQUE(rule_set_id, source_key)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS calculation_rule_steps (
+      id BIGSERIAL PRIMARY KEY,
+      rule_set_id UUID NOT NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE,
+      step_order INTEGER NOT NULL,
+      step_key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      UNIQUE(rule_set_id, step_order)
+    )
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS calculation_rule_audit (
       id BIGSERIAL PRIMARY KEY,
-      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-      calculation_setting_id UUID NOT NULL REFERENCES calculation_settings(id) ON DELETE CASCADE,
+      tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      rule_set_id UUID NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE,
+      calculation_setting_id UUID NULL REFERENCES calculation_settings(id) ON DELETE CASCADE,
       entity_type TEXT NOT NULL,
       entity_id TEXT NULL,
       action TEXT NOT NULL,
@@ -1879,6 +2047,14 @@ async function initDatabase() {
       changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_calculation_rule_sets_scope_status ON calculation_rule_sets(scope, status, updated_at DESC)`);
+  await pool.query(`ALTER TABLE calculation_rule_audit ALTER COLUMN tenant_id DROP NOT NULL`);
+  await pool.query(`ALTER TABLE calculation_rule_audit ALTER COLUMN calculation_setting_id DROP NOT NULL`);
+  await pool.query(`ALTER TABLE calculation_rule_audit ADD COLUMN IF NOT EXISTS rule_set_id UUID NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE`);
+  if (await tableHasColumn('calculation_rule_audit', 'rule_set_id')) {
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_calculation_rule_audit_ruleset ON calculation_rule_audit(rule_set_id, changed_at DESC)`);
+  }
 
   await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS break_minutes_applied INTEGER NULL`);
   await pool.query(`
@@ -2365,174 +2541,129 @@ async function loadRuntimeCalculationSettings({ tenantId, departmentId = null, s
   };
 }
 
-app.get('/api/platform/super-admin/calculation-settings', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
+async function ensurePlatformRuleSetExists(actorUserId = null) {
+  const existing = await pool.query(
+    `SELECT * FROM calculation_rule_sets WHERE scope = 'platform' ORDER BY is_active DESC, updated_at DESC LIMIT 1`
+  );
+  if (existing.rowCount) return existing.rows[0];
+  const editor = buildDefaultPlatformRuleEditor();
+  const created = await pool.query(
+    `INSERT INTO calculation_rule_sets (
+      scope, name, status, version, is_active, rule_editor_draft, created_by, updated_by
+    ) VALUES ('platform', $1, 'draft', 1, TRUE, $2::jsonb, $3, $3)
+    RETURNING *`,
+    ['Платформена основна логика', JSON.stringify(editor), actorUserId]
+  );
+  return created.rows[0];
+}
+
+async function loadPlatformRuleSet({ usePublished = false } = {}) {
+  const row = await ensurePlatformRuleSetExists();
+  const editor = normalizePlatformRuleEditor(usePublished ? (row.rule_editor_published || row.rule_editor_draft) : row.rule_editor_draft);
+  return {
+    ...row,
+    editor,
+  };
+}
+
+function buildSimulationResultFromSettings({ mode, body, calculationSettings }) {
+  return calculatePayrollTotals({
+    mode,
+    workedMinutes: Number(body?.workedMinutes || 0),
+    holidayMinutes: Number(body?.holidayMinutes || 0),
+    weekendMinutes: Number(body?.weekendMinutes || 0),
+    nightMinutes: Number(body?.nightMinutes || 0),
+    normMinutes: Number(body?.normMinutes || 0),
+    calculationSettings,
+  });
+}
+
+app.get('/api/platform/super-admin/calculation-settings', requireAuth, requireSuperAdmin, async (req, res, next) => {
   try {
-
-    const result = await pool.query(
-      `SELECT *
-       FROM calculation_settings
-       WHERE tenant_id = $1
-       ORDER BY is_active DESC, updated_at DESC, created_at DESC`,
-      [req.tenantId]
-    );
-
-    const settings = result.rows.map(serializeCalculationSettingsRow);
-    return res.json({ ok: true, settings, setting: settings[0] || { ...CALCULATION_SETTINGS_DEFAULTS } });
+    const row = await ensurePlatformRuleSetExists(req.user?.id || null);
+    const serialized = {
+      id: row.id,
+      name: row.name,
+      scope: row.scope,
+      status: row.status,
+      version: Number(row.version || 1),
+      isActive: Boolean(row.is_active),
+      ruleEditor: normalizePlatformRuleEditor(row.rule_editor_draft),
+      publishedRuleEditor: row.rule_editor_published ? normalizePlatformRuleEditor(row.rule_editor_published) : null,
+      publishedAt: row.published_at,
+      updatedAt: row.updated_at,
+    };
+    return res.json({ ok: true, settings: [serialized], setting: serialized });
   } catch (error) {
     return next(error);
   }
 });
 
-app.post('/api/platform/super-admin/calculation-settings', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
+app.post('/api/platform/super-admin/calculation-settings', requireAuth, requireSuperAdmin, async (req, res, next) => {
   try {
-    const payload = normalizeCalculationSettingsPayload(req.body || {});
+    const body = req.body || {};
+    const name = cleanStr(body.name || 'Платформена основна логика');
+    const ruleEditor = normalizePlatformRuleEditor(body.ruleEditor || buildDefaultPlatformRuleEditor());
+    const errors = validateRuleEditorPayload(ruleEditor);
+    if (errors.length) return res.status(400).json({ message: 'Невалидна чернова.', errors });
 
     const created = await pool.query(
-      `INSERT INTO calculation_settings (
-         tenant_id, name, scope, priority, conflict_resolution, department_id, schedule_id, is_active,
-         calculation_mode, worked_day_rule, holiday_mode, weekend_mode, night_mode,
-         include_break_in_worked_hours, sum_split_intervals,
-         holiday_only_worked_segments, weekend_only_worked_segments,
-         exclude_non_working_codes_from_worked_day, use_shift_id_priority, scope_aware_fallback,
-         non_working_codes, working_codes, formula_text,
-         rule_editor_draft,
-         created_by, updated_by
-       ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8,
-         $9, $10, $11, $12, $13,
-         $14, $15,
-         $16, $17,
-         $18, $19, $20,
-         $21, $22, $23,
-         $24,
-         $25, $25
-       )
-       RETURNING *`,
-      [
-        req.tenantId,
-        payload.name,
-        payload.scope,
-        payload.priority,
-        payload.conflictResolution,
-        payload.departmentId,
-        payload.scheduleId,
-        payload.isActive,
-        payload.calculationMode,
-        payload.workedDayRule,
-        payload.holidayMode,
-        payload.weekendMode,
-        payload.nightMode,
-        payload.includeBreakInWorkedHours,
-        payload.sumSplitIntervals,
-        payload.holidayOnlyWorkedSegments,
-        payload.weekendOnlyWorkedSegments,
-        payload.excludeNonWorkingCodesFromWorkedDay,
-        payload.useShiftIdPriority,
-        payload.scopeAwareFallback,
-        payload.nonWorkingCodes,
-        payload.workingCodes,
-        payload.formulaText,
-        cloneJsonSafe(payload.ruleEditor),
-        req.user?.id || null,
-      ]
+      `INSERT INTO calculation_rule_sets (
+        scope, name, status, version, is_active, rule_editor_draft, created_by, updated_by
+      ) VALUES ('platform', $1, 'draft', 1, TRUE, $2::jsonb, $3, $3)
+      RETURNING *`,
+      [name, JSON.stringify(ruleEditor), req.user?.id || null]
     );
 
-    return res.status(201).json({ ok: true, setting: serializeCalculationSettingsRow(created.rows[0]) });
+    return res.status(201).json({ ok: true, setting: created.rows[0] });
   } catch (error) {
     return next(error);
   }
 });
 
-app.put('/api/platform/super-admin/calculation-settings/:id', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
-  try {
-    const id = cleanStr(req.params.id);
-    if (!isValidUuid(id)) {
-      return res.status(400).json({ message: 'Невалиден id.' });
-    }
-
-    const payload = normalizeCalculationSettingsPayload(req.body || {});
-    const updated = await pool.query(
-      `UPDATE calculation_settings
-       SET name = $3,
-           scope = $4,
-           priority = $5,
-           conflict_resolution = $6,
-           department_id = $7,
-           schedule_id = $8,
-           is_active = $9,
-           calculation_mode = $10,
-           worked_day_rule = $11,
-           holiday_mode = $12,
-           weekend_mode = $13,
-           night_mode = $14,
-           include_break_in_worked_hours = $15,
-           sum_split_intervals = $16,
-           holiday_only_worked_segments = $17,
-           weekend_only_worked_segments = $18,
-           exclude_non_working_codes_from_worked_day = $19,
-           use_shift_id_priority = $20,
-           scope_aware_fallback = $21,
-           non_working_codes = $22,
-           working_codes = $23,
-           formula_text = $24,
-           rule_editor_draft = $25,
-           updated_by = $26,
-           updated_at = NOW()
-       WHERE tenant_id = $1
-         AND id = $2
-       RETURNING *`,
-      [
-        req.tenantId,
-        id,
-        payload.name,
-        payload.scope,
-        payload.priority,
-        payload.conflictResolution,
-        payload.departmentId,
-        payload.scheduleId,
-        payload.isActive,
-        payload.calculationMode,
-        payload.workedDayRule,
-        payload.holidayMode,
-        payload.weekendMode,
-        payload.nightMode,
-        payload.includeBreakInWorkedHours,
-        payload.sumSplitIntervals,
-        payload.holidayOnlyWorkedSegments,
-        payload.weekendOnlyWorkedSegments,
-        payload.excludeNonWorkingCodesFromWorkedDay,
-        payload.useShiftIdPriority,
-        payload.scopeAwareFallback,
-        payload.nonWorkingCodes,
-        payload.workingCodes,
-        payload.formulaText,
-        cloneJsonSafe(payload.ruleEditor),
-        req.user?.id || null,
-      ]
-    );
-
-    if (!updated.rowCount) {
-      return res.status(404).json({ message: 'Настройката не е намерена.' });
-    }
-
-    return res.json({ ok: true, setting: serializeCalculationSettingsRow(updated.rows[0]) });
-  } catch (error) {
-    return next(error);
-  }
-});
-
-
-app.get('/api/platform/super-admin/calculation-settings/:id/history', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
+app.put('/api/platform/super-admin/calculation-settings/:id', requireAuth, requireSuperAdmin, async (req, res, next) => {
   try {
     const id = cleanStr(req.params.id);
     if (!isValidUuid(id)) return res.status(400).json({ message: 'Невалиден id.' });
+    const name = cleanStr(req.body?.name || 'Платформена основна логика');
+    const ruleEditor = normalizePlatformRuleEditor(req.body?.ruleEditor || buildDefaultPlatformRuleEditor());
+    const errors = validateRuleEditorPayload(ruleEditor);
+    if (errors.length) return res.status(400).json({ message: 'Невалидна чернова.', errors });
+
+    const updated = await pool.query(
+      `UPDATE calculation_rule_sets
+       SET name = $2,
+           status = 'draft',
+           rule_editor_draft = $3::jsonb,
+           updated_by = $4,
+           updated_at = NOW()
+       WHERE id = $1
+         AND scope = 'platform'
+       RETURNING *`,
+      [id, name, JSON.stringify(ruleEditor), req.user?.id || null]
+    );
+    if (!updated.rowCount) return res.status(404).json({ message: 'Наборът не е намерен.' });
+
+    await pool.query(
+      `INSERT INTO calculation_rule_audit (rule_set_id, entity_type, entity_id, action, old_value, new_value, changed_by)
+       VALUES ($1, 'ruleset', $1, 'update-draft', NULL, $2::jsonb, $3)`,
+      [id, JSON.stringify(ruleEditor), req.user?.id || null]
+    );
+
+    return res.json({ ok: true, setting: updated.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/platform/super-admin/calculation-settings/history', requireAuth, requireSuperAdmin, async (req, res, next) => {
+  try {
     const result = await pool.query(
-      `SELECT id, entity_type, entity_id, action, old_value, new_value, changed_by, changed_at
+      `SELECT id, rule_set_id, entity_type, entity_id, action, old_value, new_value, changed_by, changed_at
        FROM calculation_rule_audit
-       WHERE tenant_id = $1 AND calculation_setting_id = $2
+       WHERE rule_set_id IN (SELECT id FROM calculation_rule_sets WHERE scope = 'platform')
        ORDER BY changed_at DESC
-       LIMIT 200`,
-      [req.tenantId, id]
+       LIMIT 300`
     );
     return res.json({ ok: true, history: result.rows });
   } catch (error) {
@@ -2540,72 +2671,126 @@ app.get('/api/platform/super-admin/calculation-settings/:id/history', requireAut
   }
 });
 
-app.post('/api/platform/super-admin/calculation-settings/:id/publish', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
+app.post('/api/platform/super-admin/calculation-settings/publish', requireAuth, requireSuperAdmin, async (req, res, next) => {
   try {
-    const id = cleanStr(req.params.id);
+    const id = cleanStr(req.body?.id || '');
     if (!isValidUuid(id)) return res.status(400).json({ message: 'Невалиден id.' });
-
-    const currentRes = await pool.query(
-      `SELECT * FROM calculation_settings WHERE tenant_id = $1 AND id = $2 LIMIT 1`,
-      [req.tenantId, id]
-    );
+    const currentRes = await pool.query(`SELECT * FROM calculation_rule_sets WHERE id = $1 AND scope = 'platform' LIMIT 1`, [id]);
     const current = currentRes.rows[0];
-    if (!current) return res.status(404).json({ message: 'Настройката не е намерена.' });
+    if (!current) return res.status(404).json({ message: 'Наборът не е намерен.' });
+
+    const editor = normalizePlatformRuleEditor(current.rule_editor_draft);
+    const errors = validateRuleEditorPayload(editor);
+    if (errors.length) return res.status(400).json({ message: 'Publish е блокиран от validation.', errors });
 
     const updated = await pool.query(
-      `UPDATE calculation_settings
-       SET rule_editor_published = rule_editor_draft,
-           rule_editor_version = COALESCE(rule_editor_version, 0) + 1,
-           rule_editor_published_at = NOW(),
-           rule_editor_published_by = $3,
-           updated_at = NOW(),
-           updated_by = $3
-       WHERE tenant_id = $1 AND id = $2
+      `UPDATE calculation_rule_sets
+       SET status = 'published',
+           version = COALESCE(version, 0) + 1,
+           rule_editor_published = rule_editor_draft,
+           published_at = NOW(),
+           published_by = $2,
+           updated_by = $2,
+           updated_at = NOW()
+       WHERE id = $1
        RETURNING *`,
-      [req.tenantId, id, req.user?.id || null]
+      [id, req.user?.id || null]
     );
 
     await pool.query(
-      `INSERT INTO calculation_rule_audit (tenant_id, calculation_setting_id, entity_type, entity_id, action, old_value, new_value, changed_by)
-       VALUES ($1, $2, 'rule_editor', $2, 'publish', $3::jsonb, $4::jsonb, $5)`,
-      [req.tenantId, id, JSON.stringify(current.rule_editor_published || null), JSON.stringify(updated.rows[0].rule_editor_published || null), req.user?.id || null]
+      `INSERT INTO calculation_rule_audit (rule_set_id, entity_type, entity_id, action, old_value, new_value, changed_by)
+       VALUES ($1, 'ruleset', $1, 'publish', $2::jsonb, $3::jsonb, $4)`,
+      [id, JSON.stringify(current.rule_editor_published || null), JSON.stringify(updated.rows[0].rule_editor_published || null), req.user?.id || null]
     );
 
-    return res.json({ ok: true, setting: serializeCalculationSettingsRow(updated.rows[0]) });
+    return res.json({ ok: true, setting: updated.rows[0] });
   } catch (error) {
     return next(error);
   }
 });
 
-app.post('/api/platform/super-admin/calculation-settings/:id/revert', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
+app.post('/api/platform/super-admin/calculation-settings/revert', requireAuth, requireSuperAdmin, async (req, res, next) => {
   try {
-    const id = cleanStr(req.params.id);
+    const id = cleanStr(req.body?.id || '');
     if (!isValidUuid(id)) return res.status(400).json({ message: 'Невалиден id.' });
-
-    const currentRes = await pool.query(
-      `SELECT * FROM calculation_settings WHERE tenant_id = $1 AND id = $2 LIMIT 1`,
-      [req.tenantId, id]
-    );
+    const currentRes = await pool.query(`SELECT * FROM calculation_rule_sets WHERE id = $1 AND scope = 'platform' LIMIT 1`, [id]);
     const current = currentRes.rows[0];
-    if (!current) return res.status(404).json({ message: 'Настройката не е намерена.' });
+    if (!current) return res.status(404).json({ message: 'Наборът не е намерен.' });
 
     const updated = await pool.query(
-      `UPDATE calculation_settings
-       SET rule_editor_draft = rule_editor_published,
-           updated_at = NOW(),
-           updated_by = $3
-       WHERE tenant_id = $1 AND id = $2
+      `UPDATE calculation_rule_sets
+       SET status = 'draft',
+           rule_editor_draft = COALESCE(rule_editor_published, rule_editor_draft),
+           updated_by = $2,
+           updated_at = NOW()
+       WHERE id = $1
        RETURNING *`,
-      [req.tenantId, id, req.user?.id || null]
+      [id, req.user?.id || null]
     );
 
     await pool.query(
-      `INSERT INTO calculation_rule_audit (tenant_id, calculation_setting_id, entity_type, entity_id, action, old_value, new_value, changed_by)
-       VALUES ($1, $2, 'rule_editor', $2, 'revert', $3::jsonb, $4::jsonb, $5)`,
-      [req.tenantId, id, JSON.stringify(current.rule_editor_draft || null), JSON.stringify(updated.rows[0].rule_editor_draft || null), req.user?.id || null]
+      `INSERT INTO calculation_rule_audit (rule_set_id, entity_type, entity_id, action, old_value, new_value, changed_by)
+       VALUES ($1, 'ruleset', $1, 'revert', $2::jsonb, $3::jsonb, $4)`,
+      [id, JSON.stringify(current.rule_editor_draft || null), JSON.stringify(updated.rows[0].rule_editor_draft || null), req.user?.id || null]
     );
 
-    return res.json({ ok: true, setting: serializeCalculationSettingsRow(updated.rows[0]) });
+    return res.json({ ok: true, setting: updated.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/platform/super-admin/calculation-settings/simulate', requireAuth, requireSuperAdmin, async (req, res, next) => {
+  try {
+    const mode = String(req.body?.mode || 'normal').toLowerCase() === 'sirv' ? 'sirv' : 'normal';
+    const id = cleanStr(req.body?.id || '');
+    const simulateMode = String(req.body?.simulateMode || 'draft'); // draft|published|compare
+    let row = null;
+    if (isValidUuid(id)) {
+      const rs = await pool.query(`SELECT * FROM calculation_rule_sets WHERE id = $1 AND scope = 'platform' LIMIT 1`, [id]);
+      row = rs.rows[0] || null;
+    }
+    if (!row) row = await ensurePlatformRuleSetExists(req.user?.id || null);
+
+    const draftEditor = normalizePlatformRuleEditor(row.rule_editor_draft);
+    const publishedEditor = normalizePlatformRuleEditor(row.rule_editor_published || row.rule_editor_draft);
+    const draftSettings = applyRuleEditorToCalculationSettings({ ...CALCULATION_SETTINGS_DEFAULTS, ruleEditor: draftEditor }, draftEditor.draft || draftEditor.published);
+    const publishedSettings = applyRuleEditorToCalculationSettings({ ...CALCULATION_SETTINGS_DEFAULTS, ruleEditor: publishedEditor }, publishedEditor.published || publishedEditor.draft);
+
+    const debugTrace = {
+      entryShiftCode: cleanStr(req.body?.entryShiftCode || ''),
+      entryShiftId: cleanStr(req.body?.entryShiftId || ''),
+      resolvedShiftId: cleanStr(req.body?.resolvedShiftId || req.body?.entryShiftId || ''),
+      resolvedShiftScope: 'platform-core',
+      is_real_working_shift: Boolean(req.body?.isRealWorkingShift ?? true),
+      work_minutes: Number(req.body?.workedMinutes || 0),
+      holiday_minutes: Number(req.body?.holidayMinutes || 0),
+      weekend_minutes: Number(req.body?.weekendMinutes || 0),
+      night_minutes: Number(req.body?.nightMinutes || 0),
+      base_payable: Number(req.body?.workedMinutes || 0) / 60,
+      overtime_contribution: 0,
+      ruleset_id: row.id,
+      version: row.version,
+      trace: ['resolve shift_id', 'classify entry', 'compute segments', 'compute totals'],
+    };
+
+    if (simulateMode === 'compare') {
+      const draftResult = buildSimulationResultFromSettings({ mode, body: req.body, calculationSettings: draftSettings });
+      const publishedResult = buildSimulationResultFromSettings({ mode, body: req.body, calculationSettings: publishedSettings });
+      return res.json({
+        ok: true,
+        compare: {
+          draft: draftResult,
+          published: publishedResult,
+          mismatch: JSON.stringify(draftResult) !== JSON.stringify(publishedResult),
+        },
+        debugTrace,
+      });
+    }
+
+    const pickedSettings = simulateMode === 'published' ? publishedSettings : draftSettings;
+    const result = buildSimulationResultFromSettings({ mode, body: req.body, calculationSettings: pickedSettings });
+    return res.json({ ok: true, mode: simulateMode, result, debugTrace });
   } catch (error) {
     return next(error);
   }
@@ -2739,37 +2924,6 @@ app.post('/api/admin/calculation-settings/simulate', requireAuth, requireTenantC
       settingsDebug: {
         loadedSettingsId: settings.id || null,
         loadedSettingsSource: settings._source,
-        loadedSettingsUpdatedAt: settings.updatedAt || settings.updated_at || null,
-      },
-      result,
-    });
-  } catch (error) {
-    return next(error);
-  }
-});
-
-app.post('/api/platform/super-admin/calculation-settings/simulate', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
-  try {
-    const mode = String(req.body?.mode || 'normal').toLowerCase() === 'sirv' ? 'sirv' : 'normal';
-    const settingsOverride = req.body?.settingsOverride && typeof req.body.settingsOverride === 'object'
-      ? normalizeCalculationSettingsPayload(req.body.settingsOverride, { partial: true })
-      : null;
-    let settings = settingsOverride || await loadRuntimeCalculationSettings({ tenantId: req.tenantId });
-    settings = applyRuleEditorToCalculationSettings(settings, settings?.ruleEditor?.draft || settings?.ruleEditor?.published);
-    const result = calculatePayrollTotals({
-      mode,
-      workedMinutes: Number(req.body?.workedMinutes || 0),
-      holidayMinutes: Number(req.body?.holidayMinutes || 0),
-      weekendMinutes: Number(req.body?.weekendMinutes || 0),
-      nightMinutes: Number(req.body?.nightMinutes || 0),
-      normMinutes: Number(req.body?.normMinutes || 0),
-      calculationSettings: settings,
-    });
-    return res.json({
-      ok: true,
-      settingsDebug: {
-        loadedSettingsId: settings.id || null,
-        loadedSettingsSource: settings._source || 'UI-override',
         loadedSettingsUpdatedAt: settings.updatedAt || settings.updated_at || null,
       },
       result,

@@ -185,3 +185,125 @@ CREATE TABLE IF NOT EXISTS tenant_holidays (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tenant_holidays_tenant_id_date ON tenant_holidays(tenant_id, date);
+
+
+CREATE TABLE IF NOT EXISTS calculation_settings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK (scope IN ('global', 'department', 'schedule', 'platform')),
+  priority INTEGER NOT NULL DEFAULT 100,
+  conflict_resolution TEXT NOT NULL DEFAULT 'highest-priority-wins',
+  department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL,
+  schedule_id UUID NULL REFERENCES schedules(id) ON DELETE SET NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  calculation_mode TEXT NOT NULL DEFAULT 'worked-hours',
+  worked_day_rule TEXT NOT NULL DEFAULT 'working-shift-and-minutes',
+  holiday_mode TEXT NOT NULL DEFAULT 'segments-only',
+  weekend_mode TEXT NOT NULL DEFAULT 'segments-only',
+  night_mode TEXT NOT NULL DEFAULT 'range-22-06',
+  include_break_in_worked_hours BOOLEAN NOT NULL DEFAULT FALSE,
+  sum_split_intervals BOOLEAN NOT NULL DEFAULT TRUE,
+  holiday_only_worked_segments BOOLEAN NOT NULL DEFAULT TRUE,
+  weekend_only_worked_segments BOOLEAN NOT NULL DEFAULT TRUE,
+  exclude_non_working_codes_from_worked_day BOOLEAN NOT NULL DEFAULT TRUE,
+  use_shift_id_priority BOOLEAN NOT NULL DEFAULT TRUE,
+  scope_aware_fallback BOOLEAN NOT NULL DEFAULT TRUE,
+  non_working_codes TEXT NOT NULL DEFAULT '',
+  working_codes TEXT NOT NULL DEFAULT '',
+  formula_text TEXT NOT NULL DEFAULT '',
+  rule_editor_draft JSONB NULL,
+  rule_editor_published JSONB NULL,
+  rule_editor_version INTEGER NOT NULL DEFAULT 1,
+  rule_editor_published_at TIMESTAMPTZ NULL,
+  rule_editor_published_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  updated_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS calculation_rule_sets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  scope TEXT NOT NULL CHECK (scope IN ('platform','company','department','schedule')),
+  tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  department_id UUID NULL REFERENCES departments(id) ON DELETE CASCADE,
+  schedule_id UUID NULL REFERENCES schedules(id) ON DELETE CASCADE,
+  parent_rule_set_id UUID NULL REFERENCES calculation_rule_sets(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published','archived')),
+  version INTEGER NOT NULL DEFAULT 1,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  rule_editor_draft JSONB NOT NULL,
+  rule_editor_published JSONB NULL,
+  published_at TIMESTAMPTZ NULL,
+  published_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  updated_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS calculation_rules (
+  id BIGSERIAL PRIMARY KEY,
+  rule_set_id UUID NOT NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE,
+  rule_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  risk_level TEXT NOT NULL DEFAULT 'safe',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  priority INTEGER NOT NULL DEFAULT 100,
+  condition_text TEXT NULL,
+  formula_text TEXT NULL,
+  fallback_text TEXT NULL,
+  notes TEXT NULL,
+  UNIQUE(rule_set_id, rule_key)
+);
+
+CREATE TABLE IF NOT EXISTS calculation_rule_parameters (
+  id BIGSERIAL PRIMARY KEY,
+  rule_set_id UUID NOT NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE,
+  param_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  value_text TEXT NULL,
+  value_type TEXT NOT NULL DEFAULT 'text',
+  helper_text TEXT NULL,
+  tooltip_text TEXT NULL,
+  UNIQUE(rule_set_id, param_key)
+);
+
+CREATE TABLE IF NOT EXISTS calculation_rule_sources (
+  id BIGSERIAL PRIMARY KEY,
+  rule_set_id UUID NOT NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE,
+  source_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  source_status TEXT NOT NULL DEFAULT 'runtime',
+  notes TEXT NULL,
+  UNIQUE(rule_set_id, source_key)
+);
+
+CREATE TABLE IF NOT EXISTS calculation_rule_steps (
+  id BIGSERIAL PRIMARY KEY,
+  rule_set_id UUID NOT NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE,
+  step_order INTEGER NOT NULL,
+  step_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  UNIQUE(rule_set_id, step_order)
+);
+
+CREATE TABLE IF NOT EXISTS calculation_rule_audit (
+  id BIGSERIAL PRIMARY KEY,
+  tenant_id UUID NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  rule_set_id UUID NULL REFERENCES calculation_rule_sets(id) ON DELETE CASCADE,
+  calculation_setting_id UUID NULL REFERENCES calculation_settings(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NULL,
+  action TEXT NOT NULL,
+  old_value JSONB NULL,
+  new_value JSONB NULL,
+  changed_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_calculation_settings_tenant_scope ON calculation_settings (tenant_id, scope, is_active, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_calculation_rule_sets_scope_status ON calculation_rule_sets(scope, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_calculation_rule_audit_ruleset ON calculation_rule_audit(rule_set_id, changed_at DESC);
