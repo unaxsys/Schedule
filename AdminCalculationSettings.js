@@ -804,16 +804,29 @@
     const runtimeVersion = runtimeDebug?.loadedSettingsSource || 'unknown';
     const draftPublished = state?.ruleEditor?.status || 'draft';
     const mismatch = runtimeDebug?.loadedSettingsId && state.id ? String(runtimeDebug.loadedSettingsId) !== String(state.id) : false;
+    const engineMode = runtimeDebug?.mode || (mismatch ? 'runtime-external' : 'runtime-local');
     const modeLabel = mismatch
       ? 'Runtime engine използва друга версия'
       : (draftPublished === 'published' ? 'Тези настройки участват в live engine' : 'Това е чернова, още не е публикувана');
+    const statusItems = [
+      { label: 'Live engine', value: mismatch ? 'НЕ (ползва друга версия)' : (draftPublished === 'published' ? 'ДА' : 'НЕ') },
+      { label: 'Simulation', value: 'ДА (винаги достъпна в този панел)' },
+      { label: 'Draft', value: draftPublished === 'draft' ? 'ДА' : 'НЕ' },
+      { label: 'Published', value: draftPublished === 'published' ? 'ДА' : 'НЕ' },
+      { label: 'Runtime версията съвпада', value: mismatch ? 'НЕ' : 'ДА' },
+    ];
     return `
       <p><strong>${escapeHtml(modeLabel)}</strong></p>
+      <div class="calc-preview-formula">
+        <strong>Status box (ясно за режима):</strong>
+        <ul class="calc-preview-list">${statusItems.map((item) => `<li>${escapeHtml(item.label)}: ${escapeHtml(item.value)}</li>`).join('')}</ul>
+      </div>
       <ul class="calc-preview-list">
         <li>Loaded settings id: ${escapeHtml(loadedId)}</li>
         <li>Loaded settings version: ${escapeHtml(loadedVersion)}</li>
         <li>Draft / Published: ${escapeHtml(draftPublished)}</li>
         <li>Runtime engine version: ${escapeHtml(runtimeVersion)}</li>
+        <li>Engine mode: ${escapeHtml(engineMode)}</li>
         <li>UI version: ${escapeHtml(uiVersion)}</li>
         <li>Mismatch: ${mismatch ? 'Да' : 'Не'}</li>
       </ul>
@@ -845,17 +858,45 @@
     return `
       <div class="calc-preview-split">
         <div>
-          <strong>Клетка</strong>
+          <strong>Разчет за конкретна клетка</strong>
           <ul class="calc-preview-list">
-            <li>employee: Demo Employee</li><li>date: 2026-03-01</li><li>entry shift code: 2СМ</li><li>entry shift id: sh-2sm</li><li>resolved shift id: sh-2sm</li><li>resolved shift scope: ${escapeHtml(state.scope)}</li><li>resolved template: ${escapeHtml(state.shiftClassificationSource)}</li><li>intervals: 14:00-23:00</li><li>break: 60</li><li>work_minutes: 540</li><li>holiday_minutes: 0</li><li>weekend_minutes: 540</li><li>night_minutes: 120</li><li>payable contribution: 10.5</li><li>overtime contribution: 1.0</li><li>worked_day: true</li>
+            <li>employee: Demo Employee</li>
+            <li>date: 2026-03-01</li>
+            <li>избрана смяна: 2СМ</li>
+            <li>shift_id: sh-2sm</li>
+            <li>display name: Следобедна 2-ра смяна</li>
+            <li>функция на смяната: работна смяна (14:00-23:00)</li>
+            <li>flags: is_working=true, is_split=false, crosses_midnight=false</li>
+            <li>как е разпозната: shift-id-first → department-local-then-global</li>
+            <li>тип смяна: работна (template metadata)</li>
+            <li>интервали: 14:00-23:00</li>
+            <li>почивки: 60 мин</li>
+            <li>work_minutes: 540</li>
+            <li>holiday_minutes: 0</li>
+            <li>weekend_minutes: 540</li>
+            <li>night_minutes: 120</li>
+            <li>payable contribution: 10.5</li>
+            <li>overtime contribution: 1.0</li>
+            <li>applied rules: work-minutes, weekend-minutes, night-minutes, payable-hours</li>
+            <li>rejected rules: holiday-minutes (няма припокриване с празник)</li>
           </ul>
         </div>
         <div>
-          <strong>Trace</strong>
+          <strong>Крайна стойност по засегнатите колони</strong>
           <ul class="calc-preview-list">
-            <li>applied rules: <button type="button" class="calc-link-btn" data-rule-key="work-minutes">Work minutes</button>, <button type="button" class="calc-link-btn" data-rule-key="weekend-minutes">Weekend minutes</button></li>
-            <li>rejected rules: <button type="button" class="calc-link-btn" data-rule-key="holiday-minutes">Holiday minutes</button></li>
+            <li>Отр. дни: +1 (от worked-day)</li>
+            <li>Часове: +9.0 (от work-minutes)</li>
+            <li>Труд почивен: +9.0 (от weekend-minutes)</li>
+            <li>Нощен труд: +2.0 (от night-minutes)</li>
+            <li>Платими часове: +10.5 (от payable-hours)</li>
+            <li>Извънреден: +1.0 (от overtime)</li>
             <li>formula trace: payable = base + weekend + night</li>
+          </ul>
+          <strong>Визуална връзка с правила</strong>
+          <ul class="calc-preview-list">
+            <li><button type="button" class="calc-link-btn" data-rule-key="work-minutes">Rule: work-minutes</button> → параметър split_shift_mode → execution step #5</li>
+            <li><button type="button" class="calc-link-btn" data-rule-key="weekend-minutes">Rule: weekend-minutes</button> → параметър weekend_rate → execution step #6</li>
+            <li><button type="button" class="calc-link-btn" data-rule-key="payable-hours">Rule: payable-hours</button> → параметри rates → execution step #7</li>
           </ul>
           <strong>Месечен debug summary</strong>
           <ul class="calc-preview-list">${Object.entries(monthly).map(([k,v]) => `<li>${escapeHtml(k)}: ${escapeHtml(v)}</li>`).join('')}</ul>
@@ -899,9 +940,25 @@
       `Helper/override: Работни кодове и Неработни кодове`,
       `Само simulation/debug: enableRuleTrace, showAppliedRules, showRejectedRules, formulaText`,
     ];
+    const howSteps = buildHowSystemCalculatesSteps(state, simulation);
+    const humanRules = buildHumanRuleFormulas(state);
+    const columnExplainers = buildColumnExplainers();
+    const anomalies = buildAnomalyGuidance(state, simulation);
 
     return `
       <ul class="calc-preview-list">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+      <div class="calc-preview-formula">
+        <strong>1) Как системата смята</strong>
+        <ol class="calc-preview-list">${howSteps.map((step) => `<li><strong>${escapeHtml(step.title)}:</strong> ${escapeHtml(step.description)}</li>`).join('')}</ol>
+      </div>
+      <div class="calc-preview-formula">
+        <strong>2) Формула на човешки език</strong>
+        <ul class="calc-preview-list">${humanRules.map((item) => `<li><strong>${escapeHtml(item.rule)}:</strong> ${escapeHtml(item.meaning)} Вход: ${escapeHtml(item.input)}. Връща: ${escapeHtml(item.output)}. Прилага се: ${escapeHtml(item.when)}.</li>`).join('')}</ul>
+      </div>
+      <div class="calc-preview-formula">
+        <strong>3) Коя колона как се получава</strong>
+        <ul class="calc-preview-list">${columnExplainers.map((item) => `<li><strong>${escapeHtml(item.column)}:</strong> правила ${escapeHtml(item.rules)}; вход ${escapeHtml(item.inputs)}; смятане ${escapeHtml(item.calculation)}; пример ${escapeHtml(item.example)}.</li>`).join('')}</ul>
+      </div>
       <div class="calc-preview-split">
         <div>
           <strong>Приложени правила:</strong>
@@ -925,10 +982,70 @@
         <ul class="calc-preview-list">${statuses.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
       </div>
       <div class="calc-preview-formula">
+        <strong>5) Откъде идва грешката</strong>
+        <ul class="calc-preview-list">${anomalies.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+      </div>
+      <div class="calc-preview-formula">
+        <strong>6) Визуална връзка между резултат и правило</strong>
+        <ul class="calc-preview-list">
+          <li>Резултат „Платими часове" → <button type="button" class="calc-link-btn" data-rule-key="payable-hours">правило payable-hours</button> → параметри holiday/weekend/night rate → дефиниция на смяна → execution step #7.</li>
+          <li>Резултат „Извънреден" → <button type="button" class="calc-link-btn" data-rule-key="overtime">правило overtime</button> → параметър comparison_mode → execution step #8.</li>
+          <li>Резултат „Нощен труд" → <button type="button" class="calc-link-btn" data-rule-key="night-minutes">правило night-minutes</button> → нощен интервал 22:00-06:00 → execution step #6.</li>
+        </ul>
+      </div>
+      <div class="calc-preview-formula">
         <strong>Описание на логиката:</strong>
         <pre>${escapeHtml(state.formulaText || 'Няма въведено описание.')}</pre>
       </div>
     `;
+  }
+
+  function buildHowSystemCalculatesSteps(state, simulation) {
+    const workedMinutes = simulation?.input?.workedMinutes ?? 540;
+    return [
+      { title: 'Определяне на смяната', description: `Системата първо търси смяната по ID, после използва fallback (${humanShiftSource(state)}), ако липсва директно съвпадение.` },
+      { title: 'Определяне на типа на смяната', description: `Типът се разпознава по ${state.shiftClassificationSource === 'template-metadata' ? 'метаданните на шаблона' : 'работен/неработен флаг'} и помощните кодове.` },
+      { title: 'Изчисляване на интервалите', description: 'Смяната се разделя на реални работни интервали, отделят се почивки и се проверява пресичане през полунощ.' },
+      { title: 'Изчисляване на работните минути', description: `Работните минути се смятат като сбор на интервалите минус почивките. Текущ пример: ${workedMinutes} мин.` },
+      { title: 'Изчисляване на празничен / почивен / нощен труд', description: 'Системата намира припокриване на работните интервали с празници, уикенд и нощен прозорец 22:00-06:00.' },
+      { title: 'Изчисляване на платими часове', description: `Режимът е „${state.payableHoursMode === 'worked-plus-premiums' ? 'отработени + премии' : 'само отработени'}“ и отчита настройките за коефициенти.` },
+      { title: 'Изчисляване на извънреден труд / отклонение', description: 'Накрая се сравнява с нормата и се формират извънреден труд и отклонение спрямо план/норма.' },
+    ];
+  }
+
+  function buildHumanRuleFormulas(state) {
+    return [
+      { rule: 'worked-day', meaning: 'Отработен ден се брои, ако смяната е работна и има положителни отработени минути.', input: 'тип смяна, work_minutes', output: 'Отр. дни (+1 или 0)', when: 'при всеки запис за ден' },
+      { rule: 'work-minutes', meaning: 'Реалното време за работа е сумата от работните интервали минус почивки.', input: 'интервали, почивка', output: 'Часове', when: 'ако смяната е работна' },
+      { rule: 'holiday/weekend/night minutes', meaning: 'Специалният труд е онази част от работните интервали, която попада в празник, уикенд или нощ.', input: 'интервали + календар', output: 'Труд празник/почивен/нощен', when: 'ако има припокриване' },
+      { rule: 'payable-hours', meaning: 'Платимите часове събират базовия труд и премийните надбавки според коефициентите.', input: 'work_minutes + special minutes + rates', output: 'Платими часове', when: 'след изчисляване на специалните минути' },
+      { rule: 'overtime/deviation', meaning: 'Извънредният труд е превишението над норма, а отклонението е разликата между план и реалност.', input: 'worked/payable + norm/planned', output: 'Извънреден и Отклонение', when: 'в края на дневния и месечния разчет' },
+    ];
+  }
+
+  function buildColumnExplainers() {
+    return [
+      { column: 'Отр. дни', rules: 'worked-day', inputs: 'тип смяна, work_minutes', calculation: '1 ако е работен ден с >0 минути', example: '540 мин → 1 ден' },
+      { column: 'Часове', rules: 'work-minutes', inputs: 'интервали, почивки', calculation: '(минути/60)', example: '540 мин → 9.0 ч' },
+      { column: 'Норма', rules: 'monthly norm', inputs: 'календар, договор', calculation: 'нормативни часове за периода', example: 'март → 168 ч' },
+      { column: 'Отклонение', rules: 'deviation', inputs: 'план, реално', calculation: 'worked - planned', example: '9 - 8 = +1 ч' },
+      { column: 'СИРВ норма / СИРВ отраб.', rules: 'sirv-worked + norm', inputs: 'минути по период', calculation: 'сумиране за отчетния период', example: '9600/60 = 160 ч' },
+      { column: 'Извънреден', rules: 'overtime', inputs: 'worked/payable, norm', calculation: 'max(0, worked - norm)', example: '176 - 168 = 8 ч' },
+      { column: 'Труд празник / Труд почивен / Нощен труд', rules: 'holiday/weekend/night minutes', inputs: 'интервали + календар', calculation: 'припокриване по вид', example: '120 мин нощен = 2 ч' },
+      { column: 'Нощен т-д конв.', rules: 'night conversion', inputs: 'night_minutes, conversion mode', calculation: 'конверсия според коефициент', example: '2 ч × k = 2.28 ч' },
+      { column: 'Платими часове', rules: 'payable-hours', inputs: 'база + премии', calculation: 'base + premiums', example: '9 + 1.5 = 10.5 ч' },
+      { column: 'Отпуск / Ост. отпуск / Болничен / Неплатен отпуск / Самоотлъчка / Майчинство', rules: 'leave mapping', inputs: 'код на отсъствие, салдо', calculation: 'по кодове и политики за отпуск', example: 'код О → Отпуск +1 ден' },
+    ];
+  }
+
+  function buildAnomalyGuidance(state, simulation) {
+    const workedMinutes = simulation?.input?.workedMinutes ?? 540;
+    return [
+      `Необичайна стойност: ако work_minutes = ${workedMinutes}, но Отр. дни = 0, проверете правилото worked-day и параметъра worked_day_requires_positive_minutes.`,
+      'Необичайна стойност: ако има нощни интервали, но Нощен труд = 0, проверете правилото night-minutes и night calculation source.',
+      'Необичайна стойност: ако Платими часове изглеждат ниски, проверете дали includePremiumsInPayable е изключено.',
+      'Къде да редактирате: таб „Изчисления“ за режими/коефициенти, таб „Rule matrix“ за правило и execution order.',
+    ];
   }
 
   function buildSimulationExplanation(state) {
