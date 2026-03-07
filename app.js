@@ -132,12 +132,15 @@ const state = {
   calculationSettingsRuntimeDebug: null,
 };
 
+window.__scheduleState = state;
+
 const DEPARTMENT_VIEW_ALL = 'all';
 const DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS = 'all_by_departments';
 
 const API_FALLBACK_COOLDOWN_MS = 60 * 1000;
 const apiFallbackBlockedUntilByBase = new Map();
 const departmentShiftLoadPromises = new Map();
+window.__clearDepartmentShiftCache = () => departmentShiftLoadPromises.clear();
 
 function getDepartmentShiftCacheKey(departmentId) {
   const tenantId = cleanStoredValue(state.selectedTenantId || state.currentUser?.active_tenant_id || state.currentUser?.tenant_id) || 'default';
@@ -592,6 +595,8 @@ async function apiRequest(path, options = {}) {
 
   return payload;
 }
+
+window.__scheduleApiRequest = apiRequest;
 
 function attachRegistrationControls() {
   const setAuthMode = (mode) => {
@@ -6737,7 +6742,6 @@ async function apiFetch(path, options = {}) {
   } = options;
 
   const headers = new Headers(fetchOptions.headers || {});
-  headers.set('X-User-Role', state.userRole);
   const resolvedTenantId = cleanStoredValue(state.selectedTenantId || state.currentUser?.tenantId);
   if (isValidUuid(resolvedTenantId)) {
     headers.set('X-Tenant-Id', resolvedTenantId);
