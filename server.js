@@ -41,6 +41,8 @@ const {
   dateAdd,
   finalizeSirvOvertimeAllocations,
   computeOvertimeMinutes,
+  calculatePayrollTotals,
+  computeEntryMetrics,
 } = require('./schedule_calculations');
 const {
   computeShiftSnapshot,
@@ -99,7 +101,35 @@ const CALCULATION_SETTINGS_DEFAULTS = {
   scheduleId: null,
   isActive: true,
   calculationMode: 'worked-hours',
-  workedDayRule: 'working-shift-and-minutes',
+  workedDayRule: 'working-shift-and-positive-minutes',
+  workedMinutesSource: 'snapshot',
+  shiftResolutionPrimary: 'shift-id-first',
+  shiftResolutionFallback: 'department-local-then-global',
+  shiftClassificationSource: 'template-metadata',
+  allowCodeOnlyFallback: false,
+  legacyCodeFallbackMode: 'fallback-only',
+  splitShiftAggregationMode: 'sum-all-intervals',
+  zeroSnapshotForNonWorking: true,
+  workedDayRequiresPositiveMinutes: true,
+  holidayCalculationSource: 'segments-only',
+  weekendCalculationSource: 'segments-only',
+  nightCalculationSource: 'segments-only',
+  holidayPremiumCoefficient: '2.00',
+  weekendPremiumCoefficient: '1.75',
+  nightPremiumCoefficient: '0.25',
+  specialHoursOnlyIfWorkMinutesPositive: true,
+  splitByCalendarDate: true,
+  crossMidnightSplitMode: 'split-by-date',
+  payableHoursMode: 'worked-plus-premiums',
+  overtimeMode: 'worked-vs-norm',
+  comparisonMode: 'monthly-norm',
+  includePremiumsInPayable: true,
+  nightConversionMode: 'disabled',
+  enableRuleTrace: true,
+  showAppliedRules: true,
+  showRejectedRules: true,
+  priority: 100,
+  conflictResolution: 'highest-priority-wins',
   holidayMode: 'segments-only',
   weekendMode: 'segments-only',
   nightMode: 'range-22-06',
@@ -133,6 +163,34 @@ function normalizeCalculationSettingsPayload(input = {}, { partial = false } = {
     isActive: input.isActive === undefined ? CALCULATION_SETTINGS_DEFAULTS.isActive : Boolean(input.isActive),
     calculationMode: cleanStr(input.calculationMode || CALCULATION_SETTINGS_DEFAULTS.calculationMode),
     workedDayRule: cleanStr(input.workedDayRule || CALCULATION_SETTINGS_DEFAULTS.workedDayRule),
+    workedMinutesSource: cleanStr(input.workedMinutesSource || CALCULATION_SETTINGS_DEFAULTS.workedMinutesSource),
+    shiftResolutionPrimary: cleanStr(input.shiftResolutionPrimary || CALCULATION_SETTINGS_DEFAULTS.shiftResolutionPrimary),
+    shiftResolutionFallback: cleanStr(input.shiftResolutionFallback || CALCULATION_SETTINGS_DEFAULTS.shiftResolutionFallback),
+    shiftClassificationSource: cleanStr(input.shiftClassificationSource || CALCULATION_SETTINGS_DEFAULTS.shiftClassificationSource),
+    allowCodeOnlyFallback: input.allowCodeOnlyFallback === undefined ? CALCULATION_SETTINGS_DEFAULTS.allowCodeOnlyFallback : Boolean(input.allowCodeOnlyFallback),
+    legacyCodeFallbackMode: cleanStr(input.legacyCodeFallbackMode || CALCULATION_SETTINGS_DEFAULTS.legacyCodeFallbackMode),
+    splitShiftAggregationMode: cleanStr(input.splitShiftAggregationMode || CALCULATION_SETTINGS_DEFAULTS.splitShiftAggregationMode),
+    zeroSnapshotForNonWorking: input.zeroSnapshotForNonWorking === undefined ? CALCULATION_SETTINGS_DEFAULTS.zeroSnapshotForNonWorking : Boolean(input.zeroSnapshotForNonWorking),
+    workedDayRequiresPositiveMinutes: input.workedDayRequiresPositiveMinutes === undefined ? CALCULATION_SETTINGS_DEFAULTS.workedDayRequiresPositiveMinutes : Boolean(input.workedDayRequiresPositiveMinutes),
+    holidayCalculationSource: cleanStr(input.holidayCalculationSource || CALCULATION_SETTINGS_DEFAULTS.holidayCalculationSource),
+    weekendCalculationSource: cleanStr(input.weekendCalculationSource || CALCULATION_SETTINGS_DEFAULTS.weekendCalculationSource),
+    nightCalculationSource: cleanStr(input.nightCalculationSource || CALCULATION_SETTINGS_DEFAULTS.nightCalculationSource),
+    holidayPremiumCoefficient: cleanStr(input.holidayPremiumCoefficient || CALCULATION_SETTINGS_DEFAULTS.holidayPremiumCoefficient),
+    weekendPremiumCoefficient: cleanStr(input.weekendPremiumCoefficient || CALCULATION_SETTINGS_DEFAULTS.weekendPremiumCoefficient),
+    nightPremiumCoefficient: cleanStr(input.nightPremiumCoefficient || CALCULATION_SETTINGS_DEFAULTS.nightPremiumCoefficient),
+    specialHoursOnlyIfWorkMinutesPositive: input.specialHoursOnlyIfWorkMinutesPositive === undefined ? CALCULATION_SETTINGS_DEFAULTS.specialHoursOnlyIfWorkMinutesPositive : Boolean(input.specialHoursOnlyIfWorkMinutesPositive),
+    splitByCalendarDate: input.splitByCalendarDate === undefined ? CALCULATION_SETTINGS_DEFAULTS.splitByCalendarDate : Boolean(input.splitByCalendarDate),
+    crossMidnightSplitMode: cleanStr(input.crossMidnightSplitMode || CALCULATION_SETTINGS_DEFAULTS.crossMidnightSplitMode),
+    payableHoursMode: cleanStr(input.payableHoursMode || CALCULATION_SETTINGS_DEFAULTS.payableHoursMode),
+    overtimeMode: cleanStr(input.overtimeMode || CALCULATION_SETTINGS_DEFAULTS.overtimeMode),
+    comparisonMode: cleanStr(input.comparisonMode || CALCULATION_SETTINGS_DEFAULTS.comparisonMode),
+    includePremiumsInPayable: input.includePremiumsInPayable === undefined ? CALCULATION_SETTINGS_DEFAULTS.includePremiumsInPayable : Boolean(input.includePremiumsInPayable),
+    nightConversionMode: cleanStr(input.nightConversionMode || CALCULATION_SETTINGS_DEFAULTS.nightConversionMode),
+    enableRuleTrace: input.enableRuleTrace === undefined ? CALCULATION_SETTINGS_DEFAULTS.enableRuleTrace : Boolean(input.enableRuleTrace),
+    showAppliedRules: input.showAppliedRules === undefined ? CALCULATION_SETTINGS_DEFAULTS.showAppliedRules : Boolean(input.showAppliedRules),
+    showRejectedRules: input.showRejectedRules === undefined ? CALCULATION_SETTINGS_DEFAULTS.showRejectedRules : Boolean(input.showRejectedRules),
+    priority: Number.isFinite(Number(input.priority)) ? Number(input.priority) : CALCULATION_SETTINGS_DEFAULTS.priority,
+    conflictResolution: cleanStr(input.conflictResolution || CALCULATION_SETTINGS_DEFAULTS.conflictResolution),
     holidayMode: cleanStr(input.holidayMode || CALCULATION_SETTINGS_DEFAULTS.holidayMode),
     weekendMode: cleanStr(input.weekendMode || CALCULATION_SETTINGS_DEFAULTS.weekendMode),
     nightMode: cleanStr(input.nightMode || CALCULATION_SETTINGS_DEFAULTS.nightMode),
@@ -502,31 +560,29 @@ function getSirvPeriodBounds(monthKey, periodMonths = 1) {
   return { periodStart, periodEnd: periodEndDate.toISOString().slice(0, 10) };
 }
 
-async function computeEntrySnapshot({ date, shift, isHoliday, shiftCode = '' }) {
+async function computeEntrySnapshot({ date, shift, isHoliday, shiftCode = '', calculationSettings = {} }) {
   const resolvedShiftCode = normalizeShiftCode(shiftCode || shift?.code || '');
-  const snapshot = computeShiftSnapshot({
+  const metrics = computeEntryMetrics({
     dateISO: date,
-    shiftCode: resolvedShiftCode,
-    isRealWorkingShift: isRealWorkingShiftCode(resolvedShiftCode),
-    startTime: shift.start_time || shift.start,
-    endTime: shift.end_time || shift.end,
-    intervals: shift.intervals,
-    breakMinutes: shift.break_minutes,
-    breakIncluded: shift.break_included,
-    holidayResolver: isHoliday,
+    shift: {
+      ...shift,
+      code: resolvedShiftCode,
+    },
+    isHoliday,
+    calculationSettings,
   });
 
   return {
-    work_minutes: snapshot.work_minutes,
-    work_minutes_total: snapshot.work_minutes_total,
-    night_minutes: snapshot.night_minutes,
-    holiday_minutes: snapshot.holiday_minutes,
-    weekend_minutes: snapshot.weekend_minutes,
+    work_minutes: metrics.work_minutes_total,
+    work_minutes_total: metrics.work_minutes_total,
+    night_minutes: metrics.night_minutes,
+    holiday_minutes: metrics.holiday_minutes,
+    weekend_minutes: metrics.weekend_minutes,
     overtime_minutes: 0,
-    break_minutes_applied: snapshot.break_minutes_applied,
-    break_minutes: snapshot.break_minutes,
-    break_included: snapshot.break_included,
-    cross_midnight: snapshot.cross_midnight,
+    break_minutes_applied: metrics.break_minutes_applied,
+    break_minutes: Math.max(0, Number(shift?.break_minutes || 0)),
+    break_included: Boolean(shift?.break_included),
+    cross_midnight: String(shift?.end_time || shift?.end || '') <= String(shift?.start_time || shift?.start || ''),
   };
 }
 
@@ -566,6 +622,10 @@ async function recomputeSnapshotsForExistingEntries({ tenantId, shiftTemplate })
   }
 
   const normalizedCode = normalizeShiftCode(shiftTemplate.code);
+  const calculationSettings = await loadRuntimeCalculationSettings({
+    tenantId,
+    departmentId: shiftTemplate.department_id || null,
+  });
   const params = [tenantId, normalizedCode];
   let departmentSql = '';
 
@@ -621,6 +681,7 @@ async function recomputeSnapshotsForExistingEntries({ tenantId, shiftTemplate })
       shift: shiftTemplate,
       shiftCode: shiftTemplate.code,
       isHoliday: holidayResolver,
+      calculationSettings,
     });
 
     const assignments = [];
@@ -1568,6 +1629,8 @@ async function initDatabase() {
       tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       scope TEXT NOT NULL CHECK (scope IN ('global', 'department', 'schedule')),
+      priority INTEGER NOT NULL DEFAULT 100,
+      conflict_resolution TEXT NOT NULL DEFAULT 'highest-priority-wins',
       department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL,
       schedule_id UUID NULL REFERENCES schedules(id) ON DELETE SET NULL,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -1725,6 +1788,8 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE`);
   await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT ''`);
   await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'global'`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 100`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS conflict_resolution TEXT NOT NULL DEFAULT 'highest-priority-wins'`);
   await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS department_id UUID NULL REFERENCES departments(id) ON DELETE SET NULL`);
   await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS schedule_id UUID NULL REFERENCES schedules(id) ON DELETE SET NULL`);
   await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`);
@@ -2158,6 +2223,8 @@ function serializeCalculationSettingsRow(row) {
     id: row.id,
     name: row.name,
     scope: row.scope,
+    priority: Number(row.priority || 100),
+    conflictResolution: row.conflict_resolution || 'highest-priority-wins',
     departmentId: row.department_id || '',
     scheduleId: row.schedule_id || '',
     isActive: Boolean(row.is_active),
@@ -2178,6 +2245,49 @@ function serializeCalculationSettingsRow(row) {
     formulaText: row.formula_text || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function pickBetterCalculationSetting(current, candidate) {
+  if (!current) return candidate;
+  const currentPriority = Number(current.priority || 0);
+  const nextPriority = Number(candidate.priority || 0);
+  if (nextPriority !== currentPriority) {
+    return nextPriority > currentPriority ? candidate : current;
+  }
+  const currentUpdated = new Date(current.updated_at || current.updatedAt || 0).getTime();
+  const nextUpdated = new Date(candidate.updated_at || candidate.updatedAt || 0).getTime();
+  return nextUpdated >= currentUpdated ? candidate : current;
+}
+
+async function loadRuntimeCalculationSettings({ tenantId, departmentId = null, scheduleId = null }) {
+  if (!tenantId) {
+    return { ...CALCULATION_SETTINGS_DEFAULTS, id: null, _source: 'defaults' };
+  }
+
+  const result = await pool.query(
+    `SELECT *
+     FROM calculation_settings
+     WHERE tenant_id = $1
+       AND is_active = TRUE
+       AND (
+         scope = 'global'
+         OR (scope = 'department' AND department_id = $2)
+         OR (scope = 'schedule' AND schedule_id = $3)
+       )
+     ORDER BY updated_at DESC, created_at DESC`,
+    [tenantId, departmentId || null, scheduleId || null]
+  );
+
+  let selected = null;
+  for (const row of result.rows) {
+    selected = pickBetterCalculationSetting(selected, row);
+  }
+  const serialized = serializeCalculationSettingsRow(selected);
+  return {
+    ...CALCULATION_SETTINGS_DEFAULTS,
+    ...serialized,
+    _source: selected ? `${selected.scope}:${selected.id}` : 'defaults',
   };
 }
 
@@ -2205,7 +2315,7 @@ app.post('/api/platform/super-admin/calculation-settings', requireAuth, requireS
 
     const created = await pool.query(
       `INSERT INTO calculation_settings (
-         tenant_id, name, scope, department_id, schedule_id, is_active,
+         tenant_id, name, scope, priority, conflict_resolution, department_id, schedule_id, is_active,
          calculation_mode, worked_day_rule, holiday_mode, weekend_mode, night_mode,
          include_break_in_worked_hours, sum_split_intervals,
          holiday_only_worked_segments, weekend_only_worked_segments,
@@ -2213,19 +2323,21 @@ app.post('/api/platform/super-admin/calculation-settings', requireAuth, requireS
          non_working_codes, working_codes, formula_text,
          created_by, updated_by
        ) VALUES (
-         $1, $2, $3, $4, $5, $6,
-         $7, $8, $9, $10, $11,
-         $12, $13,
+         $1, $2, $3, $4, $5, $6, $7, $8,
+         $9, $10, $11, $12, $13,
          $14, $15,
-         $16, $17, $18,
-         $19, $20, $21,
-         $22, $22
+         $16, $17,
+         $18, $19, $20,
+         $21, $22, $23,
+         $24, $24
        )
        RETURNING *`,
       [
         req.tenantId,
         payload.name,
         payload.scope,
+        payload.priority,
+        payload.conflictResolution,
         payload.departmentId,
         payload.scheduleId,
         payload.isActive,
@@ -2266,25 +2378,27 @@ app.put('/api/platform/super-admin/calculation-settings/:id', requireAuth, requi
       `UPDATE calculation_settings
        SET name = $3,
            scope = $4,
-           department_id = $5,
-           schedule_id = $6,
-           is_active = $7,
-           calculation_mode = $8,
-           worked_day_rule = $9,
-           holiday_mode = $10,
-           weekend_mode = $11,
-           night_mode = $12,
-           include_break_in_worked_hours = $13,
-           sum_split_intervals = $14,
-           holiday_only_worked_segments = $15,
-           weekend_only_worked_segments = $16,
-           exclude_non_working_codes_from_worked_day = $17,
-           use_shift_id_priority = $18,
-           scope_aware_fallback = $19,
-           non_working_codes = $20,
-           working_codes = $21,
-           formula_text = $22,
-           updated_by = $23,
+           priority = $5,
+           conflict_resolution = $6,
+           department_id = $7,
+           schedule_id = $8,
+           is_active = $9,
+           calculation_mode = $10,
+           worked_day_rule = $11,
+           holiday_mode = $12,
+           weekend_mode = $13,
+           night_mode = $14,
+           include_break_in_worked_hours = $15,
+           sum_split_intervals = $16,
+           holiday_only_worked_segments = $17,
+           weekend_only_worked_segments = $18,
+           exclude_non_working_codes_from_worked_day = $19,
+           use_shift_id_priority = $20,
+           scope_aware_fallback = $21,
+           non_working_codes = $22,
+           working_codes = $23,
+           formula_text = $24,
+           updated_by = $25,
            updated_at = NOW()
        WHERE tenant_id = $1
          AND id = $2
@@ -2294,6 +2408,8 @@ app.put('/api/platform/super-admin/calculation-settings/:id', requireAuth, requi
         id,
         payload.name,
         payload.scope,
+        payload.priority,
+        payload.conflictResolution,
         payload.departmentId,
         payload.scheduleId,
         payload.isActive,
@@ -2321,6 +2437,95 @@ app.put('/api/platform/super-admin/calculation-settings/:id', requireAuth, requi
     }
 
     return res.json({ ok: true, setting: serializeCalculationSettingsRow(updated.rows[0]) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/admin/calculation-settings', requireAuth, requireTenantContext, async (req, res, next) => {
+  try {
+    const setting = await loadRuntimeCalculationSettings({ tenantId: req.tenantId });
+    return res.json({ ok: true, setting });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/admin/calculation-settings/simulate', requireAuth, requireTenantContext, async (req, res, next) => {
+  try {
+    const mode = String(req.body?.mode || 'normal').toLowerCase() === 'sirv' ? 'sirv' : 'normal';
+    const settingsOverride = req.body?.settingsOverride && typeof req.body.settingsOverride === 'object'
+      ? normalizeCalculationSettingsPayload(req.body.settingsOverride, { partial: true })
+      : null;
+    const settings = settingsOverride || await loadRuntimeCalculationSettings({ tenantId: req.tenantId });
+    const result = calculatePayrollTotals({
+      mode,
+      workedMinutes: Number(req.body?.workedMinutes || 0),
+      holidayMinutes: Number(req.body?.holidayMinutes || 0),
+      weekendMinutes: Number(req.body?.weekendMinutes || 0),
+      nightMinutes: Number(req.body?.nightMinutes || 0),
+      normMinutes: Number(req.body?.normMinutes || 0),
+      calculationSettings: settings,
+    });
+
+    return res.json({
+      ok: true,
+      settingsDebug: {
+        loadedSettingsId: settings.id || null,
+        loadedSettingsSource: settings._source,
+        loadedSettingsUpdatedAt: settings.updatedAt || settings.updated_at || null,
+      },
+      result,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/platform/super-admin/calculation-settings/simulate', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
+  try {
+    const mode = String(req.body?.mode || 'normal').toLowerCase() === 'sirv' ? 'sirv' : 'normal';
+    const settingsOverride = req.body?.settingsOverride && typeof req.body.settingsOverride === 'object'
+      ? normalizeCalculationSettingsPayload(req.body.settingsOverride, { partial: true })
+      : null;
+    const settings = settingsOverride || await loadRuntimeCalculationSettings({ tenantId: req.tenantId });
+    const result = calculatePayrollTotals({
+      mode,
+      workedMinutes: Number(req.body?.workedMinutes || 0),
+      holidayMinutes: Number(req.body?.holidayMinutes || 0),
+      weekendMinutes: Number(req.body?.weekendMinutes || 0),
+      nightMinutes: Number(req.body?.nightMinutes || 0),
+      normMinutes: Number(req.body?.normMinutes || 0),
+      calculationSettings: settings,
+    });
+    return res.json({
+      ok: true,
+      settingsDebug: {
+        loadedSettingsId: settings.id || null,
+        loadedSettingsSource: settings._source || 'UI-override',
+        loadedSettingsUpdatedAt: settings.updatedAt || settings.updated_at || null,
+      },
+      result,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/admin/calculation-settings/runtime-debug', requireAuth, requireTenantContext, async (req, res, next) => {
+  try {
+    const scheduleId = cleanStr(req.query.scheduleId || '');
+    let departmentId = cleanStr(req.query.departmentId || '');
+    if (!departmentId && scheduleId && isValidUuid(scheduleId)) {
+      const scheduleRes = await pool.query('SELECT department_id FROM schedules WHERE id = $1 AND tenant_id = $2 LIMIT 1', [scheduleId, req.tenantId]);
+      departmentId = cleanStr(scheduleRes.rows[0]?.department_id || '');
+    }
+    const settings = await loadRuntimeCalculationSettings({
+      tenantId: req.tenantId,
+      departmentId: departmentId || null,
+      scheduleId: isValidUuid(scheduleId) ? scheduleId : null,
+    });
+    return res.json({ ok: true, settings, debug: { loadedSettingsId: settings.id || null, loadedSettingsSource: settings._source } });
   } catch (error) {
     return next(error);
   }
@@ -3164,6 +3369,12 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
     const hasIsManualColumn = await tableHasColumn('schedule_entries', 'is_manual');
     const hasNotesColumn = await tableHasColumn('schedule_entries', 'notes');
     const hasUpdatedAtColumn = await tableHasColumn('schedule_entries', 'updated_at');
+    const holidayResolver = await buildHolidayResolver(req.tenantId);
+    const runtimeCalculationSettings = await loadRuntimeCalculationSettings({
+      tenantId: req.tenantId,
+      departmentId: schedule.department_id || null,
+      scheduleId,
+    });
     const hasShiftTemplatesBreakMinutes = await tableHasColumn('shift_templates', 'break_minutes');
     const hasShiftTemplatesBreakIncluded = await tableHasColumn('shift_templates', 'break_included');
     const hasShiftTemplatesSirvShift = await tableHasColumn('shift_templates', 'is_sirv_shift');
@@ -3181,7 +3392,6 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       [req.tenantId, employeeId, entryDate]
     );
 
-    const holidayResolver = await buildHolidayResolver();
     let snapshot = computeSystemShiftSnapshot(resolvedShiftCode, entryDate);
 
     const shiftTemplatesForCalcResult = snapshot
@@ -3238,6 +3448,7 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
         shift: selectedShiftForSnapshot,
         shiftCode: resolvedShiftCode,
         isHoliday: holidayResolver,
+        calculationSettings: runtimeCalculationSettings,
       });
     }
 
@@ -3494,6 +3705,10 @@ app.post('/api/schedules/:id/entry', requireAuth, requireTenantContext, async (r
       isManual,
       notes,
       validation,
+      calculationSettingsDebug: {
+        loadedSettingsId: runtimeCalculationSettings.id || null,
+        loadedSettingsSource: runtimeCalculationSettings._source,
+      },
     };
 
     await insertAuditLog('set_shift', 'schedule_entry', {
@@ -3753,7 +3968,13 @@ app.post('/api/schedules/:id/generate', requireAuth, requireTenantContext, async
         }
 
         const snapshot = shiftTemplate
-          ? await computeEntrySnapshot({ date: dateISO, shift: shiftTemplate, shiftCode: shiftTemplate.code, isHoliday: null })
+          ? await computeEntrySnapshot({
+              date: dateISO,
+              shift: shiftTemplate,
+              shiftCode: shiftTemplate.code,
+              isHoliday: holidayResolver,
+              calculationSettings: runtimeCalculationSettings,
+            })
           : {
               work_minutes: 0,
               work_minutes_total: 0,
@@ -5361,6 +5582,20 @@ app.delete('/api/platform/super-admin/public-holidays/:date', requireSuperAdmin,
     });
 
     return res.json({ ok: true });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/platform/super-admin/public-holidays/seed', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const year = Number(req.query?.year || req.body?.year);
+    const bounds = getYearBounds(year);
+    if (!bounds) {
+      return res.status(400).json({ message: 'Невалидна година.' });
+    }
+    const inserted = await holidayService.seedYear(year);
+    return res.json({ ok: true, year, inserted });
   } catch (error) {
     return next(error);
   }

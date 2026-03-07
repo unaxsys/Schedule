@@ -112,7 +112,8 @@ const state = {
   leavesByEmployeeDay: {},
   holidaysByMonthCache: {},
   shiftEditContext: null,
-  calculationSettings: loadCalculationSettingsLocal()
+  calculationSettings: loadCalculationSettingsLocal(),
+  calculationSettingsRuntimeDebug: null,
 };
 
 const DEPARTMENT_VIEW_ALL = 'all';
@@ -5843,23 +5844,31 @@ function getVisibleSummaryColumns() {
 }
 
 function calculateEmployeeTotals({ employee, summary, year, month, monthNormHours }) {
+  const runtimeCalcSettings = state.calculationSettings || {};
+  const includePremiumsInPayable = runtimeCalcSettings.includePremiumsInPayable !== false;
+  const holidayRateSetting = Number(runtimeCalcSettings.holidayPremiumCoefficient || state.rates.holiday || 2);
+  const weekendRateSetting = Number(runtimeCalcSettings.weekendPremiumCoefficient || state.rates.weekend || 1.75);
+  const overtimeMode = String(runtimeCalcSettings.overtimeMode || 'worked-vs-norm');
   const remainingVacation = getVacationAllowanceForYear(employee, year) - getVacationUsedForYear(employee.id, year);
-  const normalizedHolidayHours = summary.holidayWorkedHours * state.rates.holiday;
+  const normalizedHolidayHours = summary.holidayWorkedHours * Math.max(1, holidayRateSetting);
   const isSirvEmployee = Boolean(employee?.isSirv);
   const normalizedWeekendHours = isSirvEmployee
     ? summary.weekendWorkedHours
-    : summary.weekendWorkedHours * state.rates.weekend;
+    : summary.weekendWorkedHours * Math.max(1, weekendRateSetting);
   const nightPremiumHours = Math.max(0, summary.nightConvertedHours - summary.nightWorkedHours);
-  const payableHours =
-    summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + nightPremiumHours;
+  const payableHours = includePremiumsInPayable
+    ? summary.workedHours - summary.holidayWorkedHours - summary.weekendWorkedHours + normalizedHolidayHours + normalizedWeekendHours + nightPremiumHours
+    : summary.workedHours;
   const employeeSirvPeriod = Number(employee?.sirvPeriodMonths || 1) || 1;
   const sirvTotals = getSirvTotalsForEmployee(employee, month, isSirvEmployee ? employeeSirvPeriod : 1);
   const deviation = isSirvEmployee
     ? (sirvTotals.workedHours - sirvTotals.normHours)
     : (summary.workedHours + nightPremiumHours - monthNormHours);
-  const overtimeHours = isSirvEmployee
-    ? Math.max(0, sirvTotals.workedHours - sirvTotals.normHours)
-    : Math.max(0, summary.workedHours - monthNormHours);
+  const overtimeHours = overtimeMode === 'payable-vs-norm'
+    ? Math.max(0, payableHours - monthNormHours)
+    : (isSirvEmployee
+      ? Math.max(0, sirvTotals.workedHours - sirvTotals.normHours)
+      : Math.max(0, summary.workedHours - monthNormHours));
 
   const reportedWeekendWorkedHours = summary.weekendWorkedHours;
   const reportedWorkedHours = isSirvEmployee ? 0 : summary.workedHours;
@@ -7701,6 +7710,16 @@ async function loadCalculationSettingsFromBackend() {
     const payload = await response.json();
     const setting = payload.setting || payload.activeSetting || payload.settings?.[0] || {};
     state.calculationSettings = setting;
+    try {
+      const debugResponse = await apiFetch('/api/admin/calculation-settings/runtime-debug');
+      const debugPayload = await debugResponse.json().catch(() => ({}));
+      state.calculationSettingsRuntimeDebug = debugPayload.debug || null;
+    } catch {
+      state.calculationSettingsRuntimeDebug = null;
+    }
+    if (state.calculationSettingsRuntimeDebug?.loadedSettingsId) {
+      console.info('[calc-settings] runtime loaded', state.calculationSettingsRuntimeDebug);
+    }
     saveCalculationSettingsLocal();
     renderAdminCalculationSettingsPanel();
     return setting;
