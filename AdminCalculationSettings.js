@@ -2,7 +2,7 @@
   const DEFAULT_CALCULATION_SETTINGS = {
     id: null,
     name: 'Основни правила',
-    scope: 'global',
+    scope: 'platform',
     departmentId: '',
     scheduleId: '',
     isActive: true,
@@ -99,7 +99,7 @@
             <div class="calc-grid">
               ${renderTextField('calcSettingName', 'name', state.name, 'Име на настройката', 'Например: Основни правила за СИРВ', 'Ясното име помага да различавате наборите от правила.', 'Използвайте кратко и описателно име, което да показва за кой режим е настройката.')}
               ${renderSelectField('calcIsActive', 'isActive', state.isActive ? 'true' : 'false', 'Статус', [{ value: 'true', label: 'Активна' }, { value: 'false', label: 'Неактивна' }], 'Активните правила участват в изчисленията.', 'Неактивните записи се пазят за история, но не се прилагат в runtime.')}
-              ${renderSelectField('calcScope', 'scope', state.scope, 'За какво важат тези правила', [{ value: 'global', label: 'За цялата организация' }, { value: 'department', label: 'Само за конкретен отдел' }, { value: 'schedule', label: 'Само за конкретен график' }], 'Определя къде да се приложи настройката.', 'Използвайте по-тесен обхват, когато конкретен отдел/график има различна методика.')}
+              ${renderSelectField('calcScope', 'scope', state.scope, 'За какво важат тези правила', [{ value: 'platform', label: 'Платформено ядро (source of truth)' }, { value: 'company', label: 'Фирмен override (бъдещ слой)' }, { value: 'department', label: 'Отделен override (бъдещ слой)' }, { value: 'schedule', label: 'График override (бъдещ слой)' }], 'Определя слоя в override веригата platform → company → department → schedule → manual cell.', 'Platform layer е основен source of truth. Останалите слоеве са само контролирани override-и.')}
               ${renderNumberField('calcPriority', 'priority', state.priority, 'Приоритет', 'Когато има няколко активни правила, по-високият приоритет печели.', 'При равни условия системата първо гледа приоритета.', 1, 1)}
               ${renderSelectField('calcConflictResolution', 'conflictResolution', state.conflictResolution, 'Решаване при конфликт', [{ value: 'highest-priority-wins', label: 'Печели по-висок приоритет' }, { value: 'latest-updated-wins', label: 'Печели последно обновената настройка' }], 'Как да се избере между две сходни настройки.', 'Препоръчително е „Печели по-висок приоритет“ за предвидимост.')}
               <div class="calc-field ${state.scope === 'department' ? '' : 'is-disabled'}">
@@ -896,7 +896,7 @@
     const e = editorState || {};
     return `
       <section class="calc-rule-editor">
-        <h3>Rule editor grid</h3>
+        <h3>Редактор на правила (платформено ядро + бъдещи override слоеве)</h3>
         <div class="calc-rule-editor-status">
           <span>${e.hasUnsavedChanges ? 'Има незаписани промени' : 'Няма незаписани промени'}</span>
           <span>Режим: ${escapeHtml(e.status || 'draft')}</span>
