@@ -255,3 +255,9 @@
   margin: 0 0 8px;
   color: #0f172a;
 }
+
+.calc-rule-editor { margin-top: 16px; border-top: 1px solid #dbe2ef; padding-top: 12px; }
+.calc-rule-editor-status { display:flex; flex-wrap:wrap; gap:10px; font-size:12px; color:#334155; margin-bottom:10px; }
+.calc-rule-editor-toolbar { display:flex; flex-wrap:wrap; gap:8px; }
+.calc-rule-inline-status { margin-top:10px; font-size:13px; font-weight:600; color:#065f46; }
+.calc-rule-inline-status[data-ok='0'] { color:#b91c1c; }

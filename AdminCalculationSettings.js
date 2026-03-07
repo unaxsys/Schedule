@@ -46,6 +46,7 @@
     nonWorkingCodes: 'O,B,OFF,REST,LEAVE,SICK',
     workingCodes: 'Р,1СМ,2СМ,3СМ,4СМ,5СМ,6СМ,7СМ,Рд',
     formulaText: 'worked_day = working_shift && work_minutes > 0',
+    ruleEditor: null,
   };
 
   function createAdminCalculationSettingsState(overrides = {}) {
@@ -69,7 +70,11 @@
     const onSave = typeof options.onSave === 'function' ? options.onSave : null;
     const onCancel = typeof options.onCancel === 'function' ? options.onCancel : null;
     const onPreview = typeof options.onPreview === 'function' ? options.onPreview : null;
+    const onPublish = typeof options.onPublish === 'function' ? options.onPublish : null;
+    const onRevert = typeof options.onRevert === 'function' ? options.onRevert : null;
+    const onHistory = typeof options.onHistory === 'function' ? options.onHistory : null;
     let state = { ...initialValue };
+    state.ruleEditor = normalizeRuleEditorState(state.ruleEditor, state);
 
     container.innerHTML = `
       <div class="calc-settings-card">
@@ -193,6 +198,7 @@
               ${renderRuleDetailsPanel(buildRuleMatrixRows(state)[0])}
             </div>
             <div id="calcTracePanel" class="calc-trace-panel" hidden></div>
+            <div id="calcRuleEditorRoot">${renderRuleEditor(state.ruleEditor)}</div>
           </section>
 
           <section class="calc-settings-section calc-section-debug" data-tab-panel="simulation" hidden>
@@ -278,6 +284,18 @@
       tracePanel.innerHTML = renderDebugTrace(readFormState());
     });
 
+    bindRuleEditorEvents(container, state, {
+      onChange(nextEditor) {
+        state.ruleEditor = nextEditor;
+      },
+      onStatus(message, ok = true) {
+        setInlineStatus(container, message, ok);
+      },
+      onPublish,
+      onRevert,
+      onHistory,
+    });
+
     function readFormState() {
       const formData = new FormData(form);
       return {
@@ -327,6 +345,7 @@
         nonWorkingCodes: normalizeCommaCodes(formData.get('nonWorkingCodes')),
         workingCodes: normalizeCommaCodes(formData.get('workingCodes')),
         formulaText: String(formData.get('formulaText') || '').trim(),
+        ruleEditor: state.ruleEditor,
       };
     }
 
@@ -832,6 +851,119 @@
 
   function humanTotals(state) {
     return `платими: ${state.payableHoursMode === 'worked-plus-premiums' ? 'отработени + премии' : 'само отработени'}, извънреден: ${state.overtimeMode === 'worked-vs-norm' ? 'отработени срещу норма' : 'платими срещу норма'}`;
+  }
+
+
+  function normalizeRuleEditorState(input, state) {
+    const fallback = {
+      draft: {
+        rules: buildRuleMatrixRows(state).map((row) => ({ ...row })),
+        sources: [
+          { description: 'Смяна от шаблон', source: 'shift_templates', example: '08:00-17:00', usedIn: 'Work minutes', isActive: true },
+          { description: 'Календар празници', source: 'holidays', example: '2026-03-03', usedIn: 'Holiday minutes', isActive: true },
+        ],
+        parameters: [
+          { parameter: 'holiday_rate', value: state.holidayPremiumCoefficient, unit: 'coef', description: 'Празничен коефициент', usedIn: 'Holiday', isEditable: true, scope: 'global' },
+          { parameter: 'weekend_rate', value: state.weekendPremiumCoefficient, unit: 'coef', description: 'Уикенд коефициент', usedIn: 'Weekend', isEditable: true, scope: 'global' },
+          { parameter: 'night_rate', value: state.nightPremiumCoefficient, unit: 'coef', description: 'Нощен коефициент', usedIn: 'Night', isEditable: true, scope: 'global' },
+        ],
+        execution: [
+          { step: 1, action: 'Resolve shift', input: 'entry', output: 'resolved shift', fallback: 'global template', notes: '' },
+          { step: 2, action: 'Compute work minutes', input: 'intervals', output: 'work_minutes', fallback: '0', notes: '' },
+          { step: 3, action: 'Compute premiums', input: 'minutes+rated', output: 'payable', fallback: 'worked only', notes: '' },
+        ],
+      },
+      published: null,
+      version: 1,
+      status: 'draft',
+      hasUnsavedChanges: false,
+      conflicts: false,
+      lastChangedBy: '',
+      lastChangedAt: '',
+      history: [],
+    };
+    if (!input || typeof input !== 'object') return fallback;
+    return {
+      ...fallback,
+      ...input,
+      draft: { ...fallback.draft, ...(input.draft || {}) },
+      published: input.published || null,
+      history: Array.isArray(input.history) ? input.history : [],
+    };
+  }
+
+  function renderRuleEditor(editorState) {
+    const e = editorState || {};
+    return `
+      <section class="calc-rule-editor">
+        <h3>Rule editor grid</h3>
+        <div class="calc-rule-editor-status">
+          <span>${e.hasUnsavedChanges ? 'Има незаписани промени' : 'Няма незаписани промени'}</span>
+          <span>Режим: ${escapeHtml(e.status || 'draft')}</span>
+          <span>Версия: ${escapeHtml(e.version || 1)}</span>
+          <span>${e.conflicts ? 'Има конфликт' : 'Няма конфликт'}</span>
+          <span>Последна промяна от: ${escapeHtml(e.lastChangedBy || '-')}</span>
+        </div>
+        <div class="calc-rule-editor-toolbar">
+          <button type="button" class="calc-btn calc-btn-light" data-editor-action="add-row" data-editor-table="rules">Добави нов ред</button>
+          <button type="button" class="calc-btn calc-btn-primary" data-editor-action="save-all">Запази промените</button>
+          <button type="button" class="calc-btn calc-btn-secondary" data-editor-action="cancel-all">Отмени промените</button>
+          <button type="button" class="calc-btn calc-btn-light" data-editor-action="export">Експорт</button>
+          <button type="button" class="calc-btn calc-btn-light" data-editor-action="import">Импорт</button>
+          <button type="button" class="calc-btn calc-btn-light" data-editor-action="history">История на промените</button>
+          <button type="button" class="calc-btn calc-btn-light" data-editor-action="simulate">Симулирай с текущите промени</button>
+          <button type="button" class="calc-btn calc-btn-primary" data-editor-action="publish">Публикувай</button>
+          <button type="button" class="calc-btn calc-btn-secondary" data-editor-action="revert">Върни предишна версия</button>
+        </div>
+      </section>
+    `;
+  }
+
+  function setInlineStatus(container, message, ok = true) {
+    const root = container.querySelector('.calc-rule-editor');
+    if (!root) return;
+    let status = root.querySelector('.calc-rule-inline-status');
+    if (!status) {
+      status = document.createElement('div');
+      status.className = 'calc-rule-inline-status';
+      root.appendChild(status);
+    }
+    status.textContent = message;
+    status.dataset.ok = ok ? '1' : '0';
+  }
+
+  function bindRuleEditorEvents(container, state, handlers = {}) {
+    const root = container.querySelector('#calcRuleEditorRoot');
+    if (!root) return;
+    root.querySelectorAll('[data-editor-action]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const action = btn.dataset.editorAction;
+        if (action === 'save-all') {
+          state.ruleEditor = { ...state.ruleEditor, hasUnsavedChanges: false, status: 'draft' };
+          handlers.onChange?.(state.ruleEditor);
+          handlers.onStatus?.('Черновата е запазена.', true);
+        } else if (action === 'cancel-all') {
+          state.ruleEditor = { ...state.ruleEditor, hasUnsavedChanges: false };
+          handlers.onChange?.(state.ruleEditor);
+          handlers.onStatus?.('Промените в черновата са отменени.', true);
+        } else if (action === 'publish') {
+          const result = handlers.onPublish ? await handlers.onPublish(state) : { ok: true };
+          handlers.onStatus?.(result?.message || 'Публикувано успешно.', result?.ok !== false);
+        } else if (action === 'revert') {
+          const result = handlers.onRevert ? await handlers.onRevert(state) : { ok: true };
+          handlers.onStatus?.(result?.message || 'Черновата е върната към публикуваната версия.', result?.ok !== false);
+        } else if (action === 'history') {
+          const result = handlers.onHistory ? await handlers.onHistory(state) : null;
+          if (result?.history) handlers.onStatus?.(`История: ${result.history.length} записа.`, true);
+        } else if (action === 'simulate') {
+          handlers.onStatus?.('Симулацията използва текущата чернова без да публикува live.', true);
+        } else {
+          state.ruleEditor = { ...state.ruleEditor, hasUnsavedChanges: true };
+          handlers.onChange?.(state.ruleEditor);
+          handlers.onStatus?.('Промяната е в чернова. Натиснете „Запази промените“.', true);
+        }
+      });
+    });
   }
 
   function showCalculationSettingsMessage(container, message, isSuccess) {

@@ -142,7 +142,8 @@ const CALCULATION_SETTINGS_DEFAULTS = {
   scopeAwareFallback: true,
   nonWorkingCodes: 'O,B,OFF,REST,LEAVE,SICK',
   workingCodes: 'Р,1СМ,2СМ,3СМ,4СМ,5СМ,6СМ,7СМ,Рд',
-  formulaText: 'worked_day = is_working_shift && work_minutes > 0'
+  formulaText: 'worked_day = is_working_shift && work_minutes > 0',
+  ruleEditor: null
 };
 
 function normalizeCommaCodes(rawValue) {
@@ -204,6 +205,7 @@ function normalizeCalculationSettingsPayload(input = {}, { partial = false } = {
     nonWorkingCodes: normalizeCommaCodes(input.nonWorkingCodes || CALCULATION_SETTINGS_DEFAULTS.nonWorkingCodes),
     workingCodes: normalizeCommaCodes(input.workingCodes || CALCULATION_SETTINGS_DEFAULTS.workingCodes),
     formulaText: cleanStr(input.formulaText || CALCULATION_SETTINGS_DEFAULTS.formulaText),
+    ruleEditor: input.ruleEditor && typeof input.ruleEditor === 'object' ? input.ruleEditor : null,
   };
 
   if (!partial && !normalized.name) {
@@ -227,6 +229,31 @@ function normalizeCalculationSettingsPayload(input = {}, { partial = false } = {
   }
 
   return normalized;
+}
+
+function cloneJsonSafe(value) {
+  if (value === null || value === undefined) return null;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return null;
+  }
+}
+
+function applyRuleEditorToCalculationSettings(baseSettings = {}, ruleEditorPublished = null) {
+  if (!ruleEditorPublished || typeof ruleEditorPublished !== 'object') return baseSettings;
+  const next = { ...baseSettings };
+  const parameters = Array.isArray(ruleEditorPublished.parameters) ? ruleEditorPublished.parameters : [];
+  const byKey = new Map(parameters.map((p) => [cleanStr(p?.parameter || p?.key), p]));
+  const holiday = byKey.get('holiday_rate');
+  const weekend = byKey.get('weekend_rate');
+  const night = byKey.get('night_rate');
+  const workedDay = byKey.get('worked_day_rule');
+  if (holiday?.value !== undefined) next.holidayPremiumCoefficient = String(holiday.value);
+  if (weekend?.value !== undefined) next.weekendPremiumCoefficient = String(weekend.value);
+  if (night?.value !== undefined) next.nightPremiumCoefficient = String(night.value);
+  if (workedDay?.value) next.workedDayRule = String(workedDay.value);
+  return next;
 }
 
 function normalizeShiftImportRowsPayload(payload) {
@@ -1652,7 +1679,27 @@ async function initDatabase() {
       created_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
       updated_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      rule_editor_draft JSONB NULL,
+      rule_editor_published JSONB NULL,
+      rule_editor_version INTEGER NOT NULL DEFAULT 1,
+      rule_editor_published_at TIMESTAMPTZ NULL,
+      rule_editor_published_by UUID NULL REFERENCES users(id) ON DELETE SET NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS calculation_rule_audit (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      calculation_setting_id UUID NOT NULL REFERENCES calculation_settings(id) ON DELETE CASCADE,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NULL,
+      action TEXT NOT NULL,
+      old_value JSONB NULL,
+      new_value JSONB NULL,
+      changed_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
 
@@ -1812,7 +1859,26 @@ async function initDatabase() {
   await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS updated_by UUID NULL REFERENCES users(id) ON DELETE SET NULL`);
   await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
   await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS rule_editor_draft JSONB NULL`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS rule_editor_published JSONB NULL`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS rule_editor_version INTEGER NOT NULL DEFAULT 1`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS rule_editor_published_at TIMESTAMPTZ NULL`);
+  await pool.query(`ALTER TABLE calculation_settings ADD COLUMN IF NOT EXISTS rule_editor_published_by UUID NULL REFERENCES users(id) ON DELETE SET NULL`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_calculation_settings_tenant_scope ON calculation_settings (tenant_id, scope, is_active, updated_at DESC)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS calculation_rule_audit (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      calculation_setting_id UUID NOT NULL REFERENCES calculation_settings(id) ON DELETE CASCADE,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NULL,
+      action TEXT NOT NULL,
+      old_value JSONB NULL,
+      new_value JSONB NULL,
+      changed_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
 
   await pool.query(`ALTER TABLE schedule_entries ADD COLUMN IF NOT EXISTS break_minutes_applied INTEGER NULL`);
   await pool.query(`
@@ -2243,6 +2309,13 @@ function serializeCalculationSettingsRow(row) {
     nonWorkingCodes: row.non_working_codes || '',
     workingCodes: row.working_codes || '',
     formulaText: row.formula_text || '',
+    ruleEditor: {
+      draft: cloneJsonSafe(row.rule_editor_draft),
+      published: cloneJsonSafe(row.rule_editor_published),
+      version: Number(row.rule_editor_version || 1),
+      publishedAt: row.rule_editor_published_at || null,
+      status: row.rule_editor_published ? 'published' : 'draft',
+    },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -2284,9 +2357,10 @@ async function loadRuntimeCalculationSettings({ tenantId, departmentId = null, s
     selected = pickBetterCalculationSetting(selected, row);
   }
   const serialized = serializeCalculationSettingsRow(selected);
+  const withRuntimeRules = applyRuleEditorToCalculationSettings(serialized, serialized?.ruleEditor?.published);
   return {
     ...CALCULATION_SETTINGS_DEFAULTS,
-    ...serialized,
+    ...withRuntimeRules,
     _source: selected ? `${selected.scope}:${selected.id}` : 'defaults',
   };
 }
@@ -2321,6 +2395,7 @@ app.post('/api/platform/super-admin/calculation-settings', requireAuth, requireS
          holiday_only_worked_segments, weekend_only_worked_segments,
          exclude_non_working_codes_from_worked_day, use_shift_id_priority, scope_aware_fallback,
          non_working_codes, working_codes, formula_text,
+         rule_editor_draft,
          created_by, updated_by
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8,
@@ -2329,7 +2404,8 @@ app.post('/api/platform/super-admin/calculation-settings', requireAuth, requireS
          $16, $17,
          $18, $19, $20,
          $21, $22, $23,
-         $24, $24
+         $24,
+         $25, $25
        )
        RETURNING *`,
       [
@@ -2356,6 +2432,7 @@ app.post('/api/platform/super-admin/calculation-settings', requireAuth, requireS
         payload.nonWorkingCodes,
         payload.workingCodes,
         payload.formulaText,
+        cloneJsonSafe(payload.ruleEditor),
         req.user?.id || null,
       ]
     );
@@ -2398,7 +2475,8 @@ app.put('/api/platform/super-admin/calculation-settings/:id', requireAuth, requi
            non_working_codes = $22,
            working_codes = $23,
            formula_text = $24,
-           updated_by = $25,
+           rule_editor_draft = $25,
+           updated_by = $26,
            updated_at = NOW()
        WHERE tenant_id = $1
          AND id = $2
@@ -2428,6 +2506,7 @@ app.put('/api/platform/super-admin/calculation-settings/:id', requireAuth, requi
         payload.nonWorkingCodes,
         payload.workingCodes,
         payload.formulaText,
+        cloneJsonSafe(payload.ruleEditor),
         req.user?.id || null,
       ]
     );
@@ -2435,6 +2514,96 @@ app.put('/api/platform/super-admin/calculation-settings/:id', requireAuth, requi
     if (!updated.rowCount) {
       return res.status(404).json({ message: 'Настройката не е намерена.' });
     }
+
+    return res.json({ ok: true, setting: serializeCalculationSettingsRow(updated.rows[0]) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+
+app.get('/api/platform/super-admin/calculation-settings/:id/history', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
+  try {
+    const id = cleanStr(req.params.id);
+    if (!isValidUuid(id)) return res.status(400).json({ message: 'Невалиден id.' });
+    const result = await pool.query(
+      `SELECT id, entity_type, entity_id, action, old_value, new_value, changed_by, changed_at
+       FROM calculation_rule_audit
+       WHERE tenant_id = $1 AND calculation_setting_id = $2
+       ORDER BY changed_at DESC
+       LIMIT 200`,
+      [req.tenantId, id]
+    );
+    return res.json({ ok: true, history: result.rows });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/platform/super-admin/calculation-settings/:id/publish', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
+  try {
+    const id = cleanStr(req.params.id);
+    if (!isValidUuid(id)) return res.status(400).json({ message: 'Невалиден id.' });
+
+    const currentRes = await pool.query(
+      `SELECT * FROM calculation_settings WHERE tenant_id = $1 AND id = $2 LIMIT 1`,
+      [req.tenantId, id]
+    );
+    const current = currentRes.rows[0];
+    if (!current) return res.status(404).json({ message: 'Настройката не е намерена.' });
+
+    const updated = await pool.query(
+      `UPDATE calculation_settings
+       SET rule_editor_published = rule_editor_draft,
+           rule_editor_version = COALESCE(rule_editor_version, 0) + 1,
+           rule_editor_published_at = NOW(),
+           rule_editor_published_by = $3,
+           updated_at = NOW(),
+           updated_by = $3
+       WHERE tenant_id = $1 AND id = $2
+       RETURNING *`,
+      [req.tenantId, id, req.user?.id || null]
+    );
+
+    await pool.query(
+      `INSERT INTO calculation_rule_audit (tenant_id, calculation_setting_id, entity_type, entity_id, action, old_value, new_value, changed_by)
+       VALUES ($1, $2, 'rule_editor', $2, 'publish', $3::jsonb, $4::jsonb, $5)`,
+      [req.tenantId, id, JSON.stringify(current.rule_editor_published || null), JSON.stringify(updated.rows[0].rule_editor_published || null), req.user?.id || null]
+    );
+
+    return res.json({ ok: true, setting: serializeCalculationSettingsRow(updated.rows[0]) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/platform/super-admin/calculation-settings/:id/revert', requireAuth, requireSuperAdmin, requireTenantContext, async (req, res, next) => {
+  try {
+    const id = cleanStr(req.params.id);
+    if (!isValidUuid(id)) return res.status(400).json({ message: 'Невалиден id.' });
+
+    const currentRes = await pool.query(
+      `SELECT * FROM calculation_settings WHERE tenant_id = $1 AND id = $2 LIMIT 1`,
+      [req.tenantId, id]
+    );
+    const current = currentRes.rows[0];
+    if (!current) return res.status(404).json({ message: 'Настройката не е намерена.' });
+
+    const updated = await pool.query(
+      `UPDATE calculation_settings
+       SET rule_editor_draft = rule_editor_published,
+           updated_at = NOW(),
+           updated_by = $3
+       WHERE tenant_id = $1 AND id = $2
+       RETURNING *`,
+      [req.tenantId, id, req.user?.id || null]
+    );
+
+    await pool.query(
+      `INSERT INTO calculation_rule_audit (tenant_id, calculation_setting_id, entity_type, entity_id, action, old_value, new_value, changed_by)
+       VALUES ($1, $2, 'rule_editor', $2, 'revert', $3::jsonb, $4::jsonb, $5)`,
+      [req.tenantId, id, JSON.stringify(current.rule_editor_draft || null), JSON.stringify(updated.rows[0].rule_editor_draft || null), req.user?.id || null]
+    );
 
     return res.json({ ok: true, setting: serializeCalculationSettingsRow(updated.rows[0]) });
   } catch (error) {
@@ -2451,13 +2620,110 @@ app.get('/api/admin/calculation-settings', requireAuth, requireTenantContext, as
   }
 });
 
+
+app.post('/api/admin/calculation-settings', requireAuth, requireTenantContext, async (req, res, next) => {
+  try {
+    const payload = normalizeCalculationSettingsPayload(req.body || {});
+    const created = await pool.query(
+      `INSERT INTO calculation_settings (
+         tenant_id, name, scope, priority, conflict_resolution, department_id, schedule_id, is_active,
+         calculation_mode, worked_day_rule, holiday_mode, weekend_mode, night_mode,
+         include_break_in_worked_hours, sum_split_intervals,
+         holiday_only_worked_segments, weekend_only_worked_segments,
+         exclude_non_working_codes_from_worked_day, use_shift_id_priority, scope_aware_fallback,
+         non_working_codes, working_codes, formula_text,
+         rule_editor_draft,
+         created_by, updated_by
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8,
+         $9, $10, $11, $12, $13,
+         $14, $15,
+         $16, $17,
+         $18, $19, $20,
+         $21, $22, $23,
+         $24,
+         $25, $25
+       )
+       RETURNING *`,
+      [
+        req.tenantId, payload.name, payload.scope, payload.priority, payload.conflictResolution,
+        payload.departmentId, payload.scheduleId, payload.isActive,
+        payload.calculationMode, payload.workedDayRule, payload.holidayMode, payload.weekendMode, payload.nightMode,
+        payload.includeBreakInWorkedHours, payload.sumSplitIntervals,
+        payload.holidayOnlyWorkedSegments, payload.weekendOnlyWorkedSegments,
+        payload.excludeNonWorkingCodesFromWorkedDay, payload.useShiftIdPriority, payload.scopeAwareFallback,
+        payload.nonWorkingCodes, payload.workingCodes, payload.formulaText,
+        cloneJsonSafe(payload.ruleEditor),
+        req.user?.id || null,
+      ]
+    );
+    return res.status(201).json({ ok: true, setting: serializeCalculationSettingsRow(created.rows[0]) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.put('/api/admin/calculation-settings/:id', requireAuth, requireTenantContext, async (req, res, next) => {
+  try {
+    const id = cleanStr(req.params.id);
+    if (!isValidUuid(id)) return res.status(400).json({ message: 'Невалиден id.' });
+    const payload = normalizeCalculationSettingsPayload(req.body || {});
+    const updated = await pool.query(
+      `UPDATE calculation_settings
+       SET name = $3,
+           scope = $4,
+           priority = $5,
+           conflict_resolution = $6,
+           department_id = $7,
+           schedule_id = $8,
+           is_active = $9,
+           calculation_mode = $10,
+           worked_day_rule = $11,
+           holiday_mode = $12,
+           weekend_mode = $13,
+           night_mode = $14,
+           include_break_in_worked_hours = $15,
+           sum_split_intervals = $16,
+           holiday_only_worked_segments = $17,
+           weekend_only_worked_segments = $18,
+           exclude_non_working_codes_from_worked_day = $19,
+           use_shift_id_priority = $20,
+           scope_aware_fallback = $21,
+           non_working_codes = $22,
+           working_codes = $23,
+           formula_text = $24,
+           rule_editor_draft = $25,
+           updated_by = $26,
+           updated_at = NOW()
+       WHERE tenant_id = $1 AND id = $2
+       RETURNING *`,
+      [
+        req.tenantId, id, payload.name, payload.scope, payload.priority, payload.conflictResolution,
+        payload.departmentId, payload.scheduleId, payload.isActive,
+        payload.calculationMode, payload.workedDayRule, payload.holidayMode, payload.weekendMode, payload.nightMode,
+        payload.includeBreakInWorkedHours, payload.sumSplitIntervals,
+        payload.holidayOnlyWorkedSegments, payload.weekendOnlyWorkedSegments,
+        payload.excludeNonWorkingCodesFromWorkedDay, payload.useShiftIdPriority, payload.scopeAwareFallback,
+        payload.nonWorkingCodes, payload.workingCodes, payload.formulaText,
+        cloneJsonSafe(payload.ruleEditor),
+        req.user?.id || null,
+      ]
+    );
+    if (!updated.rowCount) return res.status(404).json({ message: 'Настройката не е намерена.' });
+    return res.json({ ok: true, setting: serializeCalculationSettingsRow(updated.rows[0]) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.post('/api/admin/calculation-settings/simulate', requireAuth, requireTenantContext, async (req, res, next) => {
   try {
     const mode = String(req.body?.mode || 'normal').toLowerCase() === 'sirv' ? 'sirv' : 'normal';
     const settingsOverride = req.body?.settingsOverride && typeof req.body.settingsOverride === 'object'
       ? normalizeCalculationSettingsPayload(req.body.settingsOverride, { partial: true })
       : null;
-    const settings = settingsOverride || await loadRuntimeCalculationSettings({ tenantId: req.tenantId });
+    let settings = settingsOverride || await loadRuntimeCalculationSettings({ tenantId: req.tenantId });
+    settings = applyRuleEditorToCalculationSettings(settings, settings?.ruleEditor?.draft || settings?.ruleEditor?.published);
     const result = calculatePayrollTotals({
       mode,
       workedMinutes: Number(req.body?.workedMinutes || 0),
@@ -2488,7 +2754,8 @@ app.post('/api/platform/super-admin/calculation-settings/simulate', requireAuth,
     const settingsOverride = req.body?.settingsOverride && typeof req.body.settingsOverride === 'object'
       ? normalizeCalculationSettingsPayload(req.body.settingsOverride, { partial: true })
       : null;
-    const settings = settingsOverride || await loadRuntimeCalculationSettings({ tenantId: req.tenantId });
+    let settings = settingsOverride || await loadRuntimeCalculationSettings({ tenantId: req.tenantId });
+    settings = applyRuleEditorToCalculationSettings(settings, settings?.ruleEditor?.draft || settings?.ruleEditor?.published);
     const result = calculatePayrollTotals({
       mode,
       workedMinutes: Number(req.body?.workedMinutes || 0),
