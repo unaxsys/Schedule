@@ -84,6 +84,7 @@
         <div class="calc-tabs" role="tablist" aria-label="Calculation tabs">
           <button type="button" class="calc-tab-btn is-active" data-calc-tab="general">Общи правила</button>
           <button type="button" class="calc-tab-btn" data-calc-tab="calculations">Изчисления</button>
+          <button type="button" class="calc-tab-btn" data-calc-tab="matrix">Rule matrix</button>
           <button type="button" class="calc-tab-btn" data-calc-tab="simulation">Симулация и дебъг</button>
         </div>
 
@@ -167,6 +168,33 @@
             </div>
           </section>
 
+          <section class="calc-settings-section calc-section-neutral" data-tab-panel="matrix" hidden>
+            <h3>Excel-подобна матрица на правилата ${renderUsageBadge('documentation')}</h3>
+            <p class="calc-matrix-intro">Един изглед за правилата, източниците на данни, параметрите и реда на изпълнение. Таблиците са редактиуеми там, където е позволено.</p>
+
+            <div class="calc-matrix-toolbar">
+              <button type="button" class="calc-btn calc-btn-light" id="calcTraceBtn">Покажи разчет за избраната клетка</button>
+              <span class="calc-matrix-toolbar-note">Debug trace показва примерен път: смяна → минути → премии → overtime contribution.</span>
+            </div>
+
+            <div class="calc-subtabs" role="tablist" aria-label="Rule matrix tabs">
+              <button type="button" class="calc-subtab-btn is-active" data-calc-subtab="rules">Правила</button>
+              <button type="button" class="calc-subtab-btn" data-calc-subtab="sources">Източници на данни</button>
+              <button type="button" class="calc-subtab-btn" data-calc-subtab="parameters">Параметри</button>
+              <button type="button" class="calc-subtab-btn" data-calc-subtab="execution">Execution order</button>
+            </div>
+
+            <div data-calc-subpanel="rules">${renderRulesMatrixTable(state)}</div>
+            <div data-calc-subpanel="sources" hidden>${renderDataSourcesTable(state)}</div>
+            <div data-calc-subpanel="parameters" hidden>${renderParametersTable(state)}</div>
+            <div data-calc-subpanel="execution" hidden>${renderExecutionOrderTable(state)}</div>
+
+            <div id="calcRuleDetails" class="calc-rule-details">
+              ${renderRuleDetailsPanel(buildRuleMatrixRows(state)[0])}
+            </div>
+            <div id="calcTracePanel" class="calc-trace-panel" hidden></div>
+          </section>
+
           <section class="calc-settings-section calc-section-debug" data-tab-panel="simulation" hidden>
             <h3>Диагностика и проследяване ${renderUsageBadge('simulation')}</h3>
             <div class="calc-grid calc-grid-2-1">
@@ -219,6 +247,35 @@
 
     container.querySelectorAll('.calc-tab-btn').forEach((btn) => {
       btn.addEventListener('click', () => toggleTab(btn.dataset.calcTab));
+    });
+
+    container.querySelectorAll('.calc-subtab-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.calcSubtab;
+        container.querySelectorAll('.calc-subtab-btn').forEach((subBtn) => {
+          subBtn.classList.toggle('is-active', subBtn.dataset.calcSubtab === key);
+        });
+        container.querySelectorAll('[data-calc-subpanel]').forEach((panel) => {
+          panel.hidden = panel.dataset.calcSubpanel !== key;
+        });
+      });
+    });
+
+    container.querySelectorAll('[data-rule-key]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const ruleKey = button.dataset.ruleKey;
+        const row = buildRuleMatrixRows(state).find((item) => item.key === ruleKey);
+        if (!row) return;
+        const details = container.querySelector('#calcRuleDetails');
+        if (details) details.innerHTML = renderRuleDetailsPanel(row);
+      });
+    });
+
+    container.querySelector('#calcTraceBtn')?.addEventListener('click', () => {
+      const tracePanel = container.querySelector('#calcTracePanel');
+      if (!tracePanel) return;
+      tracePanel.hidden = false;
+      tracePanel.innerHTML = renderDebugTrace(readFormState());
     });
 
     function readFormState() {
@@ -373,6 +430,317 @@
       documentation: '<span class="calc-usage-badge calc-usage-badge-doc">Само за документация</span>',
     };
     return map[type] || '';
+  }
+
+  function buildRuleMatrixRows(state) {
+    return [
+      {
+        key: 'worked-day',
+        name: 'Worked day',
+        scheduleColumn: 'Отр. дни',
+        action: 'Определя дали денят е отработен',
+        inputs: 'is_real_working_shift, work_minutes',
+        condition: state.workedDayRequiresPositiveMinutes ? 'work_minutes > 0' : 'има работна смяна',
+        formula: 'is_real_working_shift && work_minutes > 0',
+        parameters: 'worked_day_requires_positive_minutes',
+        from: 'global',
+        to: 'global',
+        priority: 100,
+        isActive: 'Да',
+        editable: 'Не',
+        note: 'Основно правило',
+        impacts: 'Отр. дни',
+        module: 'computeEntrySnapshot',
+        endpoint: '/api/schedules/:id/generate',
+        fallback: 'Неработна смяна => worked_day = Не',
+        example: 'work_minutes=540 => worked_day=Да',
+      },
+      {
+        key: 'work-minutes',
+        name: 'Work minutes',
+        scheduleColumn: 'Часове',
+        action: 'Изчислява работните минути',
+        inputs: 'intervals, break_minutes',
+        condition: 'working shift',
+        formula: 'sum(work_segments) - break',
+        parameters: `split_shift_mode=${state.splitShiftAggregationMode}`,
+        from: 'global',
+        to: 'global',
+        priority: 100,
+        isActive: 'Да',
+        editable: 'Да',
+        note: 'Базови минути',
+        impacts: 'Часове, Платими часове, Overtime',
+        module: 'computeEntrySnapshot',
+        endpoint: '/api/admin/calculation-settings/simulate',
+        fallback: 'Без snapshot => 0 минути',
+        example: '08:00-17:00, break 60 => 480 мин',
+      },
+      {
+        key: 'holiday-minutes',
+        name: 'Holiday minutes',
+        scheduleColumn: 'Труд празник',
+        action: 'Изчислява минутите в официален празник',
+        inputs: 'work_segments, holiday_calendar',
+        condition: 'is_holiday',
+        formula: 'sum(overlap(work_segments, holiday))',
+        parameters: `holiday_rate=${state.holidayPremiumCoefficient}`,
+        from: 'global',
+        to: 'global',
+        priority: 90,
+        isActive: 'Да',
+        editable: 'Да',
+        note: 'Само реални сегменти',
+        impacts: 'Труд празник, Платими часове',
+        module: 'computeEntrySnapshot',
+        endpoint: '/api/admin/calculation-settings/runtime-debug',
+        fallback: 'Няма празник => 0',
+        example: '240 мин в празник => holiday_minutes=240',
+      },
+      {
+        key: 'weekend-minutes',
+        name: 'Weekend minutes',
+        scheduleColumn: 'Труд почивен',
+        action: 'Изчислява минутите в уикенд',
+        inputs: 'work_segments, calendar',
+        condition: 'is_weekend',
+        formula: 'sum(overlap(work_segments, weekend))',
+        parameters: `weekend_rate=${state.weekendPremiumCoefficient}`,
+        from: 'global',
+        to: 'global',
+        priority: 90,
+        isActive: 'Да',
+        editable: 'Да',
+        note: 'Само реални сегменти',
+        impacts: 'Труд почивен, Платими часове',
+        module: 'computeEntrySnapshot',
+        endpoint: '/api/admin/calculation-settings/runtime-debug',
+        fallback: 'Делничен ден => 0',
+        example: 'Събота 8ч => weekend_minutes=480',
+      },
+      {
+        key: 'night-minutes',
+        name: 'Night minutes',
+        scheduleColumn: 'Нощен труд',
+        action: 'Изчислява нощните минути',
+        inputs: 'work_segments',
+        condition: 'overlap 22:00-06:00',
+        formula: 'sum(overlap(work_segments, 22-06))',
+        parameters: `night_rate=${state.nightPremiumCoefficient}`,
+        from: 'global',
+        to: 'global',
+        priority: 90,
+        isActive: 'Да',
+        editable: 'Да',
+        note: '',
+        impacts: 'Нощен труд, Платими часове',
+        module: 'computeEntrySnapshot',
+        endpoint: '/api/admin/calculation-settings/runtime-debug',
+        fallback: 'Без overlap => 0',
+        example: '22:00-02:00 => 240 мин',
+      },
+      {
+        key: 'payable-hours',
+        name: 'Payable hours',
+        scheduleColumn: 'Платими часове',
+        action: 'Изчислява платимите часове',
+        inputs: 'work_minutes, premiums',
+        condition: 'active',
+        formula: 'base + premiums',
+        parameters: 'holiday_rate, weekend_rate, night_rate',
+        from: 'global',
+        to: 'global',
+        priority: 80,
+        isActive: 'Да',
+        editable: 'Да',
+        note: '',
+        impacts: 'Платими часове, Overtime (ако е включено)',
+        module: 'collectSummary',
+        endpoint: '/api/schedules/:id/summary',
+        fallback: 'Без премии => payable = worked',
+        example: '480 базови + 60 премии = 540',
+      },
+      {
+        key: 'overtime',
+        name: 'Overtime',
+        scheduleColumn: 'Извънреден',
+        action: 'Сравнява с норма',
+        inputs: 'worked_hours, norm_hours',
+        condition: 'worked > norm',
+        formula: 'max(0, worked - norm)',
+        parameters: `comparison_mode=${state.comparisonMode}`,
+        from: 'global',
+        to: 'global',
+        priority: 80,
+        isActive: 'Да',
+        editable: 'Да',
+        note: '',
+        impacts: 'Извънреден',
+        module: 'calculateEmployeeTotals',
+        endpoint: '/api/schedules/:id/summary',
+        fallback: 'Липсва норма => overtime=0',
+        example: '176ч worked - 160ч norm = 16ч',
+      },
+      {
+        key: 'sirv-worked',
+        name: 'SIRV worked',
+        scheduleColumn: 'СИРВ отраб.',
+        action: 'Отработено по СИРВ',
+        inputs: 'work_minutes',
+        condition: 'SIRV schedule',
+        formula: 'sum(work_minutes)/60',
+        parameters: 'sirv_mode',
+        from: 'global',
+        to: 'global',
+        priority: 80,
+        isActive: 'Да',
+        editable: 'Да',
+        note: '',
+        impacts: 'СИРВ отраб., Overtime',
+        module: 'calculateEmployeeTotals',
+        endpoint: '/api/schedules/:id/summary',
+        fallback: 'Не е СИРВ => стандартен режим',
+        example: '9600 мин/60 => 160 ч',
+      },
+      {
+        key: 'deviation',
+        name: 'Deviation',
+        scheduleColumn: 'Отклонение',
+        action: 'Разлика между план и реалност',
+        inputs: 'planned_minutes, worked_minutes',
+        condition: 'always',
+        formula: 'worked - planned',
+        parameters: 'deviation_mode',
+        from: 'global',
+        to: 'global',
+        priority: 70,
+        isActive: 'Да',
+        editable: 'Да',
+        note: 'Помага за контрол',
+        impacts: 'Отклонение, Dashboard KPI',
+        module: 'collectSummary',
+        endpoint: '/api/schedules/:id/summary',
+        fallback: 'Липсва план => показва само worked',
+        example: '480 - 450 = +30 мин',
+      },
+    ];
+  }
+
+  function renderRulesMatrixTable(state) {
+    const rows = buildRuleMatrixRows(state);
+    const headers = ['Име на логика', 'Колона в графика', 'Какво прави', 'Какво влиза', 'Условие', 'Формула', 'Параметри', 'От', 'До', 'Приоритет', 'Активно', 'Редактируемо', 'Бележка'];
+    return renderMatrixTable(headers, rows.map((row) => [
+      { html: true, value: `<button type=\"button\" class=\"calc-link-btn\" data-rule-key=\"${escapeHtml(row.key)}\">${escapeHtml(row.name)}</button>` },
+      row.scheduleColumn,
+      row.action,
+      row.inputs,
+      row.condition,
+      row.formula,
+      row.parameters,
+      row.from,
+      row.to,
+      String(row.priority),
+      row.isActive,
+      row.editable,
+      row.note,
+    ]));
+  }
+
+  function renderDataSourcesTable(state) {
+    const rows = [
+      ['entry_shift_id', 'Смяна в графика за деня', 'schedule entry', 'UUID', '6ec9...', 'Resolve shift by ID'],
+      ['resolved_shift_id', 'Реално избран шаблон след fallback', 'shift resolver', 'UUID', 'f14b...', 'Compute work minutes'],
+      ['work_minutes', 'Реално отработени минути', state.workedMinutesSource, 'number', '480', 'Worked day, Payable, Overtime'],
+      ['holiday_minutes', 'Минути в празник', 'overlap engine', 'number', '120', 'Holiday minutes, Payable'],
+      ['employee.department_id', 'Отдел на служителя', 'employee', 'UUID', 'dep-12', 'Resolve shift fallback'],
+      ['is_holiday', 'Денят е официален празник', 'holiday calendar', 'boolean', 'true', 'Holiday minutes'],
+      ['is_weekend', 'Денят е събота/неделя', 'calendar logic', 'boolean', 'false', 'Weekend minutes'],
+    ];
+    return renderMatrixTable(['Поле', 'Описание', 'Откъде идва', 'Тип', 'Пример', 'Използва се в'], rows);
+  }
+
+  function renderParametersTable(state) {
+    const rows = [
+      ['holiday_rate', state.holidayPremiumCoefficient, 'коеф.', 'Празнична премия', 'Holiday minutes, Payable', 'Да', 'global'],
+      ['weekend_rate', state.weekendPremiumCoefficient, 'коеф.', 'Уикенд премия', 'Weekend minutes, Payable', 'Да', 'global'],
+      ['night_rate', state.nightPremiumCoefficient, 'коеф.', 'Нощна премия', 'Night minutes, Payable', 'Да', 'global'],
+      ['monthly_norm_mode', state.comparisonMode, 'режим', 'Режим за сравнение с норма', 'Overtime', 'Да', 'global'],
+      ['split_shift_mode', state.splitShiftAggregationMode, 'режим', 'Агрегиране на split смени', 'Work minutes', 'Да', 'global'],
+      ['worked_day_requires_positive_minutes', state.workedDayRequiresPositiveMinutes ? 'true' : 'false', 'boolean', 'Изисква >0 минути', 'Worked day', 'Да', 'global'],
+    ];
+    return renderMatrixTable(['Параметър', 'Стойност', 'Единица', 'Описание', 'Използва се в', 'Може ли да се редактира', 'Scope'], rows);
+  }
+
+  function renderExecutionOrderTable() {
+    const rows = [
+      ['1', 'Resolve shift by ID', 'entry_shift_id', 'resolved_shift', 'Fallback to department shift', 'Приоритет: конкретна смяна'],
+      ['2', 'Fallback to department shift', 'department_id + date', 'resolved_shift', 'Fallback to global shift', 'Scope-aware fallback'],
+      ['3', 'Fallback to global shift', 'global defaults', 'resolved_shift', 'Маркирай неработен ден', 'Последна защитна стъпка'],
+      ['4', 'Classify working/non-working', 'resolved_shift + code', 'is_real_working_shift', 'Code fallback', 'Изключва OFF/LEAVE'],
+      ['5', 'Compute work minutes', 'intervals + breaks', 'work_minutes', '0 минути', 'sum(work_segments)-break'],
+      ['6', 'Compute holiday/weekend/night', 'work_segments + calendars', 'special minutes', '0 за съответния тип', 'По сегменти 22:00-06:00'],
+      ['7', 'Compute payable', 'work + premiums', 'payable_hours', 'work_minutes only', 'Според mode и rates'],
+      ['8', 'Compute overtime', 'worked/payable + norm', 'overtime_hours', '0 overtime', 'max(0, worked-norm)'],
+      ['9', 'Aggregate monthly totals', 'daily snapshots', 'employee totals', 'Непълни суми', 'collectSummary/calculateEmployeeTotals'],
+    ];
+    return renderMatrixTable(['Стъпка', 'Какво се прави', 'Вход', 'Изход', 'Ако липсва', 'Бележка'], rows);
+  }
+
+  function renderRuleDetailsPanel(rule) {
+    if (!rule) return '';
+    return `
+      <h4>Детайли на правило: ${escapeHtml(rule.name)}</h4>
+      <ul class="calc-preview-list">
+        <li><strong>Описание:</strong> ${escapeHtml(rule.action)}</li>
+        <li><strong>Влияе на:</strong> ${escapeHtml(rule.impacts)}</li>
+        <li><strong>Използва входове:</strong> ${escapeHtml(rule.inputs)}</li>
+        <li><strong>Формула:</strong> ${escapeHtml(rule.formula)}</li>
+        <li><strong>Функция / модул:</strong> ${escapeHtml(rule.module)}</li>
+        <li><strong>Таблица / endpoint:</strong> ${escapeHtml(rule.endpoint)}</li>
+        <li><strong>Fallback:</strong> ${escapeHtml(rule.fallback)}</li>
+        <li><strong>Override allowed:</strong> ${escapeHtml(rule.editable)}</li>
+        <li><strong>Пример:</strong> ${escapeHtml(rule.example)}</li>
+      </ul>
+    `;
+  }
+
+  function renderDebugTrace(state) {
+    const lines = [
+      `Избрана смяна: entry_shift_id -> resolved_shift (${humanShiftSource(state)})`,
+      `Resolved template: ${state.shiftClassificationSource}`,
+      `Scope: ${state.scope}`,
+      `Интервали: split mode = ${state.splitShiftAggregationMode}`,
+      `Break: ${state.includeBreakInWorkedHours ? 'включва се' : 'изважда се'}`,
+      `Work minutes: source = ${state.workedMinutesSource}`,
+      `Holiday minutes: mode = ${state.holidayCalculationSource}`,
+      `Weekend minutes: mode = ${state.weekendCalculationSource}`,
+      `Night minutes: mode = ${state.nightCalculationSource}`,
+      `Payable: ${state.payableHoursMode}, include premiums = ${state.includePremiumsInPayable ? 'Да' : 'Не'}`,
+      `Overtime contribution: ${state.overtimeMode}, comparison = ${state.comparisonMode}`,
+      `Приложени правила: Worked day, Work minutes, Holiday/Weekend/Night, Payable, Overtime`,
+    ];
+    return `
+      <h4>Debug trace (примерен)</h4>
+      <ul class="calc-preview-list">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+    `;
+  }
+
+  function renderMatrixTable(headers, rows) {
+    return `
+      <div class="calc-table-wrap">
+        <table class="calc-matrix-table">
+          <thead>
+            <tr>${(headers || []).map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr>
+          </thead>
+          <tbody>
+            ${(rows || []).map((row) => `<tr>${row.map((cell) => {
+              if (cell && typeof cell === 'object' && cell.html) return `<td>${cell.value || ''}</td>`;
+              return `<td>${escapeHtml(cell)}</td>`;
+            }).join('')}</tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
   }
 
   function renderCalculationPreview(state) {
