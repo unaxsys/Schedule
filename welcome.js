@@ -1,5 +1,7 @@
 // welcome.js (FIXED: no infinite loop, overlay covers UI; WOW illustrated)
 (() => {
+  const welcomeMemoryState = window.__welcomeMemoryState || (window.__welcomeMemoryState = Object.create(null));
+  const readWelcomeMemory = (key) => (Object.prototype.hasOwnProperty.call(welcomeMemoryState, key) ? welcomeMemoryState[key] : null);
   const SHOW_MS = 5000;          // точно 5 секунди
   const ANIM_MS = 5200;          // прогрес анимация
   const HARD_FAILSAFE_MS = 8000; // fallback ако нещо се обърка
@@ -9,7 +11,7 @@
   function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
 
   function hasCurrentUser() {
-    const raw = localStorage.getItem('currentUser');
+    const raw = readWelcomeMemory('currentUser');
     if (!raw) return false;
     try {
       const u = JSON.parse(raw);
@@ -24,7 +26,7 @@
     // ако preAuth е скрит => автнат
     if (preAuth && preAuth.classList.contains('hidden')) return true;
 
-    // fallback => по localStorage
+    // fallback => по memory
     return hasCurrentUser();
   }
 
@@ -190,7 +192,7 @@
 
   function setTextFromStorage() {
     try {
-      const raw = localStorage.getItem('currentUser');
+      const raw = readWelcomeMemory('currentUser');
       if (!raw) return;
       const user = JSON.parse(raw);
 
@@ -199,7 +201,7 @@
 
       const companyLineEl = qs('#wsCompanyLine');
       const companyName =
-        user?.companyName || user?.tenant?.companyName || localStorage.getItem('companyName');
+        user?.companyName || user?.tenant?.companyName || readWelcomeMemory('companyName');
 
       if (companyLineEl && companyName) companyLineEl.textContent = `Фирма: ${companyName}`;
     } catch {

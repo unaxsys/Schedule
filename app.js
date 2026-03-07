@@ -26,18 +26,18 @@ const DEFAULT_WORK_SHIFT = { code: 'R', label: 'Р', name: 'Редовна', typ
 
 const DB_ONLY_PERSISTENCE = true;
 
-if (DB_ONLY_PERSISTENCE && typeof window !== 'undefined' && window.localStorage) {
-  try {
-    const storageProto = Object.getPrototypeOf(window.localStorage);
-    if (storageProto) {
-      storageProto.setItem = function setItemNoop() {};
-      storageProto.removeItem = function removeItemNoop() {};
-      storageProto.clear = function clearNoop() {};
-      storageProto.getItem = function getItemNoop() { return null; };
-    }
-  } catch {
-    // Ignore override failures; DB-only persistence still enforced by API flow checks.
-  }
+const memoryStateStore = Object.create(null);
+
+function readMemoryState(key) {
+  return Object.prototype.hasOwnProperty.call(memoryStateStore, key) ? memoryStateStore[key] : null;
+}
+
+function writeMemoryState(key, value) {
+  memoryStateStore[key] = String(value);
+}
+
+function deleteMemoryState(key) {
+  delete memoryStateStore[key];
 }
 
 const LEAVE_SUMMARY_COLUMNS = SYSTEM_SHIFTS
@@ -139,8 +139,8 @@ const DEPARTMENT_VIEW_ALL_BY_DEPARTMENTS = 'all_by_departments';
 
 const API_FALLBACK_COOLDOWN_MS = 60 * 1000;
 const apiFallbackBlockedUntilByBase = new Map();
-const departmentShiftLoadPromises = new Map();
-window.__clearDepartmentShiftCache = () => departmentShiftLoadPromises.clear();
+let departmentShiftLoadPromises = new Map();
+window.__clearDepartmentShiftCache = () => { departmentShiftLoadPromises = new Map(); };
 
 function getDepartmentShiftCacheKey(departmentId) {
   const tenantId = cleanStoredValue(state.selectedTenantId || state.currentUser?.active_tenant_id || state.currentUser?.tenant_id) || 'default';
@@ -469,7 +469,7 @@ async function init() {
   if (canLoadTenantData) {
     synced = await loadFromBackend();
     if (!synced) {
-      setStatus(`Локален режим (localStorage). API: ${state.apiBaseUrl}`, false);
+      setStatus(`Локален режим (memoryStateStore). API: ${state.apiBaseUrl}`, false);
     }
   }
 
@@ -660,8 +660,8 @@ function attachRegistrationControls() {
           state.pendingLoginToken = payload.loginToken || '';
           state.availableTenants = Array.isArray(payload.tenants) ? payload.tenants : [];
           state.requiresTenantSelection = true;
-          localStorage.removeItem('authToken');
-          localStorage.removeItem('currentUser');
+          deleteMemoryState('authToken');
+          deleteMemoryState('currentUser');
 
           if (chooseTenantScreen) {
             chooseTenantScreen.classList.remove('hidden');
@@ -951,12 +951,12 @@ function updateAuthGate() {
 }
 
 function loadAuthToken() {
-  return cleanStoredValue(localStorage.getItem('authToken'));
+  return cleanStoredValue(readMemoryState('authToken'));
 }
 
 function loadCurrentUser() {
   try {
-    const raw = localStorage.getItem('currentUser');
+    const raw = readMemoryState('currentUser');
     if (!raw) {
       return null;
     }
@@ -969,10 +969,10 @@ function loadCurrentUser() {
 
 function persistAuthSession() {
   if (state.authToken) {
-    localStorage.setItem('authToken', state.authToken);
+    writeMemoryState('authToken', state.authToken);
   }
   if (state.currentUser) {
-    localStorage.setItem('currentUser', JSON.stringify(state.currentUser));
+    writeMemoryState('currentUser', JSON.stringify(state.currentUser));
   }
 }
 
@@ -983,9 +983,9 @@ function clearAuthSession() {
   state.pendingLoginToken = '';
   state.availableTenants = [];
   state.requiresTenantSelection = false;
-  localStorage.removeItem('authToken');
-  localStorage.removeItem('currentUser');
-  localStorage.removeItem('selectedTenantId');
+  deleteMemoryState('authToken');
+  deleteMemoryState('currentUser');
+  deleteMemoryState('selectedTenantId');
 }
 
 function resetTenantScopedState({ clearLocalStorage = false } = {}) {
@@ -1003,11 +1003,11 @@ function resetTenantScopedState({ clearLocalStorage = false } = {}) {
   state.shiftTemplates = [...SYSTEM_SHIFTS, DEFAULT_WORK_SHIFT];
 
   if (clearLocalStorage) {
-    localStorage.removeItem('employees');
-    localStorage.removeItem('scheduleState');
-    localStorage.removeItem('shiftTemplates');
-    localStorage.removeItem('scheduleReviewDepartments');
-    localStorage.removeItem('scheduleReviewMode');
+    deleteMemoryState('employees');
+    deleteMemoryState('scheduleState');
+    deleteMemoryState('shiftTemplates');
+    deleteMemoryState('scheduleReviewDepartments');
+    deleteMemoryState('scheduleReviewMode');
   }
 }
 
@@ -1034,15 +1034,15 @@ function isValidUuid(value) {
 }
 
 function loadSelectedTenantId() {
-  const fromStorage = cleanStoredValue(localStorage.getItem('selectedTenantId'));
+  const fromStorage = cleanStoredValue(readMemoryState('selectedTenantId'));
   return isValidUuid(fromStorage) ? fromStorage : '';
 }
 
 function persistSelectedTenantId() {
   if (isValidUuid(state.selectedTenantId)) {
-    localStorage.setItem('selectedTenantId', state.selectedTenantId);
+    writeMemoryState('selectedTenantId', state.selectedTenantId);
   } else {
-    localStorage.removeItem('selectedTenantId');
+    deleteMemoryState('selectedTenantId');
   }
 }
 
@@ -1294,12 +1294,12 @@ function loadScheduleReviewPreferences() {
     if (deptsFromQuery) {
       state.selectedDepartmentIds = deptsFromQuery.split(',').map((item) => cleanStoredValue(item)).filter(Boolean);
     } else {
-      const saved = localStorage.getItem('scheduleReviewDepartments');
+      const saved = readMemoryState('scheduleReviewDepartments');
       state.selectedDepartmentIds = saved ? JSON.parse(saved) : [];
     }
 
     const modeFromQuery = cleanStoredValue(params.get('view_mode'));
-    const savedMode = cleanStoredValue(localStorage.getItem('scheduleReviewMode'));
+    const savedMode = cleanStoredValue(readMemoryState('scheduleReviewMode'));
     state.scheduleViewMode = ['combined', 'sections'].includes(modeFromQuery)
       ? modeFromQuery
       : (['combined', 'sections'].includes(savedMode) ? savedMode : 'combined');
@@ -1311,8 +1311,8 @@ function loadScheduleReviewPreferences() {
 
 function persistScheduleReviewPreferences() {
   const selected = Array.isArray(state.selectedDepartmentIds) ? state.selectedDepartmentIds.filter(Boolean) : [];
-  localStorage.setItem('scheduleReviewDepartments', JSON.stringify(selected));
-  localStorage.setItem('scheduleReviewMode', state.scheduleViewMode || 'combined');
+  writeMemoryState('scheduleReviewDepartments', JSON.stringify(selected));
+  writeMemoryState('scheduleReviewMode', state.scheduleViewMode || 'combined');
 
   const params = new URLSearchParams(window.location.search || '');
   params.set('month', state.month || todayMonth());
@@ -1905,7 +1905,7 @@ function attachApiControls() {
   saveApiUrlBtn.addEventListener('click', async () => {
     const nextUrl = normalizeApiBaseUrl(apiUrlInput.value.trim());
     state.apiBaseUrl = nextUrl;
-    localStorage.setItem('apiBaseUrl', nextUrl);
+    writeMemoryState('apiBaseUrl', nextUrl);
     setStatus(`Проверка на API: ${nextUrl}`, false);
 
     const synced = await loadFromBackend();
@@ -2023,7 +2023,7 @@ function attachRatesForm() {
     event.preventDefault();
     state.rates.weekend = Number(weekendRateInput.value) || DEFAULT_RATES.weekend;
     state.rates.holiday = Number(holidayRateInput.value) || DEFAULT_RATES.holiday;
-    localStorage.setItem('laborRates', JSON.stringify(state.rates));
+    writeMemoryState('laborRates', JSON.stringify(state.rates));
     state.sirvPeriodMonths = normalizeSirvPeriod(sirvPeriodInput.value);
     sirvPeriodInput.value = String(state.sirvPeriodMonths);
     saveSirvPeriodMonths();
@@ -5594,15 +5594,6 @@ function renderHolidaysAdminTable() {
   });
 }
 
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
-
 function buildMonthCalendarMarkup({ year, monthIndex, monthStats }) {
   const monthDate = new Date(Date.UTC(year, monthIndex - 1, 1));
   const monthLabel = new Intl.DateTimeFormat('bg-BG', { month: 'long' }).format(monthDate).toUpperCase();
@@ -6280,21 +6271,21 @@ function normalizeSirvPeriod(value) {
 }
 
 function saveSirvPeriodMonths() {
-  localStorage.setItem('sirvPeriodMonths', String(state.sirvPeriodMonths));
+  writeMemoryState('sirvPeriodMonths', String(state.sirvPeriodMonths));
 }
 
 function loadSirvPeriodMonths() {
-  return normalizeSirvPeriod(localStorage.getItem('sirvPeriodMonths') || '1');
+  return normalizeSirvPeriod(readMemoryState('sirvPeriodMonths') || '1');
 }
 
 function saveSummaryColumnsVisibility() {
-  localStorage.setItem('summaryColumnsVisibility', JSON.stringify(state.summaryColumnsVisibility));
+  writeMemoryState('summaryColumnsVisibility', JSON.stringify(state.summaryColumnsVisibility));
 }
 
 function loadSummaryColumnsVisibility() {
   let stored = {};
   try {
-    stored = JSON.parse(localStorage.getItem('summaryColumnsVisibility') || '{}') || {};
+    stored = JSON.parse(readMemoryState('summaryColumnsVisibility') || '{}') || {};
   } catch {
     stored = {};
   }
@@ -6492,7 +6483,7 @@ function promptLastWorkingDate(employee, defaultDate) {
 
 function loadPendingConnectionLogs() {
   try {
-    const raw = localStorage.getItem('pendingConnectionLogs');
+    const raw = readMemoryState('pendingConnectionLogs');
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed : [];
   } catch (_error) {
@@ -6501,7 +6492,7 @@ function loadPendingConnectionLogs() {
 }
 
 function savePendingConnectionLogs() {
-  localStorage.setItem('pendingConnectionLogs', JSON.stringify((state.pendingConnectionLogs || []).slice(-200)));
+  writeMemoryState('pendingConnectionLogs', JSON.stringify((state.pendingConnectionLogs || []).slice(-200)));
 }
 
 function updateBackendConnectionIndicator(isOnline, tooltipText) {
@@ -6671,7 +6662,7 @@ function scheduleReconnect() {
 }
 
 function detectApiBaseUrl() {
-  const saved = localStorage.getItem('apiBaseUrl');
+  const saved = readMemoryState('apiBaseUrl');
   if (saved) {
     return normalizeApiBaseUrl(saved);
   }
@@ -6728,7 +6719,7 @@ function syncApiBaseUrl(baseUrl) {
     return;
   }
   state.apiBaseUrl = normalized;
-  localStorage.setItem('apiBaseUrl', normalized);
+  writeMemoryState('apiBaseUrl', normalized);
   if (apiUrlInput) {
     apiUrlInput.value = normalized;
   }
@@ -7226,15 +7217,16 @@ async function saveEmployeeBackend(employee) {
   }
 }
 
-async function deleteEmployeeBackend(employeeId) {
+async function releaseEmployeeBackend(employeeId, releaseDate) {
   if (!state.backendAvailable) {
     throw new Error('Освобождаването е достъпно само с активен API бекенд.');
   }
 
   try {
-    const response = await apiFetch(`/api/employees/${employeeId}`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' }
+    const response = await apiFetch(`/api/employees/${employeeId}/release`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ releaseDate }),
     });
 
     if (!response.ok) {
@@ -7669,16 +7661,16 @@ function canManageLeaves() {
 }
 
 function persistEmployeesLocal() {
-  localStorage.setItem('employees', JSON.stringify(state.employees));
+  writeMemoryState('employees', JSON.stringify(state.employees));
 }
 
 function saveScheduleLocal() {
-  localStorage.setItem('scheduleState', JSON.stringify({ month: state.month, schedule: state.schedule }));
+  writeMemoryState('scheduleState', JSON.stringify({ month: state.month, schedule: state.schedule }));
 }
 
 function loadEmployees() {
   try {
-    return JSON.parse(localStorage.getItem('employees') || '[]');
+    return JSON.parse(readMemoryState('employees') || '[]');
   } catch {
     return [];
   }
@@ -7686,7 +7678,7 @@ function loadEmployees() {
 
 function loadScheduleState() {
   try {
-    return JSON.parse(localStorage.getItem('scheduleState') || '{}');
+    return JSON.parse(readMemoryState('scheduleState') || '{}');
   } catch {
     return { month: todayMonth(), schedule: {} };
   }
@@ -7694,12 +7686,12 @@ function loadScheduleState() {
 
 
 function saveUserRole() {
-  localStorage.setItem('userRole', state.userRole);
+  writeMemoryState('userRole', state.userRole);
 }
 
 function loadUserRole() {
   try {
-    return normalizeUserRole(localStorage.getItem('userRole'));
+    return normalizeUserRole(readMemoryState('userRole'));
   } catch {
     return 'user';
   }
@@ -7707,7 +7699,7 @@ function loadUserRole() {
 
 function loadCalculationSettingsLocal() {
   try {
-    const parsed = JSON.parse(localStorage.getItem('adminCalculationSettings') || '{}');
+    const parsed = JSON.parse(readMemoryState('adminCalculationSettings') || '{}');
     return parsed && typeof parsed === 'object' ? parsed : {};
   } catch {
     return {};
@@ -7715,7 +7707,7 @@ function loadCalculationSettingsLocal() {
 }
 
 function saveCalculationSettingsLocal() {
-  localStorage.setItem('adminCalculationSettings', JSON.stringify(state.calculationSettings || {}));
+  writeMemoryState('adminCalculationSettings', JSON.stringify(state.calculationSettings || {}));
 }
 
 async function loadCalculationSettingsFromBackend() {
@@ -7840,7 +7832,7 @@ function renderAdminCalculationSettingsPanel() {
 
 function loadRates() {
   try {
-    const parsed = JSON.parse(localStorage.getItem('laborRates') || '{}');
+    const parsed = JSON.parse(readMemoryState('laborRates') || '{}');
     return {
       weekend: Number(parsed.weekend) || DEFAULT_RATES.weekend,
       holiday: Number(parsed.holiday) || DEFAULT_RATES.holiday
@@ -7851,7 +7843,7 @@ function loadRates() {
 }
 
 function saveShiftTemplates() {
-  // DB-only режим: не съхраняваме шаблони за смени в localStorage.
+  // DB-only режим: не съхраняваме шаблони за смени в браузърен storage.
 }
 
 function buildShiftTemplateIdentityKey(shiftTemplate = {}) {
@@ -7944,12 +7936,12 @@ function loadShiftTemplates() {
 }
 
 function saveLockedMonths() {
-  localStorage.setItem('lockedMonths', JSON.stringify(state.lockedMonths));
+  writeMemoryState('lockedMonths', JSON.stringify(state.lockedMonths));
 }
 
 function loadLockedMonths() {
   try {
-    return JSON.parse(localStorage.getItem('lockedMonths') || '{}');
+    return JSON.parse(readMemoryState('lockedMonths') || '{}');
   } catch {
     return {};
   }
