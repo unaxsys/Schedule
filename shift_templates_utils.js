@@ -51,7 +51,7 @@ function validateShiftTemplatePayload(payload) {
     return { ok: false, message: 'Почивката трябва да е по-кратка от смяната.' };
   }
 
-  const workedMinutes = breakIncluded ? durationMinutes : (durationMinutes - breakMinutes);
+  const workedMinutes = durationMinutes - breakMinutes;
   return {
     ok: true,
     value: {

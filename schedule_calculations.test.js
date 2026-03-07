@@ -19,12 +19,12 @@ test('08:00-17:00 break 60 excluded => 480', () => {
   assert.equal(metrics.work_minutes_total, 480);
 });
 
-test('07:00-19:00 break 60 included => 720', () => {
+test('07:00-19:00 break 60 => 660 worked minutes', () => {
   const metrics = computeEntryMetrics({
     dateISO: '2026-02-11',
     shift: { start_time: '07:00', end_time: '19:00', break_minutes: 60, break_included: true },
   });
-  assert.equal(metrics.work_minutes_total, 720);
+  assert.equal(metrics.work_minutes_total, 660);
 });
 
 test('19:00-07:00 has 480 night minutes', () => {
