@@ -108,7 +108,7 @@
                 ${renderFieldLabel('calcDepartmentId', 'Отдел', 'Изберете отдел, когато обхватът е отделен.', 'Ползва се само ако сте избрали „Само за конкретен отдел“.')}
                 <select id="calcDepartmentId" name="departmentId" ${state.scope === 'department' ? '' : 'disabled'}>
                   <option value="">Избери отдел</option>
-                  ${departments.map((department) => `<option value="${escapeHtml(String(department.id || ''))}" ${String(state.departmentId || '') === String(department.id || '') ? 'selected' : ''}>${escapeHtml(department.name || department.label || 'Без име')}</option>`).join('')}
+                  ${departments.map((department) => `<option value="${sanitizeHtmlAdminCalculation(String(department.id || ''))}" ${String(state.departmentId || '') === String(department.id || '') ? 'selected' : ''}>${sanitizeHtmlAdminCalculation(department.name || department.label || 'Без име')}</option>`).join('')}
                 </select>
                 <small class="calc-help">Става задължително поле при отделен обхват.</small>
               </div>
@@ -116,7 +116,7 @@
                 ${renderFieldLabel('calcScheduleId', 'График', 'Изберете график, когато обхватът е за конкретен график.', 'Ползва се само ако сте избрали „Само за конкретен график“.')}
                 <select id="calcScheduleId" name="scheduleId" ${state.scope === 'schedule' ? '' : 'disabled'}>
                   <option value="">Избери график</option>
-                  ${schedules.map((schedule) => `<option value="${escapeHtml(String(schedule.id || ''))}" ${String(state.scheduleId || '') === String(schedule.id || '') ? 'selected' : ''}>${escapeHtml(schedule.name || 'График')}</option>`).join('')}
+                  ${schedules.map((schedule) => `<option value="${sanitizeHtmlAdminCalculation(String(schedule.id || ''))}" ${String(state.scheduleId || '') === String(schedule.id || '') ? 'selected' : ''}>${sanitizeHtmlAdminCalculation(schedule.name || 'График')}</option>`).join('')}
                 </select>
                 <small class="calc-help">Става задължително поле при обхват „график“.</small>
               </div>
@@ -225,7 +225,7 @@
               ${renderCheckboxField('showRejectedRules', 'showRejectedRules', state.showRejectedRules, 'Показвай отхвърлените правила', 'Виждате кои правила не са отговаряли на условията.', 'Полезно при конфликтни настройки или fallback сценарии.')}
               <div class="calc-field calc-field-full">
                 ${renderFieldLabel('formulaText', 'Текст за проследяване и документация', 'Тук описвате човешко четим trace на логиката.', 'Използвайте го за екипна документация и бърза проверка на правила.')}
-                <textarea id="formulaText" name="formulaText" rows="8">${escapeHtml(state.formulaText)}</textarea>
+                <textarea id="formulaText" name="formulaText" rows="8">${sanitizeHtmlAdminCalculation(state.formulaText)}</textarea>
                 <small class="calc-help">Този текст не е програмен код за изпълнение. Той е за обяснение и проследяване.</small>
               </div>
               <div class="calc-field calc-field-full">
@@ -425,11 +425,11 @@
 
   function renderFieldLabel(forId, label, helper, tooltip) {
     return `
-      <label ${forId ? `for="${escapeHtml(forId)}"` : ''} class="calc-field-label">
-        <span>${escapeHtml(label)}</span>
-        <button type="button" class="calc-help-icon" tabindex="0" aria-label="Помощ" title="${escapeHtml(tooltip)}">?</button>
+      <label ${forId ? `for="${sanitizeHtmlAdminCalculation(forId)}"` : ''} class="calc-field-label">
+        <span>${sanitizeHtmlAdminCalculation(label)}</span>
+        <button type="button" class="calc-help-icon" tabindex="0" aria-label="Помощ" title="${sanitizeHtmlAdminCalculation(tooltip)}">?</button>
       </label>
-      <small class="calc-help">${escapeHtml(helper)}</small>
+      <small class="calc-help">${sanitizeHtmlAdminCalculation(helper)}</small>
     `;
   }
 
@@ -437,7 +437,7 @@
     return `
       <div class="calc-field">
         ${renderFieldLabel(id, label, helper, tooltip)}
-        <input id="${escapeHtml(id)}" name="${escapeHtml(name)}" type="text" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder || '')}" />
+        <input id="${sanitizeHtmlAdminCalculation(id)}" name="${sanitizeHtmlAdminCalculation(name)}" type="text" value="${sanitizeHtmlAdminCalculation(value)}" placeholder="${sanitizeHtmlAdminCalculation(placeholder || '')}" />
       </div>
     `;
   }
@@ -446,7 +446,7 @@
     return `
       <div class="calc-field">
         ${renderFieldLabel(id, label, helper, tooltip)}
-        <input id="${escapeHtml(id)}" name="${escapeHtml(name)}" type="number" min="${escapeHtml(min)}" step="${escapeHtml(step)}" value="${escapeHtml(value)}" />
+        <input id="${sanitizeHtmlAdminCalculation(id)}" name="${sanitizeHtmlAdminCalculation(name)}" type="number" min="${sanitizeHtmlAdminCalculation(min)}" step="${sanitizeHtmlAdminCalculation(step)}" value="${sanitizeHtmlAdminCalculation(value)}" />
       </div>
     `;
   }
@@ -455,8 +455,8 @@
     return `
       <div class="calc-field">
         ${renderFieldLabel(id, label, helper, tooltip)}
-        <select id="${escapeHtml(id)}" name="${escapeHtml(name)}">
-          ${(options || []).map((option) => `<option value="${escapeHtml(option.value)}" ${String(selectedValue) === String(option.value) ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}
+        <select id="${sanitizeHtmlAdminCalculation(id)}" name="${sanitizeHtmlAdminCalculation(name)}">
+          ${(options || []).map((option) => `<option value="${sanitizeHtmlAdminCalculation(option.value)}" ${String(selectedValue) === String(option.value) ? 'selected' : ''}>${sanitizeHtmlAdminCalculation(option.label)}</option>`).join('')}
         </select>
       </div>
     `;
@@ -464,11 +464,11 @@
 
   function renderCheckboxField(name, id, checked, label, helper, tooltip) {
     return `
-      <label class="calc-checkbox" title="${escapeHtml(tooltip)}">
-        <input id="${escapeHtml(id)}" type="checkbox" name="${escapeHtml(name)}" ${checked ? 'checked' : ''} />
-        <span>${escapeHtml(label)}</span>
-        <button type="button" class="calc-help-icon" tabindex="0" aria-label="Помощ" title="${escapeHtml(tooltip)}">?</button>
-        <small class="calc-help">${escapeHtml(helper)}</small>
+      <label class="calc-checkbox" title="${sanitizeHtmlAdminCalculation(tooltip)}">
+        <input id="${sanitizeHtmlAdminCalculation(id)}" type="checkbox" name="${sanitizeHtmlAdminCalculation(name)}" ${checked ? 'checked' : ''} />
+        <span>${sanitizeHtmlAdminCalculation(label)}</span>
+        <button type="button" class="calc-help-icon" tabindex="0" aria-label="Помощ" title="${sanitizeHtmlAdminCalculation(tooltip)}">?</button>
+        <small class="calc-help">${sanitizeHtmlAdminCalculation(helper)}</small>
       </label>
     `;
   }
@@ -680,7 +680,7 @@
     const rows = buildRuleMatrixRows(state);
     const headers = ['Име на логика', 'Колона в графика', 'Какво прави', 'Какво влиза', 'Условие', 'Формула', 'Параметри', 'От', 'До', 'Приоритет', 'Активно', 'Редактируемо', 'Бележка'];
     return renderMatrixTable(headers, rows.map((row) => [
-      { html: true, value: `<button type=\"button\" class=\"calc-link-btn\" data-rule-key=\"${escapeHtml(row.key)}\">${escapeHtml(row.name)}</button>` },
+      { html: true, value: `<button type=\"button\" class=\"calc-link-btn\" data-rule-key=\"${sanitizeHtmlAdminCalculation(row.key)}\">${sanitizeHtmlAdminCalculation(row.name)}</button>` },
       row.scheduleColumn,
       row.action,
       row.inputs,
@@ -739,17 +739,17 @@
   function renderRuleDetailsPanel(rule) {
     if (!rule) return '';
     return `
-      <h4>Детайли на правило: ${escapeHtml(rule.name)}</h4>
+      <h4>Детайли на правило: ${sanitizeHtmlAdminCalculation(rule.name)}</h4>
       <ul class="calc-preview-list">
-        <li><strong>Описание:</strong> ${escapeHtml(rule.action)}</li>
-        <li><strong>Влияе на:</strong> ${escapeHtml(rule.impacts)}</li>
-        <li><strong>Използва входове:</strong> ${escapeHtml(rule.inputs)}</li>
-        <li><strong>Формула:</strong> ${escapeHtml(rule.formula)}</li>
-        <li><strong>Функция / модул:</strong> ${escapeHtml(rule.module)}</li>
-        <li><strong>Таблица / endpoint:</strong> ${escapeHtml(rule.endpoint)}</li>
-        <li><strong>Fallback:</strong> ${escapeHtml(rule.fallback)}</li>
-        <li><strong>Override allowed:</strong> ${escapeHtml(rule.editable)}</li>
-        <li><strong>Пример:</strong> ${escapeHtml(rule.example)}</li>
+        <li><strong>Описание:</strong> ${sanitizeHtmlAdminCalculation(rule.action)}</li>
+        <li><strong>Влияе на:</strong> ${sanitizeHtmlAdminCalculation(rule.impacts)}</li>
+        <li><strong>Използва входове:</strong> ${sanitizeHtmlAdminCalculation(rule.inputs)}</li>
+        <li><strong>Формула:</strong> ${sanitizeHtmlAdminCalculation(rule.formula)}</li>
+        <li><strong>Функция / модул:</strong> ${sanitizeHtmlAdminCalculation(rule.module)}</li>
+        <li><strong>Таблица / endpoint:</strong> ${sanitizeHtmlAdminCalculation(rule.endpoint)}</li>
+        <li><strong>Fallback:</strong> ${sanitizeHtmlAdminCalculation(rule.fallback)}</li>
+        <li><strong>Override allowed:</strong> ${sanitizeHtmlAdminCalculation(rule.editable)}</li>
+        <li><strong>Пример:</strong> ${sanitizeHtmlAdminCalculation(rule.example)}</li>
       </ul>
     `;
   }
@@ -773,24 +773,24 @@
         <div>
           <strong>Входни данни</strong>
           <ul class="calc-preview-list">
-            <li>worked_minutes: ${escapeHtml(simulation?.input?.workedMinutes ?? 540)}</li>
-            <li>holiday_minutes: ${escapeHtml(simulation?.input?.holidayMinutes ?? 0)}</li>
-            <li>weekend_minutes: ${escapeHtml(simulation?.input?.weekendMinutes ?? 540)}</li>
-            <li>night_minutes: ${escapeHtml(simulation?.input?.nightMinutes ?? 120)}</li>
-            <li>norm_minutes: ${escapeHtml(simulation?.input?.normMinutes ?? 480)}</li>
+            <li>worked_minutes: ${sanitizeHtmlAdminCalculation(simulation?.input?.workedMinutes ?? 540)}</li>
+            <li>holiday_minutes: ${sanitizeHtmlAdminCalculation(simulation?.input?.holidayMinutes ?? 0)}</li>
+            <li>weekend_minutes: ${sanitizeHtmlAdminCalculation(simulation?.input?.weekendMinutes ?? 540)}</li>
+            <li>night_minutes: ${sanitizeHtmlAdminCalculation(simulation?.input?.nightMinutes ?? 120)}</li>
+            <li>norm_minutes: ${sanitizeHtmlAdminCalculation(simulation?.input?.normMinutes ?? 480)}</li>
           </ul>
         </div>
         <div>
           <strong>Краен резултат</strong>
           <ul class="calc-preview-list">
-            <li>payable_hours: ${escapeHtml(simResult?.payableHours ?? '-')}</li>
-            <li>overtime_hours: ${escapeHtml(simResult?.overtimeHours ?? '-')}</li>
-            <li>deviation_hours: ${escapeHtml(simResult?.deviationHours ?? '-')}</li>
+            <li>payable_hours: ${sanitizeHtmlAdminCalculation(simResult?.payableHours ?? '-')}</li>
+            <li>overtime_hours: ${sanitizeHtmlAdminCalculation(simResult?.overtimeHours ?? '-')}</li>
+            <li>deviation_hours: ${sanitizeHtmlAdminCalculation(simResult?.deviationHours ?? '-')}</li>
           </ul>
         </div>
       </div>
       <strong>Междинни изчисления</strong>
-      <ol class="calc-preview-list">${trace.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ol>
+      <ol class="calc-preview-list">${trace.map((line) => `<li>${sanitizeHtmlAdminCalculation(line)}</li>`).join('')}</ol>
       <div class="calc-preview-split">
         <div><strong>Приложени правила</strong><ul class="calc-preview-list"><li><button type="button" class="calc-link-btn" data-rule-key="work-minutes">Work minutes</button></li><li><button type="button" class="calc-link-btn" data-rule-key="weekend-minutes">Weekend minutes</button></li><li><button type="button" class="calc-link-btn" data-rule-key="overtime">Overtime</button></li></ul></div>
         <div><strong>Отхвърлени правила</strong><ul class="calc-preview-list"><li><button type="button" class="calc-link-btn" data-rule-key="holiday-minutes">Holiday minutes</button> (няма припокриване)</li></ul></div>
@@ -816,18 +816,18 @@
       { label: 'Runtime версията съвпада', value: mismatch ? 'НЕ' : 'ДА' },
     ];
     return `
-      <p><strong>${escapeHtml(modeLabel)}</strong></p>
+      <p><strong>${sanitizeHtmlAdminCalculation(modeLabel)}</strong></p>
       <div class="calc-preview-formula">
         <strong>Status box (ясно за режима):</strong>
-        <ul class="calc-preview-list">${statusItems.map((item) => `<li>${escapeHtml(item.label)}: ${escapeHtml(item.value)}</li>`).join('')}</ul>
+        <ul class="calc-preview-list">${statusItems.map((item) => `<li>${sanitizeHtmlAdminCalculation(item.label)}: ${sanitizeHtmlAdminCalculation(item.value)}</li>`).join('')}</ul>
       </div>
       <ul class="calc-preview-list">
-        <li>Loaded settings id: ${escapeHtml(loadedId)}</li>
-        <li>Loaded settings version: ${escapeHtml(loadedVersion)}</li>
-        <li>Draft / Published: ${escapeHtml(draftPublished)}</li>
-        <li>Runtime engine version: ${escapeHtml(runtimeVersion)}</li>
-        <li>Engine mode: ${escapeHtml(engineMode)}</li>
-        <li>UI version: ${escapeHtml(uiVersion)}</li>
+        <li>Loaded settings id: ${sanitizeHtmlAdminCalculation(loadedId)}</li>
+        <li>Loaded settings version: ${sanitizeHtmlAdminCalculation(loadedVersion)}</li>
+        <li>Draft / Published: ${sanitizeHtmlAdminCalculation(draftPublished)}</li>
+        <li>Runtime engine version: ${sanitizeHtmlAdminCalculation(runtimeVersion)}</li>
+        <li>Engine mode: ${sanitizeHtmlAdminCalculation(engineMode)}</li>
+        <li>UI version: ${sanitizeHtmlAdminCalculation(uiVersion)}</li>
         <li>Mismatch: ${mismatch ? 'Да' : 'Не'}</li>
       </ul>
     `;
@@ -899,7 +899,7 @@
             <li><button type="button" class="calc-link-btn" data-rule-key="payable-hours">Rule: payable-hours</button> → параметри rates → execution step #7</li>
           </ul>
           <strong>Месечен debug summary</strong>
-          <ul class="calc-preview-list">${Object.entries(monthly).map(([k,v]) => `<li>${escapeHtml(k)}: ${escapeHtml(v)}</li>`).join('')}</ul>
+          <ul class="calc-preview-list">${Object.entries(monthly).map(([k,v]) => `<li>${sanitizeHtmlAdminCalculation(k)}: ${sanitizeHtmlAdminCalculation(v)}</li>`).join('')}</ul>
         </div>
       </div>
     `;
@@ -910,12 +910,12 @@
       <div class="calc-table-wrap">
         <table class="calc-matrix-table">
           <thead>
-            <tr>${(headers || []).map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr>
+            <tr>${(headers || []).map((header) => `<th>${sanitizeHtmlAdminCalculation(header)}</th>`).join('')}</tr>
           </thead>
           <tbody>
             ${(rows || []).map((row) => `<tr>${row.map((cell) => {
               if (cell && typeof cell === 'object' && cell.html) return `<td>${cell.value || ''}</td>`;
-              return `<td>${escapeHtml(cell)}</td>`;
+              return `<td>${sanitizeHtmlAdminCalculation(cell)}</td>`;
             }).join('')}</tr>`).join('')}
           </tbody>
         </table>
@@ -946,44 +946,44 @@
     const anomalies = buildAnomalyGuidance(state, simulation);
 
     return `
-      <ul class="calc-preview-list">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+      <ul class="calc-preview-list">${lines.map((line) => `<li>${sanitizeHtmlAdminCalculation(line)}</li>`).join('')}</ul>
       <div class="calc-preview-formula">
         <strong>1) Как системата смята</strong>
-        <ol class="calc-preview-list">${howSteps.map((step) => `<li><strong>${escapeHtml(step.title)}:</strong> ${escapeHtml(step.description)}</li>`).join('')}</ol>
+        <ol class="calc-preview-list">${howSteps.map((step) => `<li><strong>${sanitizeHtmlAdminCalculation(step.title)}:</strong> ${sanitizeHtmlAdminCalculation(step.description)}</li>`).join('')}</ol>
       </div>
       <div class="calc-preview-formula">
         <strong>2) Формула на човешки език</strong>
-        <ul class="calc-preview-list">${humanRules.map((item) => `<li><strong>${escapeHtml(item.rule)}:</strong> ${escapeHtml(item.meaning)} Вход: ${escapeHtml(item.input)}. Връща: ${escapeHtml(item.output)}. Прилага се: ${escapeHtml(item.when)}.</li>`).join('')}</ul>
+        <ul class="calc-preview-list">${humanRules.map((item) => `<li><strong>${sanitizeHtmlAdminCalculation(item.rule)}:</strong> ${sanitizeHtmlAdminCalculation(item.meaning)} Вход: ${sanitizeHtmlAdminCalculation(item.input)}. Връща: ${sanitizeHtmlAdminCalculation(item.output)}. Прилага се: ${sanitizeHtmlAdminCalculation(item.when)}.</li>`).join('')}</ul>
       </div>
       <div class="calc-preview-formula">
         <strong>3) Коя колона как се получава</strong>
-        <ul class="calc-preview-list">${columnExplainers.map((item) => `<li><strong>${escapeHtml(item.column)}:</strong> правила ${escapeHtml(item.rules)}; вход ${escapeHtml(item.inputs)}; смятане ${escapeHtml(item.calculation)}; пример ${escapeHtml(item.example)}.</li>`).join('')}</ul>
+        <ul class="calc-preview-list">${columnExplainers.map((item) => `<li><strong>${sanitizeHtmlAdminCalculation(item.column)}:</strong> правила ${sanitizeHtmlAdminCalculation(item.rules)}; вход ${sanitizeHtmlAdminCalculation(item.inputs)}; смятане ${sanitizeHtmlAdminCalculation(item.calculation)}; пример ${sanitizeHtmlAdminCalculation(item.example)}.</li>`).join('')}</ul>
       </div>
       <div class="calc-preview-split">
         <div>
           <strong>Приложени правила:</strong>
-          <ul class="calc-preview-list">${explain.applied.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+          <ul class="calc-preview-list">${explain.applied.map((line) => `<li>${sanitizeHtmlAdminCalculation(line)}</li>`).join('')}</ul>
         </div>
         <div>
           <strong>Неприложени правила:</strong>
-          <ul class="calc-preview-list">${explain.rejected.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+          <ul class="calc-preview-list">${explain.rejected.map((line) => `<li>${sanitizeHtmlAdminCalculation(line)}</li>`).join('')}</ul>
         </div>
       </div>
       <div class="calc-preview-formula">
         <strong>Защо е такъв резултатът:</strong>
-        <ul class="calc-preview-list">${explain.why.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+        <ul class="calc-preview-list">${explain.why.map((line) => `<li>${sanitizeHtmlAdminCalculation(line)}</li>`).join('')}</ul>
       </div>
       <div class="calc-preview-formula">
         <strong>Откъде идват стойностите:</strong>
-        <ul class="calc-preview-list">${explain.sources.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+        <ul class="calc-preview-list">${explain.sources.map((line) => `<li>${sanitizeHtmlAdminCalculation(line)}</li>`).join('')}</ul>
       </div>
       <div class="calc-preview-formula">
         <strong>Статус на полетата:</strong>
-        <ul class="calc-preview-list">${statuses.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+        <ul class="calc-preview-list">${statuses.map((line) => `<li>${sanitizeHtmlAdminCalculation(line)}</li>`).join('')}</ul>
       </div>
       <div class="calc-preview-formula">
         <strong>5) Откъде идва грешката</strong>
-        <ul class="calc-preview-list">${anomalies.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+        <ul class="calc-preview-list">${anomalies.map((item) => `<li>${sanitizeHtmlAdminCalculation(item)}</li>`).join('')}</ul>
       </div>
       <div class="calc-preview-formula">
         <strong>6) Визуална връзка между резултат и правило</strong>
@@ -995,7 +995,7 @@
       </div>
       <div class="calc-preview-formula">
         <strong>Описание на логиката:</strong>
-        <pre>${escapeHtml(state.formulaText || 'Няма въведено описание.')}</pre>
+        <pre>${sanitizeHtmlAdminCalculation(state.formulaText || 'Няма въведено описание.')}</pre>
       </div>
     `;
   }
@@ -1160,10 +1160,10 @@
         <h3>Редактор на правила (платформено ядро + бъдещи override слоеве)</h3>
         <div class="calc-rule-editor-status">
           <span>${e.hasUnsavedChanges ? 'Има незаписани промени' : 'Няма незаписани промени'}</span>
-          <span>Режим: ${escapeHtml(e.status || 'draft')}</span>
-          <span>Версия: ${escapeHtml(e.version || 1)}</span>
+          <span>Режим: ${sanitizeHtmlAdminCalculation(e.status || 'draft')}</span>
+          <span>Версия: ${sanitizeHtmlAdminCalculation(e.version || 1)}</span>
           <span>${e.conflicts ? 'Има конфликт' : 'Няма конфликт'}</span>
-          <span>Последна промяна от: ${escapeHtml(e.lastChangedBy || '-')}</span>
+          <span>Последна промяна от: ${sanitizeHtmlAdminCalculation(e.lastChangedBy || '-')}</span>
         </div>
         <div class="calc-rule-editor-toolbar">
           <button type="button" class="calc-btn calc-btn-light" data-editor-action="add-row" data-editor-table="rules">Добави нов ред</button>
@@ -1180,16 +1180,16 @@
             <thead><tr><th>Key</th><th>Име</th><th>Condition</th><th>Formula</th><th>Parameters</th><th>Описание</th><th>Бележка</th><th>Scope</th><th>Execution</th><th>Priority</th><th>Active</th><th>Действия</th></tr></thead>
             <tbody>
             ${rules.map((rule, idx) => `<tr data-editor-row="${idx}">
-              <td><input type="text" data-editor-field="key" value="${escapeHtml(rule.key)}" /></td>
-              <td><input type="text" data-editor-field="name" value="${escapeHtml(rule.name)}" /></td>
-              <td><textarea data-editor-field="condition" rows="2">${escapeHtml(rule.condition)}</textarea></td>
-              <td><textarea data-editor-field="formula" rows="2">${escapeHtml(rule.formula)}</textarea></td>
-              <td><input type="text" data-editor-field="parameters" value="${escapeHtml(rule.parameters)}" /></td>
-              <td><textarea data-editor-field="description" rows="2">${escapeHtml(rule.description)}</textarea></td>
-              <td><textarea data-editor-field="note" rows="2">${escapeHtml(rule.note)}</textarea></td>
+              <td><input type="text" data-editor-field="key" value="${sanitizeHtmlAdminCalculation(rule.key)}" /></td>
+              <td><input type="text" data-editor-field="name" value="${sanitizeHtmlAdminCalculation(rule.name)}" /></td>
+              <td><textarea data-editor-field="condition" rows="2">${sanitizeHtmlAdminCalculation(rule.condition)}</textarea></td>
+              <td><textarea data-editor-field="formula" rows="2">${sanitizeHtmlAdminCalculation(rule.formula)}</textarea></td>
+              <td><input type="text" data-editor-field="parameters" value="${sanitizeHtmlAdminCalculation(rule.parameters)}" /></td>
+              <td><textarea data-editor-field="description" rows="2">${sanitizeHtmlAdminCalculation(rule.description)}</textarea></td>
+              <td><textarea data-editor-field="note" rows="2">${sanitizeHtmlAdminCalculation(rule.note)}</textarea></td>
               <td><select data-editor-field="scope"><option value="global" ${rule.scope==='global'?'selected':''}>global</option><option value="department" ${rule.scope==='department'?'selected':''}>department</option><option value="schedule" ${rule.scope==='schedule'?'selected':''}>schedule</option></select></td>
-              <td><input type="number" data-editor-field="executionOrder" value="${escapeHtml(rule.executionOrder)}" /></td>
-              <td><input type="number" data-editor-field="priority" value="${escapeHtml(rule.priority)}" /></td>
+              <td><input type="number" data-editor-field="executionOrder" value="${sanitizeHtmlAdminCalculation(rule.executionOrder)}" /></td>
+              <td><input type="number" data-editor-field="priority" value="${sanitizeHtmlAdminCalculation(rule.priority)}" /></td>
               <td><input type="checkbox" data-editor-field="active" ${rule.active?'checked':''} /></td>
               <td><button type="button" class="calc-btn calc-btn-light" data-editor-action="save-row" data-editor-row="${idx}">Запази</button><button type="button" class="calc-btn calc-btn-light" data-editor-action="cancel-row" data-editor-row="${idx}">Откажи</button><button type="button" class="calc-btn calc-btn-light" data-editor-action="duplicate-row" data-editor-row="${idx}">Дублирай</button><button type="button" class="calc-btn calc-btn-secondary" data-editor-action="delete-row" data-editor-row="${idx}">Изтрий</button></td>
             </tr>`).join('')}
@@ -1322,7 +1322,7 @@
     el.classList.toggle('is-error', !isSuccess);
   }
 
-  function escapeHtml(value) {
+  function sanitizeHtmlAdminCalculation(value) {
     return String(value ?? '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
