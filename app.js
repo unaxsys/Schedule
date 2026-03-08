@@ -6976,140 +6976,148 @@ async function buildSirvScheduleCache(referenceMonth, employees) {
 
 async function refreshMonthlyView() {
   if (!state.backendAvailable) {
-    return;
+    return false;
   }
 
-  const month = state.month || monthPicker.value || todayMonth();
-  state.month = month;
-  await loadSchedulesForMonth();
-
-  const monthParam = encodeURIComponent(month);
-  const employeeResponse = await apiFetch(`/api/employees?month_key=${monthParam}`);
-  const employeePayload = employeeResponse.ok ? await employeeResponse.json() : { employees: [] };
-  const allowedEmployees = Array.isArray(employeePayload.employees) ? employeePayload.employees : [];
-  const allowedIds = new Set(allowedEmployees.map((employee) => employee.id));
-  state.employees = allowedEmployees.map(normalizeEmployeeVacationData);
-  state.sirvSchedule = await buildSirvScheduleCache(month, state.employees);
-
   try {
-    const leaveTypesResponse = await apiFetch('/api/leaves/types');
-    if (leaveTypesResponse.ok) {
-      const leaveTypesPayload = await leaveTypesResponse.json();
-      state.leaveTypes = Array.isArray(leaveTypesPayload.leave_types) ? leaveTypesPayload.leave_types : [];
+    const month = state.month || monthPicker.value || todayMonth();
+    state.month = month;
+    await loadSchedulesForMonth();
+
+    const monthParam = encodeURIComponent(month);
+    const employeeResponse = await apiFetch(`/api/employees?month_key=${monthParam}`);
+    const employeePayload = employeeResponse.ok ? await employeeResponse.json() : { employees: [] };
+    const allowedEmployees = Array.isArray(employeePayload.employees) ? employeePayload.employees : [];
+    const allowedIds = new Set(allowedEmployees.map((employee) => employee.id));
+    state.employees = allowedEmployees.map(normalizeEmployeeVacationData);
+    state.sirvSchedule = await buildSirvScheduleCache(month, state.employees);
+
+    try {
+      const leaveTypesResponse = await apiFetch('/api/leaves/types');
+      if (leaveTypesResponse.ok) {
+        const leaveTypesPayload = await leaveTypesResponse.json();
+        state.leaveTypes = Array.isArray(leaveTypesPayload.leave_types) ? leaveTypesPayload.leave_types : [];
+      }
+    } catch {
+      state.leaveTypes = [];
     }
-  } catch {
-    state.leaveTypes = [];
-  }
 
-  try {
-    const leaveQuery = new URLSearchParams({ month });
-    const leavesResponse = await apiFetch(`/api/leaves?${leaveQuery.toString()}`);
-    if (leavesResponse.ok) {
-      const leavesPayload = await leavesResponse.json();
-      state.leaves = Array.isArray(leavesPayload.leaves) ? leavesPayload.leaves : [];
+    try {
+      const leaveQuery = new URLSearchParams({ month });
+      const leavesResponse = await apiFetch(`/api/leaves?${leaveQuery.toString()}`);
+      if (leavesResponse.ok) {
+        const leavesPayload = await leavesResponse.json();
+        state.leaves = Array.isArray(leavesPayload.leaves) ? leavesPayload.leaves : [];
+        rebuildLeavesIndex();
+      }
+    } catch {
+      state.leaves = [];
       rebuildLeavesIndex();
     }
-  } catch {
-    state.leaves = [];
-    rebuildLeavesIndex();
-  }
 
-  if (!state.selectedScheduleIds.length) {
-    state.scheduleEmployees = [];
-    state.scheduleEntriesById = {};
-    state.scheduleEntryShiftIdsById = {};
-    state.scheduleEntrySnapshotsById = {};
-    state.scheduleEntryValidationsById = {};
-    return;
-  }
-
-  const selectedIds = state.selectedScheduleIds.slice();
-  const requests = selectedIds.map((id) => fetchScheduleDetails(id));
-  const details = await Promise.all(requests);
-
-  const employeeById = new Map();
-  const mappedEntries = {};
-  const mappedEntryShiftIds = {};
-  const mappedEntrySnapshots = {};
-  const mappedEntryValidations = {};
-
-  details.forEach((detail) => {
-    const schedule = detail.schedule || {};
-    const scheduleDepartment = (schedule.department || '').trim();
-    const scheduleDepartmentId = cleanStoredValue(schedule.departmentId || schedule.department_id) || null;
-
-    (detail.employees || []).forEach((employee) => {
-      if (!allowedIds.has(employee.id)) {
-        return;
-      }
-
-      const employeeDepartment = String(employee.department || '').trim();
-      const employeeDepartmentId = cleanStoredValue(employee.departmentId || employee.department_id) || null;
-      const nextEmployee = {
-        ...employee,
-        scheduleId: schedule.id,
-        scheduleDepartment,
-        scheduleDepartmentId,
-      };
-
-      const current = employeeById.get(employee.id);
-      if (!current) {
-        employeeById.set(employee.id, nextEmployee);
-        return;
-      }
-
-      const currentScheduleDepartmentId = cleanStoredValue(current.scheduleDepartmentId) || null;
-      const currentScore = currentScheduleDepartmentId && employeeDepartmentId && currentScheduleDepartmentId === employeeDepartmentId
-        ? 3
-        : (current.scheduleDepartment && current.scheduleDepartment === employeeDepartment ? 2 : (current.scheduleDepartment ? 1 : 0));
-      const nextScore = scheduleDepartmentId && employeeDepartmentId && scheduleDepartmentId === employeeDepartmentId
-        ? 3
-        : (scheduleDepartment && scheduleDepartment === employeeDepartment ? 2 : (scheduleDepartment ? 1 : 0));
-      if (nextScore > currentScore) {
-        employeeById.set(employee.id, nextEmployee);
-      }
-    });
-
-    (detail.entries || []).forEach((entry) => {
-      if (!allowedIds.has(entry.employeeId)) {
-        return;
-      }
-      const entryKey = `${schedule.id}|${entry.employeeId}|${entry.day}`;
-      mappedEntries[entryKey] = normalizeShiftCodeForApi(entry.shiftCode);
-      mappedEntryShiftIds[entryKey] = isNonWorkingShiftCode(entry.shiftCode) ? null : (cleanStoredValue(entry.shiftId) || null);
-      mappedEntrySnapshots[entryKey] = {
-        workMinutes: Number(entry.workMinutes ?? 0),
-        workMinutesTotal: Number(entry.workMinutesTotal ?? entry.workMinutes ?? 0),
-        breakMinutesApplied: Number(entry.breakMinutesApplied ?? 0),
-        nightMinutes: Number(entry.nightMinutes ?? 0),
-        holidayMinutes: Number(entry.holidayMinutes ?? 0),
-        weekendMinutes: Number(entry.weekendMinutes ?? 0),
-        overtimeMinutes: Number(entry.overtimeMinutes ?? 0),
-      };
-      mappedEntryValidations[entryKey] = {
-        errors: Array.isArray(entry.validation?.errors) ? entry.validation.errors : [],
-        warnings: Array.isArray(entry.validation?.warnings) ? entry.validation.warnings : [],
-      };
-    });
-  });
-
-  const mergedEmployees = Array.from(employeeById.values());
-  mergedEmployees.sort((a, b) => a.name.localeCompare(b.name, 'bg'));
-  state.scheduleEmployees = mergedEmployees.map(normalizeEmployeeVacationData);
-  state.scheduleEntriesById = mappedEntries;
-  state.scheduleEntryShiftIdsById = mappedEntryShiftIds;
-  state.scheduleEntrySnapshotsById = mappedEntrySnapshots;
-  state.scheduleEntryValidationsById = mappedEntryValidations;
-  state.scheduleShiftTemplatesById = {};
-
-  details.forEach((detail) => {
-    const scheduleId = cleanStoredValue(detail?.schedule?.id);
-    if (!scheduleId) {
-      return;
+    if (!state.selectedScheduleIds.length) {
+      state.scheduleEmployees = [];
+      state.scheduleEntriesById = {};
+      state.scheduleEntryShiftIdsById = {};
+      state.scheduleEntrySnapshotsById = {};
+      state.scheduleEntryValidationsById = {};
+      return true;
     }
-    const backendShiftTemplates = Array.isArray(detail?.shiftTemplates) ? detail.shiftTemplates : [];
-    state.scheduleShiftTemplatesById[scheduleId] = mergeShiftTemplates(backendShiftTemplates);
-  });
+
+    const selectedIds = state.selectedScheduleIds.slice();
+    const requests = selectedIds.map((id) => fetchScheduleDetails(id));
+    const details = await Promise.all(requests);
+
+    const employeeById = new Map();
+    const mappedEntries = {};
+    const mappedEntryShiftIds = {};
+    const mappedEntrySnapshots = {};
+    const mappedEntryValidations = {};
+
+    details.forEach((detail) => {
+      const schedule = detail.schedule || {};
+      const scheduleDepartment = (schedule.department || '').trim();
+      const scheduleDepartmentId = cleanStoredValue(schedule.departmentId || schedule.department_id) || null;
+
+      (detail.employees || []).forEach((employee) => {
+        if (!allowedIds.has(employee.id)) {
+          return;
+        }
+
+        const employeeDepartment = String(employee.department || '').trim();
+        const employeeDepartmentId = cleanStoredValue(employee.departmentId || employee.department_id) || null;
+        const nextEmployee = {
+          ...employee,
+          scheduleId: schedule.id,
+          scheduleDepartment,
+          scheduleDepartmentId,
+        };
+
+        const current = employeeById.get(employee.id);
+        if (!current) {
+          employeeById.set(employee.id, nextEmployee);
+          return;
+        }
+
+        const currentScheduleDepartmentId = cleanStoredValue(current.scheduleDepartmentId) || null;
+        const currentScore = currentScheduleDepartmentId && employeeDepartmentId && currentScheduleDepartmentId === employeeDepartmentId
+          ? 3
+          : (current.scheduleDepartment && current.scheduleDepartment === employeeDepartment ? 2 : (current.scheduleDepartment ? 1 : 0));
+        const nextScore = scheduleDepartmentId && employeeDepartmentId && scheduleDepartmentId === employeeDepartmentId
+          ? 3
+          : (scheduleDepartment && scheduleDepartment === employeeDepartment ? 2 : (scheduleDepartment ? 1 : 0));
+        if (nextScore > currentScore) {
+          employeeById.set(employee.id, nextEmployee);
+        }
+      });
+
+      (detail.entries || []).forEach((entry) => {
+        if (!allowedIds.has(entry.employeeId)) {
+          return;
+        }
+        const entryKey = `${schedule.id}|${entry.employeeId}|${entry.day}`;
+        mappedEntries[entryKey] = normalizeShiftCodeForApi(entry.shiftCode);
+        mappedEntryShiftIds[entryKey] = isNonWorkingShiftCode(entry.shiftCode) ? null : (cleanStoredValue(entry.shiftId) || null);
+        mappedEntrySnapshots[entryKey] = {
+          workMinutes: Number(entry.workMinutes ?? 0),
+          workMinutesTotal: Number(entry.workMinutesTotal ?? entry.workMinutes ?? 0),
+          breakMinutesApplied: Number(entry.breakMinutesApplied ?? 0),
+          nightMinutes: Number(entry.nightMinutes ?? 0),
+          holidayMinutes: Number(entry.holidayMinutes ?? 0),
+          weekendMinutes: Number(entry.weekendMinutes ?? 0),
+          overtimeMinutes: Number(entry.overtimeMinutes ?? 0),
+        };
+        mappedEntryValidations[entryKey] = {
+          errors: Array.isArray(entry.validation?.errors) ? entry.validation.errors : [],
+          warnings: Array.isArray(entry.validation?.warnings) ? entry.validation.warnings : [],
+        };
+      });
+    });
+
+    const mergedEmployees = Array.from(employeeById.values());
+    mergedEmployees.sort((a, b) => a.name.localeCompare(b.name, 'bg'));
+    state.scheduleEmployees = mergedEmployees.map(normalizeEmployeeVacationData);
+    state.scheduleEntriesById = mappedEntries;
+    state.scheduleEntryShiftIdsById = mappedEntryShiftIds;
+    state.scheduleEntrySnapshotsById = mappedEntrySnapshots;
+    state.scheduleEntryValidationsById = mappedEntryValidations;
+    state.scheduleShiftTemplatesById = {};
+
+    details.forEach((detail) => {
+      const scheduleId = cleanStoredValue(detail?.schedule?.id);
+      if (!scheduleId) {
+        return;
+      }
+      const backendShiftTemplates = Array.isArray(detail?.shiftTemplates) ? detail.shiftTemplates : [];
+      state.scheduleShiftTemplatesById[scheduleId] = mergeShiftTemplates(backendShiftTemplates);
+    });
+
+    return true;
+  } catch (error) {
+    const message = cleanStoredValue(error?.message) || 'Грешка при зареждане на месечния изглед.';
+    setStatus(`Грешка при зареждане: ${message}`, false);
+    return false;
+  }
 }
 
 async function loadFromBackend(options = {}) {
